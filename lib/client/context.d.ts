@@ -24,8 +24,25 @@ export interface AsOneMainEntrySpec {
     /** 组件额外 props 的提供者;不需要额外 props 时省略。 */
     inject?: () => Record<string, unknown>;
 }
-export type AsOneSlotEntrySpec = AsOneSidebarEntrySpec | AsOneMainEntrySpec;
-export type AsOneSlotName = "sidebar.panellist" | "main";
+/**
+ * 输入框上方那条 dock(`conversation.input.dock`,list 型)。
+ *
+ * 用它而不是 `conversation.composer.bar`:后者是 **single** 槽位且已被默认
+ * 输入框本体占用,再注册会把默认输入框挤掉。dock 是 list,允许多个条目挂
+ * 在输入框上方的同一行(宿主把该槽位渲染在 inputBar **之前**),是「真实
+ * 模型胶囊」这类状态行的正确座位。
+ */
+export interface AsOneDockEntrySpec {
+    name: "conversation.input.dock";
+    id: string;
+    order: number;
+    locale?: string;
+    priority?: number;
+    /** 宿主按会话 id 调用它注入 props(`session-maybe` 会话作用域)。 */
+    inject?: (sessionId: string) => Record<string, unknown>;
+}
+export type AsOneSlotEntrySpec = AsOneSidebarEntrySpec | AsOneMainEntrySpec | AsOneDockEntrySpec;
+export type AsOneSlotName = "sidebar.panellist" | "main" | "conversation.input.dock";
 export interface AsOneSlotsService {
     /** 声明一个槽位注入:槽位宿主回调时注册条目,返回的 dispose 由宿主负责。 */
     inject(name: AsOneSlotName, callback: () => () => void): void;

@@ -8,6 +8,7 @@
  * wire 形状:成功 `{ ok: true, value: T }`、失败 `{ ok: false, error: { code, message } }`;
  * 失败/网络/坏响应统一抛 AsOneApiError(code, message)。零 Node 类型。
  */
+import type { SessionRoute } from "@as-one/panel-ui";
 export declare class AsOneApiError extends Error {
     readonly code: string;
     constructor(code: string, message: string);
@@ -17,3 +18,5 @@ export declare class AsOneApiError extends Error {
  * 幂等:面板重新挂载时重复调用即可。
  */
 export declare function bindPanelBridge(): void;
+/** 某会话最近一次实际路由到的真实模型(输入框胶囊用;查不到 → null)。 */
+export declare function fetchSessionRoute(sessionId: string): Promise<SessionRoute | null>;
