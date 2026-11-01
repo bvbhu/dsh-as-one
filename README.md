@@ -28,7 +28,7 @@ packages/dsh-plugin/
 │   ├── repo.ts           # AppSchedulerRepo: AsOneDatabase+ProviderRegistry → SchedulerRepo
 │   ├── upstream.ts       # 转口 gateway-upstream.js 的 buildResolveUpstream(parity 副本)
 │   ├── gateway-upstream*.ts   # ⚠️ apps/electron 的**逐字副本**(5 文件),见「与 Electron 的复用关系」
-│   ├── models.ts         # /v1/models 条目(逻辑 + 真实模型,与 Electron 同口径)
+│   ├── models.ts         # 转口 @as-one/panel/modelcatalog(/v1/models 清单唯一真源)
 │   ├── routes.ts         # 网关面 GET /v1/models、POST /v1/chat/completions
 │   ├── panel-routes.ts   # 面板数据面 /as-one/api/<method>(PANEL_METHODS 白名单)
 │   ├── panel-host.ts     # 把 AsOneRuntime 装成 PanelContext,复用 @as-one/panel 的 createPanel
@@ -51,7 +51,12 @@ packages/dsh-plugin/
 | `src/repo.ts` | `apps/electron/src/main/core-repo.ts` | 逐字段移植(只共享 core API) |
 | `src/gateway-upstream*.ts` | `apps/electron/src/main/gateway-upstream*.ts` | **逐字副本**,`cp` 同步 |
 | `src/panel-host.ts` | `assembly.ts` 的 createPanel 段 | 共用 `@as-one/panel` 的 `createPanel`/`dispatchPanel` |
-| `src/models.ts` | `assembly.ts` 的 `listModelEntries` | 逐字段一致(含 hidden 过滤与能力字段) |
+| `src/models.ts` | `assembly.ts` | **都只是转口** —— 真源在 `@as-one/panel/src/modelcatalog.ts`(见下) |
+
+⚠️ **`/v1/models` 清单只有一份实现**。历史上它是两个宿主各一份逐字副本,漂移过一次
+(插件版不过滤 `hidden`);现在 `listModelEntries` / `providersWithCredentials` /
+`dedupeLabels` 全在 `packages/panel/src/modelcatalog.ts`,`src/models.ts` 与
+`assembly.ts` 都只做 re-export —— 改口径只需改一处,不会再两边跑。
 | `src/client/` + `@as-one/panel-ui` | Electron 渲染进程 | 同一套 React 页面 |
 
 ⚠️ **`gateway-upstream*.ts` 是副本,会漂移**。改完 Electron 侧必须同步:
@@ -139,6 +144,14 @@ SSE 流式复用 core 导出的 `forwardStream`(gateway/server.js):逐块
 比我们无声丢图后模型答非所问要好。基类文档要求的 `attributionHeaders()` 在这里
 不适用:adapter 不发公网 HTTP,调的是**同进程内**的 `rt.resolveUpstream`,
 归因头由各连接器在真正的出口负责。
+
+**显示名**:`ModelEntry` 有两个字段 —— `name` 是这个模型自己填的人话名,
+`display_name` 是整张清单摆一起后**保证互不相同**的名字(`listModelEntries` 里
+统一算:真实模型撞名追加 provider,逻辑模型只在填了 `logical_model.display_name`
+时追加调用串,追加后仍撞用序号兜底)。adapter 取
+`display_name ?? name ?? id`,所以选择器里看到的是 `deepseek-flash (sensenova)`
+这种可分辨的名字,而**调用串 `id` 永远不变** —— 宿主 `normalizeModelInfo` 要求
+`model.id` 逐字等于请求的 model,改 id 就是改 API。
 
 `stream()` 结束会调 `rt.onRequestDone(...)`,所以 DSH 里发起的对话与外部 API 调用
 记在**同一份** `logs/requests-YYYYMMDD.jsonl` 与同一套用量统计里。
