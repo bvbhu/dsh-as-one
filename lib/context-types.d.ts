@@ -38,12 +38,22 @@ export interface AsOneWebRoute {
 export interface AsOneWebServer {
     register(route: AsOneWebRoute): () => void;
 }
-/** 挂到 cordis Context 上:webServer + DSH 生命周期 effect。 */
+/**
+ * 宿主 `llm` 服务(ctx.llm)—— 结构镜像,见 `llm-types.ts` 的 `DshLlmService`。
+ * 这里重复声明一遍是为了让 `declare module "cordis"` 只依赖本地类型。
+ */
+export interface AsOneLlmService {
+    registerAdapter(providers: string[], adapter: import("./llm-types.js").DshLlmAdapter): (() => void) & {
+        replace(nextProviders: string[]): void;
+    };
+}
+/** 挂到 cordis Context 上:webServer + llm + DSH 生命周期 effect。 */
 declare module "cordis" {
     interface Context {
         /** DSH 生命周期 API:回调立即执行,返回的 disposer 在 ctx 销毁时调用。 */
         effect(dispose: () => void | (() => void), label?: string): void;
         webServer: AsOneWebServer;
+        llm: AsOneLlmService;
     }
 }
 export type { Context };

@@ -52,7 +52,7 @@ export interface AsOneRuntime {
     /** 账户启用/停用 overlay(内存态;setAccountEnabled 写入,阶段二再持久化)。 */
     accountOverlay: Map<string, boolean>;
     resolveUpstream: (model: string) => Upstream | undefined;
-    listModels: () => ModelEntry[];
+    listModels: () => ModelEntry[] | Promise<ModelEntry[]>;
     /**
      * 请求完成 → 明细日志 + stats_daily 聚合(与 electron `logRequestDone` 同口径)。
      *

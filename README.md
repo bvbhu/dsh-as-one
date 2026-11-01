@@ -1,70 +1,87 @@
 # @as-one/plugin
 
-As One 网关的 **DSH(Cordis)宿主半插件**。把 `@as-one/core`(纯 TS 核心包,零
-Electron/React 依赖)以真正的 Cordis 插件形态装进 DSH:启动时读取
-`as-one.providers.json` 与 `as-one.credentials.json`、打开 SQLite(`as-one.db`)、
-构造 Scheduler + Router,并把 OpenAI 兼容网关面挂在 **`ctx.webServer`** 上
-(不是自建 `http.Server`)。
+As One 网关的 **DSH(Cordis)插件** —— 宿主半 + client 半同一个包。它把
+`@as-one/core`(纯 TS 核心,零 Electron 依赖)、`@as-one/panel`(面板方法)、
+`@as-one/panel-ui`(React 页面)装进 DSH:打开 SQLite、构造 Scheduler + Router,
+把 OpenAI 兼容网关面挂在 **`ctx.webServer`**(不是自建 `http.Server`),把面板页
+挂进 DSH 侧栏,并且通过 **LLM adapter 把模型列表直接嵌进 DSH 原生模型选择器**。
 
-> 包名说明:选用 `@as-one/plugin`(任务二选一)。它是宿主半(服务端)的包名;
-> client 半(React 面板)共用同一个包,入口为 `./client`(见「client 半接口约定」)。
+> 安装形态:DSH 插件管理器按 `github:owner/repo` 安装时会剥掉 `#` 之后的全部内容,
+> **子目录装不了** —— 发布仓库的根必须就是这个插件包本身(`lib/` + `cordis.patch.yml`
+> + `package.json` 直接入库)。`lib/` 是构建产物,发布前要先 `pnpm -C packages/dsh-plugin build`。
 
 ## 包结构
 
 ```
 packages/dsh-plugin/
-├── package.json          # DSH 插件 manifest(dsh.bundle.patch / dsh.client / peerDeps)
+├── package.json          # DSH 插件 manifest(dsh.bundle.patch / dsh.client / peer)
 ├── cordis.patch.yml      # 注册条目(id: as-one-gateway, name: @as-one/plugin)
 ├── tsconfig.json         # typecheck(noEmit)
 ├── tsconfig.build.json   # 构建到 lib/
+├── scripts/
+│   ├── bundle-host.mjs   # esbuild 打 lib/index.js(自包含,只 import node 内置)
+│   └── bundle-client.mjs # esbuild 打 lib/client.js(内联面板 CSS + React 页面)
 ├── src/
-│   ├── index.ts          # Cordis 入口:apply(ctx, config) → resolveDirs → setupAsOne → ctx.effect 挂路由
-│   ├── context-types.ts  # ctx.webServer 等宿主服务的结构镜像(零 Node 类型,client 半可引用)
-│   ├── setup.ts          # setupAsOne(options) 纯函数:配置+凭据+DB+调度+路由 装配(可冒烟测)
+│   ├── index.ts          # Cordis 入口:resolveDirs → setupAsOne → 挂路由 / 面板 / llm adapter
+│   ├── context-types.ts  # ctx.webServer / ctx.llm 的宿主服务结构镜像(零 Node 类型)
+│   ├── setup.ts          # setupAsOne(options) 装配:DB + 凭据 + 调度 + 路由(可冒烟测)
 │   ├── repo.ts           # AppSchedulerRepo: AsOneDatabase+ProviderRegistry → SchedulerRepo
-│   ├── upstream.ts       # buildResolveUpstream: 链 → Router 选路 → 凭据 → 连接器 → fetch
-│   ├── models.ts         # /v1/models 条目(逻辑+真实模型)
-│   ├── routes.ts         # ctx.webServer 路由 handler(GET /v1/models, POST /v1/chat/completions)
-│   ├── panel-routes.ts   # 面板数据面 /as-one/api/*(client 半数据路由,8 方法)
-│   ├── panel-types.ts    # 面板数据类型(type-only 镜像,零 Node 类型,client 半可引用)
-│   ├── wire.ts           # readJsonBody / writeJson / toUpstreamRequest(port core gateway 内部工具)
-│   └── client.ts         # ⚠️ 占位符,并行任务(client 半)整体替换
-└── test/setup.test.ts    # 冒烟:tmp 目录建库/加载配置/构造链,不依赖真实上游 token
+│   ├── upstream.ts       # 转口 gateway-upstream.js 的 buildResolveUpstream(parity 副本)
+│   ├── gateway-upstream*.ts   # ⚠️ apps/electron 的**逐字副本**(5 文件),见「与 Electron 的复用关系」
+│   ├── models.ts         # /v1/models 条目(逻辑 + 真实模型,与 Electron 同口径)
+│   ├── routes.ts         # 网关面 GET /v1/models、POST /v1/chat/completions
+│   ├── panel-routes.ts   # 面板数据面 /as-one/api/<method>(PANEL_METHODS 白名单)
+│   ├── panel-host.ts     # 把 AsOneRuntime 装成 PanelContext,复用 @as-one/panel 的 createPanel
+│   ├── llm-adapter.ts    # ★ DSH LLM adapter:模型进原生选择器 + OpenAI delta → StreamChunk
+│   ├── llm-types.ts      # dsh-llm 的类型结构镜像(宿主包只有 .js 无 .d.ts,不能 import)
+│   ├── wire.ts           # readJsonBody / writeJson / toUpstreamRequest
+│   ├── panel-types.ts    # 面板数据类型 type-only 镜像
+│   ├── client.ts         # client 半入口(platform "web")
+│   └── client/           # api.ts / panel.tsx / locales.ts / styles.ts / context.ts
+└── test/                 # setup / api / gateway-max-tokens / llm-adapter
 ```
 
 ## 与 apps/electron 的复用关系
 
-宿主半**不复制 electron 主进程逻辑**,而是与它共享同一份 `@as-one/core`
-冻结 API(`package.json` 依赖 `"@as-one/core": "workspace:*"`,运行时经
-`@as-one/core/src/<file>.js` 子路径导入;构建期由 DSH 的 dev-profile 任务负责
-编译/打包,与 electron 的 `externalizeDepsPlugin({ exclude: ['@as-one/core'] })`
-同思路):
+两个宿主**共用同一份核心与面板**,只有装配层各写一份:
 
-| 本包文件 | 对应 electron 文件 | 说明 |
+| 本包文件 | 对应 electron 文件 | 复用方式 |
 | --- | --- | --- |
-| `src/repo.ts` | `apps/electron/src/main/core-repo.ts` | 逐字段移植(不共享代码,只共享 core API) |
-| `src/upstream.ts` | `apps/electron/src/main/gateway-upstream.ts` | 同上,含 toRouterChain 转换 |
-| `src/setup.ts` | `apps/electron/src/main/assembly.ts` | 同装配顺序,**去掉建 http.Server 与面板** |
-| `src/models.ts` | `assembly.ts 的 listModelEntries` | 逐字段一致 |
-| `src/routes.ts` | `packages/core/src/gateway/server.ts 的 handleRequest` | 语义同款,输出接 ctx.webServer |
-| `src/panel-routes.ts` | `assembly.ts 的 createPanel` | 8 方法逐字段移植,wire 换 `{ok,value}/{ok,error}` |
+| `src/setup.ts` | `apps/electron/src/main/assembly.ts` | 同装配顺序,去掉 `http.Server` 与窗口 |
+| `src/repo.ts` | `apps/electron/src/main/core-repo.ts` | 逐字段移植(只共享 core API) |
+| `src/gateway-upstream*.ts` | `apps/electron/src/main/gateway-upstream*.ts` | **逐字副本**,`cp` 同步 |
+| `src/panel-host.ts` | `assembly.ts` 的 createPanel 段 | 共用 `@as-one/panel` 的 `createPanel`/`dispatchPanel` |
+| `src/models.ts` | `assembly.ts` 的 `listModelEntries` | 逐字段一致(含 hidden 过滤与能力字段) |
+| `src/client/` + `@as-one/panel-ui` | Electron 渲染进程 | 同一套 React 页面 |
+
+⚠️ **`gateway-upstream*.ts` 是副本,会漂移**。改完 Electron 侧必须同步:
+
+```bash
+cp apps/electron/src/main/gateway-upstream*.ts packages/dsh-plugin/src/
+for f in gateway-upstream gateway-upstream-body gateway-upstream-errors \
+         gateway-upstream-peers gateway-upstream-stream; do
+  diff -q apps/electron/src/main/$f.ts packages/dsh-plugin/src/$f.ts
+done
+```
+
+历史上就漂移过一次:插件副本缺 qoder 通道整块、`canFailover(gerr)` 少传 `provider`,
+导致 sensenova/workbuddy 的「429 不换档」在插件里完全失效(提交 390d876 修)。
 
 关键坑(装配期已踩平,port 时保留注释):
 
-- **Router.plan 只吃 router 侧链项**:engine 的 `Endpoint` 类实例不能直接喂
-  `Router.plan` —— `withEndpointViews` 把 `inCooldown/realModelKey/username`
-  挂成不可枚举自有属性,`withHealth` 用 descriptor 拷贝。必须经
-  `chainItemFrom` 显式搬运字段(`toRouterChain`)。
+- **Router.plan 只吃 router 侧链项**:engine 的 `Endpoint` 实例不能直接喂
+  `Router.plan` —— `withEndpointViews` 把 `inCooldown/realModelKey/username` 挂成
+  不可枚举自有属性。必须经 `chainItemFrom` 显式搬运字段(`toRouterChain`)。
 - **directChain 必须返回扁平行**:engine 直连路径把整行当端点 dict 喂
   `Endpoint.fromData`;嵌套行会让 provider/base_url 全空。
 - **webServer handler 抛错 = 400**:宿主 catch 住 handler 异常后只写
-  `writeHead(400)`+end(若 headersSent 则 destroy)。所以鉴权 401、未知模型
-  404、无可用上游 503 **必须在自己 handler 里 writeJson**,不能靠 throw。
+  `writeHead(400)`+end。所以鉴权 401、未知模型 404、无可用上游 503
+  **必须在自己 handler 里 writeJson**,不能靠 throw。
 
 ## ctx.webServer 挂载的路由表
 
-宿主 `webServer` 契约(事实来源
-已安装的 `@deepseek-ai/dsh-host-webserver` 包内 `lib/index.js`):
+宿主 `webServer` 契约(事实来源:已安装的 `@deepseek-ai/dsh-host-webserver`
+包内 `lib/index.js`,需要时从宿主的 `resources/app.asar` 解包查阅):
 
 - `register(route)`:route = `{ kind: 'exact'|'prefix', path, handler }`;
   重复 (kind, path) 直接 throw;返回 disposer(删表条目)。
@@ -74,83 +91,138 @@ packages/dsh-plugin/
 
 | 方法 | 路径 | kind | 行为 |
 | --- | --- | --- | --- |
-| GET | `/v1/models` | exact | 鉴权 → `{ object:"list", data: ModelEntry[] }` |
+| GET | `/v1/models` | exact | 鉴权 → `{ object:"list", data: ModelEntry[] }`(**`rt.listModels()` 是 async,必须 await**) |
 | POST | `/v1/chat/completions` | exact | 鉴权 → 读 body → resolveUpstream → `stream ? SSE : JSON` |
-| POST | `/as-one/api/getStatus` | exact | 面板数据面:网关状态 |
-| POST | `/as-one/api/getRuntime` | exact | 在途租约 + 最近请求 |
-| POST | `/as-one/api/getUsageSummary` | exact | statsDaily 汇总 |
-| POST | `/as-one/api/listProviders` | exact | 渠道/账户状态 |
-| POST | `/as-one/api/setAccountEnabled` | exact | `{provider,index,enabled}` → 内存 overlay |
-| POST | `/as-one/api/getRecentRequests` | exact | `{limit?}` → 最近请求(裁剪) |
-| POST | `/as-one/api/getRequestLogStatus` | exact | 落盘状态(disabled 空实现) |
-| POST | `/as-one/api/getSettings` | exact | 网关合成 + master_key + request_log |
+| POST | `/as-one/api/<method>` | exact × N | 面板数据面,白名单 = `panel-routes.ts` 的 `PANEL_METHODS`(64 项)+ `getUsageSummary`,共 **65 条 exact 路由** |
 
 面板数据面 wire 形状(docs/client-half-design.md §5):
-`{ ok: true, value: T }` 成功 / `{ ok: false, error: { code, message } }` 失败;
-面板类型为 **type-only** 镜像 `src/panel-types.ts`(零 Node 类型,client 半
-可 `import type` 引用,数据全走 host 路由、不 import @as-one/core)。
+`{ ok: true, value: T }` 成功 / `{ ok: false, error: { code, message } }` 失败。
+新增面板方法要**五处登记**:`@as-one/panel` 的 `types.ts` 与实现、
+`panel.ts` 的 dispatchPanel、`panel-ui/src/api.ts`、本包 `panel-routes.ts` 白名单。
 
 SSE 流式复用 core 导出的 `forwardStream`(gateway/server.js):逐块
 `res.write(ssePackChunk(chunk))`、收尾 `ssePackDone()`;客户端断开经
 `clientDisconnectSignal` 感知,首块后失败不再向外抛。
 
-## 鉴权(核心语义)
+## LLM adapter:模型直接进 DSH 选择器
+
+`src/llm-adapter.ts` 注册 provider `as-one`(显示名「As One · 合一」),DSH 的
+模型下拉就多了这一组 —— **前端零改动**,数据源是唯一的:
+`dsh-api-session-controller` 的 `buildModelCatalog` = `ctx.llm.listProviders()`
+→ 每 provider `listModels` → 每 model `resolveModelInfo`,
+`groups.filter(g => g.models.length > 0)`。所以 **`listModels` 返回空 = GUI 里没这个组**。
+
+注册走 `ctx.inject(["llm"], child => …)` 而不是加进顶层 `export const inject`:
+加进 inject 会让**整个插件**在宿主没有 llm 服务时(老版本宿主/纯 Web 形态)连网关
+路由都不挂;`inject(deps, callback)` 是独立子 fiber,依赖不满足只是不执行。
+注册本身必须在 `child.effect` 里 —— 宿主 `registerAdapter` 靠 `ctx.effect` 记账,
+子 fiber 销毁(HMR/卸载)时不摘路由,下次 apply 就撞 `DUPLICATE_ADAPTER`。
+
+三条硬规矩(逐条对着宿主源码核过,违反就是整条链路报错):
+
+1. **流语法**(`dsh-llm/lib/types/invariant.js` `validateStream`):
+   `block-start` 的 index 不得重复;`*-delta` 必须落在已开的**同型**块上;
+   `block-end` 必须 index 已开且 `block.type` 一致;`usage` 最多一次;
+   **`finish` 唯一、收尾时不得有未关闭块、finish 后再出 chunk 直接 fail**。
+   上游是 OpenAI delta 形态(没有块概念),所以块由 `translateStream` 合成,
+   按出现顺序分配 index,同类内容复用同一 index。
+2. **错误形状**(`normalizeLlmFailure`):宿主只在「own `failure` 且
+   `failure.code === own code`」时复用失败信息,否则一律 `UNKNOWN` —— 状态码与
+   Retry-After 全丢。所以抛错必须用 `AsOneLlmError`(自带 `code` + `failure`),
+   且 message 优先取**上游原文**(`err.raw.text`),与网关的「原样透传」定案同口径。
+3. **元数据边界**(`normalizeModelInfo`):`contextWindow` / `defaultMaxTokens`
+   必须是**正安全整数**(库里 NULL 就不给,别填 0);`reasoning.efforts` 不得是
+   空数组(空 → `INVALID_MODEL_REASONING`),所以只在真有名单时声明,且不填
+   `defaultEffort`(填了宿主会强制带强度)。
+
+另外:`inputModalities` 一律声明 `["text"]` —— 让宿主自己把图片投影掉,
+比我们无声丢图后模型答非所问要好。基类文档要求的 `attributionHeaders()` 在这里
+不适用:adapter 不发公网 HTTP,调的是**同进程内**的 `rt.resolveUpstream`,
+归因头由各连接器在真正的出口负责。
+
+`stream()` 结束会调 `rt.onRequestDone(...)`,所以 DSH 里发起的对话与外部 API 调用
+记在**同一份** `logs/requests-YYYYMMDD.jsonl` 与同一套用量统计里。
+
+## 鉴权
 
 沿 core `EnvKeyProvider`:`ONE_API_KEY` 环境变量;未设置 → 放行 + 一次性
 警告(missingKeyWarning)。请求携带方式:Authorization Bearer / x-api-key /
-`?key=`(core auth.ts 的 extractPresentedKey 语义)。
+`?key=`(core auth.ts 的 `extractPresentedKey` 语义)。
 
-> TODO(阶段二):接入 `ctx.credentials`(DSH 凭据服务)替换/补充
-> `FileCredentialBackend`。当前阶段凭据 = `<configDir>/as-one.credentials.json`
-> (JSON 明文文件,与 electron 版一致)。
+> ⚠️ 已知缺口:面板路由 `/as-one/api/*` 与 `/v1/models` 目前**不过 DSH 的 token
+> 校验**,同机任意进程可裸调。宿主 webServer 的鉴权只覆盖它自己的会话面。
+
+凭据(上游账号的 secret)存在 **SQLite 的 `credential` 表**,经
+`DbCredentialBackend` 读写 —— SQLite 是唯一真源,运行期没有 JSON 配置文件。
 
 ## 路径与配置
 
 `cordis.patch.yml` 注册 `id: as-one-gateway`、`name: @as-one/plugin`,
-`config.gatewayPort: 4000`(保留字段,宿主路由形态不建端口)。
+`config.gatewayPort: 4000`(保留字段,宿主路由形态**不建端口**)。
 
-路径解析(全部可被 patch 的 config 覆盖):
+路径解析(全部可被 patch 的 config 覆盖;`resolveDirs` in `src/index.ts`):
 
 | 配置键 | 默认 | 说明 |
 | --- | --- | --- |
-| `dataDir` | `$AS_ONE_DATA_DIR` → ctx.dataDir → `<homedir>/.as-one` | 数据目录,**绝不写死到桌面 profile 既定文件** |
-| `configDir` | `<dataDir>/config` | 放 `as-one.providers.json` / `as-one.credentials.json` |
-| `dbPath` | `<dataDir>/as-one.db` | SQLite(WAL + foreign_keys + SCHEMA_V7) |
+| `dataDir` | `config.dataDir` → `$AS_ONE_DATA_DIR` → `<homedir>/.as-one` | 数据目录 |
+| `configDir` | `<dataDir>/config` | 保留字段(SQLite 为真源后不再放 JSON 配置) |
+| `dbPath` | `<dataDir>/as-one.db` | SQLite(WAL + foreign_keys) |
+| 明细日志 | `<dataDir>/logs/requests-YYYYMMDD.jsonl` | **显式按 dataDir 对齐**,不用 setupAsOne 的 `<configDir>/logs` 缺省 —— 否则与独立应用共用 dataDir 时日志会分叉成两份 |
+
+与独立 Electron 版默认同一个 `<homedir>/.as-one`,所以两个形态**看到同一份数据**。
 
 ## 构建与自测
 
 ```bash
-pnpm install            # 根工作区:链接 @as-one/core workspace:* + 装 devDeps
-pnpm --filter @as-one/plugin typecheck   # tsc -p tsconfig.json (noEmit)
-pnpm --filter @as-one/plugin build       # 产出 lib/index.js 等
-pnpm --filter @as-one/plugin test        # vitest run(冒烟:tmp 目录,不上网)
+pnpm install                              # 根工作区:链接 @as-one/core 等 workspace:*
+pnpm -C packages/dsh-plugin typecheck     # tsc -p tsconfig.json (noEmit)
+pnpm -C packages/dsh-plugin build         # lib/index.js + lib/client.js(自包含)
+pnpm -C packages/dsh-plugin test          # vitest run(冒烟:tmp 目录,不上网)
 ```
 
+`lib/index.js` 只 import node 内置(`node:os/path/fs/sqlite/crypto/https/stream/
+perf_hooks`),**没有任何 `@deepseek-ai/*` 运行时依赖** —— 宿主那些包只有 .js 没有
+.d.ts,类型全靠本包 `llm-types.ts` / `context-types.ts` 的结构镜像,运行时不 import。
+
 冒烟测试只断言 setupAsOne 不抛、空配置返回空链/空计划、stub 配置能构造出链,
-**不依赖真实上游 token**(credentials 里是 dummy secret)。
+**不依赖真实上游 token**。`test/llm-adapter.test.ts` 里的 `hostValidateStream` 是宿主
+`validateStream` 的**逐字转录**(注释标了来源路径与行号),宿主改了要同步。
 
 ## 与独立 Electron 版的差异
 
-| 维度 | Electron 版(apps/electron) | 本插件(DSH 宿主半) |
+| 维度 | Electron 版(apps/electron) | 本插件(DSH 内) |
 | --- | --- | --- |
 | HTTP 服务 | `startGateway` 自建 `http.Server`(:4000) | `ctx.webServer.register` 挂路由,宿主管端口 |
-| 面板 | createPanel IPC | client 半(并行任务) |
-| 数据目录 | `configDir` / `dbPath` 显式传入 | patch config 可覆盖,默认 `<homedir>/.as-one` |
-| 热重载 | 需重启 | DSH HMR:apply 里现建现放,dispose 清理 |
-| core 编译 | externalizeDepsPlugin exclude + workspace:* | dev-profile 任务负责(parallel) |
+| 面板 | IPC(`createPanel` → preload) | HTTP `/as-one/api/*` + client 半 React 页 |
+| 模型选择器 | 自己的页面 | `llm-adapter.ts` 注册进 **DSH 原生选择器** |
+| 数据目录 | `<homedir>/.as-one`(默认,同插件) | `<homedir>/.as-one`(可 patch 覆盖) |
+| 热重载 | 需重启应用 | DSH HMR:apply 里现建现放,dispose 清理 |
+| 上游逻辑 | `gateway-upstream*.ts`(源) | 同名**逐字副本**,`cp` 同步 |
 
-## client 半接口约定(留给并行任务)
+## 在真机验证
 
-- 入口:`lib/client.js`(本包现为占位符 `src/client.ts`),必须是 cordis 插件
-  形状(`export const name` + `export function apply(ctx, config)`),platform
-  "web" 已由 `dsh.client` 声明;
-- inject 最小集:`@deepseek-ai/dsh-client-locale`、`dsh-client-ui-slots`、
-  `dsh-client-ui-primitives`(package.json `dsh.client.inject` 已配);
-- 宿主侧可复用 `src/context-types.ts` 的结构镜像做类型(零 Node 类型);
-- **面板数据面已就绪**:`/as-one/api/*` 8 个 POST exact 路由(见路由表),
-  wire 为 `{ok,value}/{ok,error}`;client 半直接 `fetch('as-one/api/<method>', …)`
-  相对地址(文档相对,绝不 root-absolute),形状类型自 `src/panel-types.ts`
-  type-only 导入(等价 `apps/electron/src/shared/panel-types.ts` 的 RendererApi
-  8 方法子集);
-- setAccountEnabled 写 `runtime.accountOverlay`(内存态,阶段二再持久化),
-  listProviders 的 `enabled` 字段即 overlay 与配置的合并结果。
+```bash
+# 第二个 DSH 实例(as-one-dev profile),不碰当前会话宿主
+node scripts/launch-dev-dsh.mjs --port 19399 --profile as-one-dev --no-hmr
+curl -s http://127.0.0.1:19399/v1/models      # 应返回 {object:"list", data:[…]}
+```
+
+浏览器要打开 `http://127.0.0.1:19399/?token=<打印的 token>` —— DSH 的鉴权是
+**只有 `GET /` 带唯一 token 才换 `dsh-auth-<host:port>` HttpOnly cookie**(换 host 名
+`localhost` 与 `127.0.0.1` 会因 audience 不匹配 401);旧标签页卡在 401 时必须
+关掉重开,复用同一标签页不会重新换 cookie。
+
+模型目录本身**没有 HTTP 出口**(`session/modelCatalog` 是 `@Remote` typert 方法),
+只能看 GUI。
+
+## client 半
+
+入口 `lib/client.js`(cordis 插件形状,`export const name = "@as-one/plugin/client"`、
+`inject = ["slots","locale","layout"]`,platform "web" 由 `package.json` 的
+`dsh.client` 声明)。注册 locale 字典、侧栏行与主面板;页面本体是共享视图层
+`@as-one/panel-ui`(与 Electron 同一套代码),数据全部走**文档相对**
+`fetch('as-one/api/<method>', …)`(绝不 root-absolute),形状类型从
+`src/panel-types.ts` type-only 导入。
+
+面板样式由 `bundle-client.mjs` 把 `@as-one/panel-ui/src/styles.css` 内联进去并在
+启动时幂等注入(`injectAsOneStyles()`),所以 client bundle 自包含、不依赖宿主 CSS。
