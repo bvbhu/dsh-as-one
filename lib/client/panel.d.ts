@@ -2,18 +2,15 @@
  * 面板外壳与侧栏图标。
  *
  * 页面本体来自共享视图层 `@as-one/panel-ui`(与 Electron 面板同一套代码):
- * 这里只加一行「返回」(回到进入 As One 之前的 DSH 面板),再把 `<App />`
- * 放进 `.asone-panel` 作用域(样式由 client.ts 内联注入时限定在该类下)。
- * t 由 DSH 客户端按注册条目里的 locale 座位注入,goBack 由 main 条目的
- * inject 注入。
+ * 这里把 `<App />` 放进 `.asone-panel` 作用域(样式由 client.ts 内联注入时
+ * 限定在该类下)。
+ *
+ * `.asone-panel` 同时是滚动容器(规则见 `client/styles.ts` 的 `SHELL_CSS`):
+ * 宿主中列是 `display:flex; overflow:hidden`,面板是它的直接 flex item,
+ * 不自己滚动的话长页面会被裁掉。
  */
 import React from "react";
-import type { AsOneKey } from "./locales.js";
-export type AsOnePanelPageProps = {
-    t: (key: AsOneKey) => string;
-    goBack: () => void;
-};
-export declare function AsOnePanelPage({ t, goBack }: AsOnePanelPageProps): React.JSX.Element;
+export declare function AsOnePanelPage(): React.JSX.Element;
 export type AsOneSidebarIconProps = {
     size?: number;
 };

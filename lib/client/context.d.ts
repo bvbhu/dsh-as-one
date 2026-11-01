@@ -2,8 +2,8 @@
  * client 半 —— DSH 客户端服务契约的结构镜像(零 Node 类型)。
  *
  * 与宿主半 src/context-types.ts 不同,这里镜像的是 DSH 客户端注入的
- * 服务(dsh-client-locale / dsh-client-ui-slots 提供的 slots / locale /
- * layout)。运行时不 import 任何 @deepseek-ai 包,服务实例由 DSH
+ * 服务(dsh-client-locale / dsh-client-ui-slots 提供的 slots / locale)。
+ * 运行时不 import 任何 @deepseek-ai 包,服务实例由 DSH
  * 客户端按 package.json 的 dsh.client.inject 列表注入到 ctx 上。
  */
 export type AsOneSlotLabel = string | (() => string);
@@ -21,7 +21,8 @@ export interface AsOneMainEntrySpec {
     order?: number;
     priority?: number;
     locale: string;
-    inject: () => Record<string, unknown>;
+    /** 组件额外 props 的提供者;不需要额外 props 时省略。 */
+    inject?: () => Record<string, unknown>;
 }
 export type AsOneSlotEntrySpec = AsOneSidebarEntrySpec | AsOneMainEntrySpec;
 export type AsOneSlotName = "sidebar.panellist" | "main";
@@ -40,21 +41,10 @@ export interface AsOneLocaleService {
     bind(namespace: string): (key: string) => string;
     getLocale(): string;
 }
-export interface AsOnePanelInfo {
-    getSnapshot(): {
-        activePanelId: string | null;
-    };
-    subscribe(callback: () => void): () => void;
-}
-export interface AsOneLayoutService {
-    panelInfo: AsOnePanelInfo;
-    selectPanel(panelId: string | null): void;
-}
 declare module "cordis" {
     interface Context {
         slots: AsOneSlotsService;
         locale: AsOneLocaleService;
-        layout: AsOneLayoutService;
     }
 }
 export type { Context } from "../context-types.js";

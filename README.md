@@ -231,7 +231,7 @@ curl -s http://127.0.0.1:19399/v1/models      # 应返回 {object:"list", data:[
 ## client 半
 
 入口 `lib/client.js`(cordis 插件形状,`export const name = "@as-one/plugin/client"`、
-`inject = ["slots","locale","layout"]`,platform "web" 由 `package.json` 的
+`inject = ["slots","locale"]`,platform "web" 由 `package.json` 的
 `dsh.client` 声明)。注册 locale 字典、侧栏行与主面板;页面本体是共享视图层
 `@as-one/panel-ui`(与 Electron 同一套代码),数据全部走**文档相对**
 `fetch('as-one/api/<method>', …)`(绝不 root-absolute),形状类型从
@@ -239,3 +239,10 @@ curl -s http://127.0.0.1:19399/v1/models      # 应返回 {object:"list", data:[
 
 面板样式由 `bundle-client.mjs` 把 `@as-one/panel-ui/src/styles.css` 内联进去并在
 启动时幂等注入(`injectAsOneStyles()`),所以 client bundle 自包含、不依赖宿主 CSS。
+
+**滚动容器在插件自己这一层**(`src/client/styles.ts` 的 `SHELL_CSS`):宿主的三栏骨架
+中列是 `display:flex; overflow:hidden`,槽位锚点是 `display:contents`,面板是它的直接
+flex item —— flex item 默认 `min-height:auto`,长页面会撑破中列再被 `overflow:hidden`
+裁掉。故 `.asone-panel` 需要 `flex:1 1 auto` + `min-height:0` + `overflow-y:auto`
+四条规则成套出现(缺一条就滚不动)。共享样式表 `.app{min-height:100%}` 保持不变,
+Electron 独立应用的滚动行为不受影响。

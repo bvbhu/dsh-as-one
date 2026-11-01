@@ -2,8 +2,7 @@
  * As One(合一)DSH 插件 —— client 半入口。
  *
  * cordis 插件形状(platform "web" 由 package.json 的 dsh.client 声明):
- * 注册 locale 字典、侧栏行(sidebar.panellist)与主面板(main);
- * goBack 通过 ctx.layout.panelInfo 记录来源面板,再 selectPanel 切回。
+ * 注册 locale 字典、侧栏行(sidebar.panellist)与主面板(main)。
  *
  * 页面本体是共享视图层 @as-one/panel-ui(与 Electron 面板同一套代码);
  * 数据全部走文档相对 fetch(见 ./client/api.ts),不 import 任何宿主/Node 类型。
