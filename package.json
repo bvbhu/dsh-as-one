@@ -1,6 +1,6 @@
 {
   "name": "@as-one/plugin",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "As One 网关的 DSH(Cordis)宿主半插件:把 @as-one/core 的调度/路由/网关逻辑以 ctx.webServer 路由形态挂进 DSH,暴露 OpenAI 兼容 /v1/models 与 /v1/chat/completions",
   "type": "module",
   "main": "lib/index.js",
