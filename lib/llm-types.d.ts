@@ -159,7 +159,85 @@ export interface DshPreparedCall {
     model: DshResolvedModelInfo;
     stream(options: DshGenerateOptions): AsyncIterable<DshStreamChunk>;
 }
-/** 适配器契约(只实现用到的那几个方法;其余由宿主基类默认实现兜底)。 */
+/**
+ * 一张**已归一化**的请求图片(`imageRequestTarget` 的入参形状)。
+ *
+ * 宿主只把这三项交给 adapter:宽、高、字节数 —— 它不需要也无权知道
+ * 图片内容、来源 URL 或附件句柄。
+ */
+export interface DshRequestImage {
+    width: number;
+    height: number;
+    bytes: number;
+}
+/**
+ * 适配器发给模型的图片尺寸/字节目标(`imageRequestTarget` 的返回形状)。
+ * `maxBytes` 是**本次序列化**的上限,不是原图字节数。
+ */
+export interface DshImageTarget {
+    width: number;
+    height: number;
+    maxBytes: number;
+}
+/**
+ * 一张**已归一化**图片的宿主附件引用 —— 即 DSH `ImageBlock.attachment` 的真实形状。
+ *
+ * ⚠️ `read_image` 工具的结果与用户附件在消息里都是这个形态:**没有 url**,只有
+ * 附件库的内容寻址引用(attachmentId)。想发给上游必须先经宿主
+ * `attachments.readImageRequest()` 解出字节,再编成 data URL —— 宿主对 adapter 的
+ * 图片契约(`imageRequestTarget`)只给宽/高/字节数,**不给字节内容**。
+ */
+export interface DshImageAttachmentRef {
+    attachmentId: string;
+    mediaType: string;
+    bytes: number;
+    width: number;
+    height: number;
+    name?: string;
+    originalDimensions?: {
+        width: number;
+        height: number;
+    };
+}
+/**
+ * 宿主 `attachments` 服务里 adapter 只用到的那一个方法。
+ *
+ * 返回的 `data` 是**派生后的请求字节**(不是存储原图);`mediaType` 与宽高是
+ * 派生结果的值 —— 序列化时以它为准。
+ */
+export interface DshAttachmentService {
+    readImageRequest(ref: DshImageAttachmentRef, target: DshImageTarget, signal?: AbortSignal): Promise<{
+        data: Uint8Array;
+        mediaType: string;
+        bytes: number;
+        width: number;
+        height: number;
+    }>;
+}
+/**
+ * 适配器契约 —— ⚠️ **这不是"可选方法表"**。
+ *
+ * 宿主 `LlmAdapter` 基类给每个方法都写了默认实现,但 As One 的 adapter 是
+ * **普通类**(不 import 宿主基类,详见本文件头部),所以**基类的默认实现一个都
+ * 不会落到我们身上**:没写的方法在宿主眼里就是 `undefined`,而宿主调用处是
+ *
+ * ```js
+ * this.adapters.get(provider)?.adapter.imageRequestPricing(provider, model)
+ * ```
+ *
+ * —— 可选链只护 `adapters.get()`,`adapter.xxx(...)` 本身一旦不存在就是
+ * `TypeError: ... is not a function`,整条请求在**计量阶段**直接炸掉(不是上游
+ * 报错,是插件自己崩)。`providerInfo` / `listModels` / `resolveModel` /
+ * `prepareCall` / `stream` 五个必需方法之外,下列宿主会主动调用的"看起来可选"
+ * 的方法**必须逐个实现**:
+ *
+ * | 方法 | 宿主调用处 | 不实现的现象 |
+ * | --- | --- | --- |
+ * | `providerInfo` | `prepareRoutes` | `INVALID_ADAPTER`(注册失败) |
+ * | `providerRetryPolicy` | `prepareRoutes` | 同左(注册失败) |
+ * | `imageRequestPricing` | `llm.imageRequestPricing()` | **本次改动修的就是它** |
+ * | `imageRequestTarget` | `llm.imageRequestTarget()` | 截图/图片消费方取不到目标尺寸 |
+ */
 export interface DshLlmAdapter {
     providerInfo(provider: string): {
         id: string;
@@ -170,6 +248,21 @@ export interface DshLlmAdapter {
     resolveModel(provider: string, model: string, signal?: AbortSignal): DshResolvedModelInfo | Promise<DshResolvedModelInfo>;
     prepareCall(provider: string, model: string, signal?: AbortSignal): DshPreparedCall | Promise<DshPreparedCall>;
     stream(options: DshGenerateOptions): AsyncIterable<DshStreamChunk>;
+    /**
+     * 该路由的**图片计价**声明(宿主 token meter 每次测量都同步调它)。
+     *
+     * 返回 `undefined` = 本路由不声明视觉 token 定价,计量方回落到自己的中性估算
+     * —— 与宿主基类默认实现同义。As One 的上游计费模型各不相同(有的按次、有的
+     * 按图块),拿不出一份对所有渠道都成立的换算,所以**不声明**比编一个更诚实。
+     *
+     * ⚠️ 必须同步返回、不得 I/O(宿主在测量路径上调用)。
+     */
+    imageRequestPricing(provider: string, model: string): unknown;
+    /**
+     * 本路由发出去的图片尺寸/字节目标。As One 不做二次缩放(图片原样透传给上游
+     * 连接器,由各连接器自己决定),所以原样回传入参 —— 与宿主基类默认实现一致。
+     */
+    imageRequestTarget(provider: string, model: string, image: DshRequestImage): DshImageTarget;
 }
 /** `ctx.llm` 服务(只镜像注册相关的那一个方法)。 */
 export interface DshLlmService {

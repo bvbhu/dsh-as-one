@@ -25,24 +25,25 @@ export interface AsOneMainEntrySpec {
     inject?: () => Record<string, unknown>;
 }
 /**
- * 输入框上方那条 dock(`conversation.input.dock`,list 型)。
+ * 输入框卡片里的工具行(`conversation.input.left`,list 型、会话作用域)。
  *
- * 用它而不是 `conversation.composer.bar`:后者是 **single** 槽位且已被默认
- * 输入框本体占用,再注册会把默认输入框挤掉。dock 是 list,允许多个条目挂
- * 在输入框上方的同一行(宿主把该槽位渲染在 inputBar **之前**),是「真实
- * 模型胶囊」这类状态行的正确座位。
+ * 用它而不是 `conversation.input.dock`:dock 渲染在输入框**外面**(上方),
+ * 用户 2026-11-01 明确否掉该位置;dsh-connect 系列(qoder / trae / workbuddy)
+ * 的积分读数就在这条工具行里,徽标跟着走才叫"同一个位置"。
+ *
+ * ⚠️ 不要改用 `conversation.input.model.label`:那是 **single** 槽位(最低
+ * priority 独占,已被 dsh-connect-qoder 占着),我们进去要么被它顶掉、要么
+ * 顶掉它 —— 两条路都会让另一方的徽标消失。list 槽位各占一格,不打架。
  */
-export interface AsOneDockEntrySpec {
-    name: "conversation.input.dock";
+export interface AsOneInputEntrySpec {
+    name: "conversation.input.left";
     id: string;
     order: number;
     locale?: string;
     priority?: number;
-    /** 宿主按会话 id 调用它注入 props(`session-maybe` 会话作用域)。 */
-    inject?: (sessionId: string) => Record<string, unknown>;
 }
-export type AsOneSlotEntrySpec = AsOneSidebarEntrySpec | AsOneMainEntrySpec | AsOneDockEntrySpec;
-export type AsOneSlotName = "sidebar.panellist" | "main" | "conversation.input.dock";
+export type AsOneSlotEntrySpec = AsOneSidebarEntrySpec | AsOneMainEntrySpec | AsOneInputEntrySpec;
+export type AsOneSlotName = "sidebar.panellist" | "main" | "conversation.input.left";
 export interface AsOneSlotsService {
     /** 声明一个槽位注入:槽位宿主回调时注册条目,返回的 dispose 由宿主负责。 */
     inject(name: AsOneSlotName, callback: () => () => void): void;

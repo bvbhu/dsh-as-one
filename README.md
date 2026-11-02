@@ -123,7 +123,7 @@ SSE 流式复用 core 导出的 `forwardStream`(gateway/server.js):逐块
 注册本身必须在 `child.effect` 里 —— 宿主 `registerAdapter` 靠 `ctx.effect` 记账,
 子 fiber 销毁(HMR/卸载)时不摘路由,下次 apply 就撞 `DUPLICATE_ADAPTER`。
 
-三条硬规矩(逐条对着宿主源码核过,违反就是整条链路报错):
+四条硬规矩(逐条对着宿主源码核过,违反就是整条链路报错):
 
 1. **流语法**(`dsh-llm/lib/types/invariant.js` `validateStream`):
    `block-start` 的 index 不得重复;`*-delta` 必须落在已开的**同型**块上;
@@ -139,9 +139,24 @@ SSE 流式复用 core 导出的 `forwardStream`(gateway/server.js):逐块
    必须是**正安全整数**(库里 NULL 就不给,别填 0);`reasoning.efforts` 不得是
    空数组(空 → `INVALID_MODEL_REASONING`),所以只在真有名单时声明,且不填
    `defaultEffort`(填了宿主会强制带强度)。
+4. **方法表必须补齐**(`LlmAdapter` 基类)**—— 2026-11-01 踩过**。宿主基类为
+   `providerInfo` / `providerRetryPolicy` / `imageRequestPricing` /
+   `imageRequestTarget` / `listModels` / `resolveModel` / `prepareCall` / `stream`
+   都写了默认实现,但本 adapter 是**普通类**(宿主只有 .js 没有 .d.ts),
+   **一个默认实现都拿不到**。宿主调用处写成
+   `this.adapters.get(provider)?.adapter.imageRequestPricing(provider, model)`,
+   可选链只护前面的 `get()` —— 方法不存在时抛的是
+   `TypeError: … imageRequestPricing is not a function`,而且发生在**计量阶段**,
+   现象是「请求发不出去」而日志指向 llm runtime 深处。
+   声明了 `inputModalities: ["text","image"]` 之后宿主才会调图像计价/目标,
+   于是这个缺口在对纯文本模型时看不出、一上视觉模型就炸。
+   `test/llm-adapter.test.ts` 里有一条**逐字对照宿主方法表**的用例钉住它。
 
-另外:`inputModalities` 一律声明 `["text"]` —— 让宿主自己把图片投影掉,
-比我们无声丢图后模型答非所问要好。基类文档要求的 `attributionHeaders()` 在这里
+另外:`inputModalities` 按**能力事实**声明 —— 只有 `supports_vision === true` 才给
+`["text","image"]`,否则 `["text"]`(宿主会把图片投影成文字)。声明 image 之后请求
+侧必须真能接住图片(见 `toChatMessages` 的图片块转换),否则就是「声明了支持却丢图」。
+`imageRequestPricing` 返回 `undefined`(不声明视觉 token 定价,由计量方回落中性估算);
+`imageRequestTarget` 原样透传宽/高/字节。基类文档要求的 `attributionHeaders()` 在这里
 不适用:adapter 不发公网 HTTP,调的是**同进程内**的 `rt.resolveUpstream`,
 归因头由各连接器在真正的出口负责。
 
@@ -155,6 +170,62 @@ SSE 流式复用 core 导出的 `forwardStream`(gateway/server.js):逐块
 
 `stream()` 结束会调 `rt.onRequestDone(...)`,所以 DSH 里发起的对话与外部 API 调用
 记在**同一份** `logs/requests-YYYYMMDD.jsonl` 与同一套用量统计里。
+
+## 上下文长度:量,而不是猜
+
+网关发包前的裁剪(`gateway-upstream-context.ts`)要一个 prompt token 数。这个数
+**不能猜**:猜高了白扔用户的历史,猜低了请求被上游 400 打回,用户干等半分钟看到
+一条红字。
+
+DeepSeek V4 的官方 tokenizer 已经内联进来(`@as-one/core/src/tokenizer/`):
+
+```
+packages/core/scripts/build-deepseek-tokenizer.mjs  # 官方 tokenizer.json → 1.1MB 的 TS 模块
+packages/core/src/tokenizer/deepseek-v4-vocab.generated.ts  # 只留 merges + 特殊 token 字面量
+packages/core/src/tokenizer/deepseek.ts             # 纯 TS 字节级 BPE,零依赖
+packages/core/src/tokenizer/deepseek.test.ts        # 官方 Python tokenizers 的黄金向量
+```
+
+- **为什么内联而不是运行时读文件**:插件装进 `~/.dsh/profiles/<p>/node_modules/`
+  之后,`import.meta.url` 指向的是 esbuild 打出来的 `lib/index.js`,
+  再去按相对路径找资源就是在赌安装形态。内联之后不存在这种失败模式,
+  也不依赖 wasm/原生模块(Electron 侧同样吃);
+- **为什么只留 merges**:数个数只要「合并的先后顺序」;vocab(128k 条 token→id)、
+  normalizer、decoder 全是死重(6.3MB → 1.1MB);
+- **准到什么程度**:40 条逐 token 串对比 + 15 条边界 + 276 条随机样本,与官方
+  Python `tokenizers` **0 差异**;
+- **成本**:建表 ~100ms(`index.ts` 启动时预热),1.2M 字符 ≈ 1.0s,常规请求几十毫秒;
+- **谁用它**:`counterForModel(provider, model)` —— 名字带 `deepseek` 的走词表,
+  其它厂商(词表没拿到)继续用字符加权估算,日志里标 `deepseek-v4` / `heuristic`。
+
+改词表(换了 tokenizer.json)之后重跑生成脚本即可,`deepseekMergeCount()` 那条
+测试会盯着文件是否完整。
+
+### 装得进窗口 ≠ 装得进配额
+
+量准了只解决「装不装得下」,不解决「一次能不能发那么多」。2026-11-02 凌晨
+`/compact` 连试三次全红的记录:
+
+| 时间 | 报文 | 上游答复 |
+|---|---|---|
+| 22:43 | 2333 条 / 125 万字符 | `400 context_length_exceeded` |
+| 23:32 | 2337 条 / 126 万字符 | `400` 裸 `code: 3` |
+| 00:14 | 2338 条 / 126 万字符 | **`429 inference exceeds tpm/rpm limit`** |
+
+前两条是窗口问题(裁到装得下就好了),第三条换了性质:请求约 60 万 token,
+在 1M 窗口里,但**一次就吃掉了上游一分钟的配额**。压缩请求天生是这个形状——
+把整段历史再发一遍去做总结——所以硬等 60 秒回来它还是这么大,还是把下一个
+窗口打满。
+
+判据拆成两条(`isContextOverflow` / `isRateLimitOversize`):
+
+- 400 类 → 裁到装进窗口,并把「被拒的长度」记进 `observedCeilings` 供后续请求预裁;
+- **429 且请求 ≥ 窗口 50%** → 同样砍半重发,但**不写** `observedCeilings`。
+  429 只说明这一分钟配额不够,不说明窗口只有这么大;混在一起会把端点永久压到
+  一半窗口,之后每条正常消息都白丢历史。
+
+50% 这条线是为了保住普通长对话:sensenova 实测 28.8 万 / 1M ≈ 27%,限流时该
+原样退避重试,不该被顺手裁掉工具结果。
 
 ## 鉴权
 
@@ -246,3 +317,30 @@ flex item —— flex item 默认 `min-height:auto`,长页面会撑破中列再�
 裁掉。故 `.asone-panel` 需要 `flex:1 1 auto` + `min-height:0` + `overflow-y:auto`
 四条规则成套出现(缺一条就滚不动)。共享样式表 `.app{min-height:100%}` 保持不变,
 Electron 独立应用的滚动行为不受影响。
+
+## 输入框里的「当前请求真实模型」徽标
+
+`src/client/routeBadge.tsx` 注册在 **`conversation.input.left`** —— 就是输入框卡片里
+那条工具行,dsh-connect 系列(qoder / trae / workbuddy)放积分读数的地方。**list 型、
+会话作用域**,各插件并排各占一格。
+
+> ⚠️ 槽位选择是用户定案(2026-11-01):
+> - `conversation.input.dock` 渲染在输入框**外面**(上方),否掉;
+> - `conversation.input.model.label` 是 **single** 槽位、最低 priority 独占,已被
+>   dsh-connect-qoder 占着 —— 进去要么被顶掉,要么顶掉别人,两条路都会让一方徽标消失。
+
+显示的是**当前请求**的真实模型,不是「上次」:
+
+| 状态 | 数据源 | 文案 |
+| --- | --- | --- |
+| 有请求在跑 | `ctx.ledger.detail()` 里该会话的在途租约(精确值) | `● 正在使用 auto → Seed-2.1-Pro` |
+| 空闲 | `router.pins` 的亲和 pin → 在当前 `scheduler.chain()` 里翻回真实模型 | `○ 预计使用 auto → Seed-2.1-Pro` |
+| 查不到 | —— | **不画**(新会话没跑过 / 规则改动后旧 pin 失效 / 后端未就绪) |
+
+数据走面板方法 `getSessionCurrentRoute(sessionId, model)`(2s 轮询)。之所以不用
+`/v1/models` 或明细日志:前者只有目录、没有选路结果;后者在「不记录日志」档位下
+完全不写,拿它当数据源会让徽标在用户关掉日志后凭空消失。
+
+只在本插件当值(`modelSelection` 投影的 `provider === "as-one"`)时渲染 —— 不抢
+dsh-connect 的地盘。
+
