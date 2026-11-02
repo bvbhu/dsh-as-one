@@ -1,93 +1,81 @@
 {
-  "name": "@as-one/plugin",
-  "version": "0.4.16",
-  "description": "As One 网关的 DSH(Cordis)宿主半插件:把 @as-one/core 的调度/路由/网关逻辑以 ctx.webServer 路由形态挂进 DSH,暴露 OpenAI 兼容 /v1/models 与 /v1/chat/completions",
-  "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./lib/index.d.ts",
-      "default": "./lib/index.js"
-    },
-    "./client": "./lib/client.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./src/*": "./src/*",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "lib",
-    "src",
-    "cordis.patch.yml",
-    "README.md"
-  ],
-  "engines": {
-    "node": ">=22.5.0"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/bundle-host.mjs && node scripts/bundle-client.mjs",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "@as-one/panel": "workspace:*",
-    "@as-one/panel-ui": "workspace:*"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-locale": ">=0.1.7-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.7-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.7-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-host-webserver": ">=0.1.7-rc.1 <0.3.0-0",
-    "cordis": "^4.0.0-rc.7",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
-  },
-  "peerDependenciesMeta": {
-    "cordis": {
-      "optional": true
-    },
-    "@deepseek-ai/cordis": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-host-webserver": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-locale": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-ui-slots": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-client-ui-primitives": {
-      "optional": true
-    },
-    "react": {
-      "optional": true
-    },
-    "react-dom": {
-      "optional": true
-    }
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-client-ui-primitives"
-      ]
-    }
-  },
-  "devDependencies": {
-    "@as-one/core": "workspace:*",
-    "@types/node": "^24.0.0",
-    "@types/react": "^18.3.31",
-    "cordis": "^4.0.0-rc.7",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.8"
-  }
+    "name":  "@as-one/plugin",
+    "version":  "0.4.16",
+    "description":  "As One 网关的 DSH(Cordis)宿主半插件:把 @as-one/core 的调度/路由/网关逻辑以 ctx.webServer 路由形态挂进 DSH,暴露 OpenAI 兼容 /v1/models 与 /v1/chat/completions",
+    "type":  "module",
+    "main":  "lib/index.js",
+    "types":  "lib/index.d.ts",
+    "exports":  {
+                    ".":  {
+                              "types":  "./lib/index.d.ts",
+                              "default":  "./lib/index.js"
+                          },
+                    "./client":  "./lib/client.js",
+                    "./cordis.patch.yml":  "./cordis.patch.yml",
+                    "./package.json":  "./package.json"
+                },
+    "engines":  {
+                    "node":  "\u003e=22.5.0"
+                },
+    "peerDependencies":  {
+                             "@deepseek-ai/cordis":  "^4.0.1",
+                             "@deepseek-ai/dsh-client-locale":  "\u003e=0.1.7-rc.1 \u003c0.3.0-0",
+                             "@deepseek-ai/dsh-client-ui-primitives":  "\u003e=0.1.7-rc.1 \u003c0.3.0-0",
+                             "@deepseek-ai/dsh-client-ui-slots":  "\u003e=0.1.7-rc.1 \u003c0.3.0-0",
+                             "@deepseek-ai/dsh-host-webserver":  "\u003e=0.1.7-rc.1 \u003c0.3.0-0",
+                             "cordis":  "^4.0.0-rc.7",
+                             "react":  "^18.2.0",
+                             "react-dom":  "^18.2.0"
+                         },
+    "peerDependenciesMeta":  {
+                                 "cordis":  {
+                                                "optional":  true
+                                            },
+                                 "@deepseek-ai/cordis":  {
+                                                             "optional":  true
+                                                         },
+                                 "@deepseek-ai/dsh-host-webserver":  {
+                                                                         "optional":  true
+                                                                     },
+                                 "@deepseek-ai/dsh-client-locale":  {
+                                                                        "optional":  true
+                                                                    },
+                                 "@deepseek-ai/dsh-client-ui-slots":  {
+                                                                          "optional":  true
+                                                                      },
+                                 "@deepseek-ai/dsh-client-ui-primitives":  {
+                                                                               "optional":  true
+                                                                           },
+                                 "react":  {
+                                               "optional":  true
+                                           },
+                                 "react-dom":  {
+                                                   "optional":  true
+                                               }
+                             },
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "inject":  [
+                                              "@deepseek-ai/dsh-client-locale",
+                                              "@deepseek-ai/dsh-client-ui-slots",
+                                              "@deepseek-ai/dsh-client-ui-primitives"
+                                          ]
+                           }
+            },
+    "license":  "MIT",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "git+https://github.com/bvbhu/dsh-as-one.git"
+                   },
+    "keywords":  [
+                     "dsh",
+                     "dsh-plugin",
+                     "deepseek-harness",
+                     "llm-gateway",
+                     "as-one"
+                 ]
 }
