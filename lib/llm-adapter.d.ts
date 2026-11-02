@@ -53,8 +53,8 @@ export declare function toLlmError(err: unknown, fallbackMessage: string): AsOne
  * 思考强度:`reasoning_efforts` 为 `null`/`[]`/缺省 时**不声明** `reasoning` ——
  * 声明了就必须给非空 efforts,而空数组在宿主侧直接 `INVALID_MODEL_REASONING`。
  * `reasoning_allows_off === true` 才追加一档 `off`(三态里 `null` 是「上游没说」,
- * 不等同于「可以关」)。档位 id 原样透传给网关(它按规范阶梯认值),显示名用中文,
- * 用户在 DSH 的「推理等级」子菜单里看到的是 低/中/高/最高/关闭。
+ * 不等同于「可以关」)。档位 id 原样透传给网关(它按规范阶梯认值),显示名固定
+ * 英文(Off/Low/Medium/High/Max)—— 用户定案「思考强度都只显示英文」。
  */
 export declare function modelInfoOf(entry: ModelEntry, provider?: string): DshResolvedModelInfo;
 /**

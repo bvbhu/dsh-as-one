@@ -333,9 +333,18 @@ Electron 独立应用的滚动行为不受影响。
 
 | 状态 | 数据源 | 文案 |
 | --- | --- | --- |
-| 有请求在跑 | `ctx.ledger.detail()` 里该会话的在途租约(精确值) | `● 正在使用 auto → Seed-2.1-Pro` |
-| 空闲 | `router.pins` 的亲和 pin → 在当前 `scheduler.chain()` 里翻回真实模型 | `○ 预计使用 auto → Seed-2.1-Pro` |
+| 有请求在跑 | `ctx.ledger.detail()` 里该会话的在途租约(精确值) | `● 正在使用 auto → [sensenova] Seed-2.1-Pro` |
+| 空闲 | `router.pins` 的亲和 pin → 在当前 `scheduler.chain()` 里翻回真实模型 | `○ 预计使用 auto → [sensenova] Seed-2.1-Pro` |
 | 查不到 | —— | **不画**(新会话没跑过 / 规则改动后旧 pin 失效 / 后端未就绪) |
+
+供应商(`sensenova` / `qoder` / `trae` …)单独占一枚淡色小标签,不拼进模型名:
+同一台真实模型可能挂在好几个渠道下,只写模型名分不出是**哪个渠道**在应答;
+而拼进名字(旧的 `sensenova/deepseek-flash`)一旦被 `max-width` 截断,先丢的恰好是
+模型名。标签的 `title` 与整体 `title` 里都写着完整的 `provider/model`。
+
+**直连真实模型也画**(2026-11-02 用户定案,此前是「非逻辑模型不画」):DSH 自己的
+选择器只写模型名、**不带供应商**,所以即便没有「逻辑 → 真实」这层映射,供应商这一层
+仍然缺失;此时文案是 `● 预计使用 [sensenova] Seed-2.1-Pro`,没有 `→` 段。
 
 数据走面板方法 `getSessionCurrentRoute(sessionId, model)`(2s 轮询)。之所以不用
 `/v1/models` 或明细日志:前者只有目录、没有选路结果;后者在「不记录日志」档位下
