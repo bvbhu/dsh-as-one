@@ -88,15 +88,7 @@ export declare function toChatMessages(options: DshGenerateOptions): ChatMessage
 export declare function toUpstreamRequestFromOptions(options: DshGenerateOptions): UpstreamRequest;
 /** OpenAI `finish_reason` → 宿主 finish kind。 */
 export declare function finishKindOf(reason: string | null | undefined): DshFinishReason["kind"];
-/**
- * OpenAI delta 流 → DSH 块流。
- *
- * 上游没有「块」的概念,所以这里按**出现顺序**给每种内容分配 index:
- * 同一种内容(如 reasoning)始终占同一个 index,换类型才开新 index。
- * 收尾时按 index 升序关闭所有块 —— 宿主 `validateStream` 要求 finish 时
- * `open.size === 0`。
- */
-export declare function translateStream(source: AsyncIterable<ChatCompletionChunk>, modelName: string): AsyncGenerator<DshStreamChunk>;
+export declare function translateStream(source: AsyncIterable<ChatCompletionChunk>, modelName: string, signal?: AbortSignal): AsyncGenerator<DshStreamChunk>;
 export interface AsOneLlmAdapterOptions {
     /** 覆盖注册 id(测试用)。 */
     provider?: string;
