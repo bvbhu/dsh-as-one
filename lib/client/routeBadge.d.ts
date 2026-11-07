@@ -34,6 +34,7 @@
  * 这个问题足够。
  */
 import React from "react";
+import type { SessionCurrentRoute } from "@as-one/panel-ui";
 /** 宿主注入的会话标准属性(只声明我们用到的两个,零宿主依赖)。 */
 export type AsOneCurrentModelBadgeProps = {
     /** 宿主按会话注入(`session-maybe` 作用域;无会话时可能是空串)。 */
@@ -47,4 +48,16 @@ export type AsOneCurrentModelBadgeProps = {
      */
     useProjection?: (name: string) => unknown;
 };
+/**
+ * 逻辑模型的**人话名字**(不含「→」那半边)。
+ *
+ * 服务端填的 `logical_display_name` 是 `logical_model.display_name`(库里没有时
+ * 它已回退成逻辑名,所以有值时就是人话)。老宿主没这个字段时退回 `logical_model`
+ * —— 显示最好还是显示名,但绝不编一个出来。
+ */
+export declare function logicalLabelOf(route: SessionCurrentRoute): string | null;
+/** 徽标正文:逻辑模型带「→ 真实模型」,直连真实模型只显示它自己。 */
+export declare function labelOf(route: SessionCurrentRoute): string;
+/** 徽标正文里那枚供应商标签的文案:人话名优先,查不到就用 provider id 本身。 */
+export declare function providerLabelOf(route: SessionCurrentRoute): string;
 export declare function AsOneCurrentModelBadge(props: AsOneCurrentModelBadgeProps): React.JSX.Element | null;
