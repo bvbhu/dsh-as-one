@@ -36,6 +36,7 @@ import type {
 import { UpstreamError } from "@as-one/core/src/gateway/types.js";
 import type { AsOneRuntime } from "./setup.js";
 import { planCompactChunks, buildMergePrompt } from "./compact-chunk.js";
+import { rerouteModel, type RerouteSettings } from "./reroute.js";
 import type {
   DshAttachmentService,
   DshCatalogModelInfo,
@@ -54,8 +55,6 @@ import type {
   DshUsage,
 } from "./llm-types.js";
 
-/** compact 请求走独立低成本车道;该车道不存在时回落原模型。 */
-const COMPACT_ROUTE_MODEL = "free";
 const COMPACT_INPUT_BUDGET = 24_000;
 const COMPACT_MERGE_TOKENS = 8_192;
 const COMPACT_CHUNK_PROMPT =
@@ -789,6 +788,13 @@ export interface AsOneLlmAdapterOptions {
    * 时 attachments 可能还没挂,拿一次快照会永远拿不到。
    */
   resolveAttachments?: () => DshAttachmentService | undefined;
+  /**
+   * 辅助请求(压缩摘要 / 图像解析 / 会话标题)的重路由设置。
+   *
+   * **缺省 = 不重路由**:任何 `purpose` 都按客户端给的模型走。设置项见
+   * `reroute.ts`;配了但模型不存在时回落原模型(见 `stream()`)。
+   */
+  routes?: RerouteSettings;
 }
 
 /**
@@ -808,6 +814,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
   private readonly provider: string;
   private readonly providerName: string;
   private readonly resolveAttachments: (() => DshAttachmentService | undefined) | undefined;
+  private readonly routes: RerouteSettings;
 
   constructor(
     private readonly rt: Pick<AsOneRuntime, "listModels" | "resolveUpstream" | "onRequestDone">,
@@ -816,6 +823,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     this.provider = opts.provider ?? AS_ONE_PROVIDER;
     this.providerName = opts.providerName ?? AS_ONE_PROVIDER_NAME;
     this.resolveAttachments = opts.resolveAttachments;
+    this.routes = opts.routes ?? {};
   }
 
   /** `id` 必须**逐字**等于注册时的 provider,否则宿主判 `INVALID_ADAPTER`。 */
@@ -897,8 +905,14 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     };
   }
 
-  /** compact 请求不读图片像素,只留可寻址占位(块数不变)。 */
-  private compactPlaceholders(messages: DshMessage[]): DshMessage[] {
+  /**
+   * 重路由的辅助请求不读图片像素,只留**可寻址**占位(块数不变)。
+   *
+   * 为什么不是"删掉图块":删块会缩短块序列,同一条历史在不同轮次产出不同
+   * 字节;而占位文本只由附件 id / 文件名决定,同图恒同字节。位置信息也保住了
+   * —— 模型仍然知道"这里原本有一张图"。
+   */
+  private placeholderImages(messages: DshMessage[]): DshMessage[] {
     return messages.map((message) => ({
       ...message,
       content: (message.content ?? []).map((block) => {
@@ -949,25 +963,33 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
 
   /** 唯一的抽象:产出**语法合法**的块流。 */
   async *stream(options: DshGenerateOptions): AsyncGenerator<DshStreamChunk> {
-    const isCompaction = options.purpose === "compaction";
-    const model = isCompaction ? COMPACT_ROUTE_MODEL : options.model;
-    const upstream: Upstream | undefined =
-      this.rt.resolveUpstream(model) ??
-      (isCompaction ? this.rt.resolveUpstream(options.model) : undefined);
+    // 辅助请求按设置项重路由;**没配就是没机制** —— 模型、会话号、图片都原样。
+    const target = rerouteModel(this.routes, options.purpose);
+    let rerouted = target !== undefined;
+    let model = target ?? options.model;
+    let upstream: Upstream | undefined = this.rt.resolveUpstream(model);
+    if (!upstream && rerouted) {
+      // 配了但库里没有这条车道:如实回落并告警。半个重路由(换了会话号/图片
+      // 占位,模型却没换)最难排查,所以宁可整体当没配。
+      console.warn(`[as-one] 重路由目标不可用(${options.purpose}: ${model}),回落 ${options.model}`);
+      rerouted = false;
+      model = options.model;
+      upstream = this.rt.resolveUpstream(model);
+    }
     if (!upstream) {
       throw new AsOneLlmError(`As One 未知模型:${model}`, "INVALID_REQUEST", { status: 404 });
     }
-    // compact 请求不读附件、不带工具、不占用户会话的亲和 pin。
-    const resolvedMessages = isCompaction
-      ? this.compactPlaceholders(options.messages ?? [])
+    // 重路由的辅助请求不读附件像素、不带工具、不占用户会话的亲和 pin。
+    const resolvedMessages = rerouted
+      ? this.placeholderImages(options.messages ?? [])
       : await resolveImagesInMessages(
           options.messages ?? [],
           this.resolveAttachments?.(),
           (ref) => this.imageRequestTarget(this.provider, model, ref),
           options.signal,
         );
-    const sessionId = isCompaction
-      ? `${options.sessionId ?? "anon"}:compact`
+    const sessionId = rerouted
+      ? `${options.sessionId ?? "anon"}:${String(options.purpose)}`
       : options.sessionId;
     const request = toUpstreamRequestFromOptions({
       ...options,
@@ -975,10 +997,11 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
       messages: resolvedMessages,
       provider: this.provider,
       sessionId,
-      tools: isCompaction ? undefined : options.tools,
+      tools: rerouted ? undefined : options.tools,
     });
-    request.extra = { ...request.extra, ...(isCompaction ? { purpose: "compaction" } : {}) };
-    if (isCompaction) {
+    // ⚠️ 不要把 purpose 写进 `extra`:`extra` 除 session_id 外会整体透传进上游
+    // 报文体,多一个未知字段就可能被上游 400(见 types.ts 的 extra 说明)。
+    if (rerouted && options.purpose === "compaction") {
       yield* this.compactStream(upstream, request, model);
       return;
     }

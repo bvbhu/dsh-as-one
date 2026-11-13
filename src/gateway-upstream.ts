@@ -57,12 +57,11 @@ import {
 import { aggregateCompletion } from "@as-one/core/src/connectors/stream-aggregate.js";
 import { DEFAULT_FACTOR, RetryPolicy } from "@as-one/core/src/scheduler/backoff.js";
 import { internalSwitch } from "./compact-trigger.js";
+import type { RerouteSettings } from "./reroute.js";
 import {
   FREE_PARSE_CANNOT_COMPLETE,
-  FREE_PARSE_MODEL,
   FREE_PARSE_PROMPT,
   IMAGE_HARD_LIMIT,
-  VISION_PARSE_MODEL,
   imagePartIndices,
   normalizeInlineImages,
   shouldBridgeImages,
@@ -97,6 +96,14 @@ export interface UpstreamRuntime {
   /** 见 {@link UpstreamRuntime} 说明:请求路径不读它。 */
   registry: ProviderRegistry;
   vault: CredentialVault;
+  /**
+   * 辅助请求的重路由设置(见 `reroute.ts`)。
+   *
+   * 这里只消费 `vision`:图像桥要把图转成文字,必须有一条**真的能看图**的车道。
+   * **没配 = 没有图像解析**(带图请求原样放行),而不是偷偷用主模型 ——
+   * 主模型能不能看图是上游的事实,网关不猜。
+   */
+  routes?: RerouteSettings;
   /**
    * 逻辑模型的**最大输出上限** = 成员链中最小的 `max_output_tokens`
    * (Nexus `_logical_output_cap`)。用于 `max_tokens` 钳制的「逻辑模型级上限」
@@ -382,6 +389,9 @@ function wireProtocolOf(protocol: string): string {
 export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) => Upstream | undefined {
   const { scheduler, router, vault } = runtime;
 
+  /** 没配 `routes.vision` 时只告警一次 —— 图片密集会话里每轮刷一条没有意义。 */
+  let warnedNoVisionRoute = false;
+
   /**
    * 逻辑模型级输出上限 —— 见 {@link UpstreamRuntime.logicalOutputCap}。
    */
@@ -483,23 +493,32 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
      * 解析」:读不出来就直接给用户一条可执行的线索(补充信息 / 换原生图像模型),
      * 而不是拿一串不同问法反复问同一张图。
      *
-     * 复用**同一套选路 / 换档 / 记账链路**(走 `free` 抽象模型),所以解析请求
-     * 同样吃冷却、同样记在途、同样有失败换档 —— 不另造一条旁路。
+     * 复用**同一套选路 / 换档 / 记账链路**(模型 = 设置项 `routes.vision`),所以
+     * 解析请求同样吃冷却、同样记在途、同样有失败换档 —— 不另造一条旁路。
      *
-     * ⚠️ 解析用**独立的会话号**(`<sid>:free-parse`),与主请求的 pin 隔离 ——
-     * 免费端点不该被解析动作粘到用户会话上,用户会话的亲和 pin 也不该被解析
-     * 请求占用。
+     * ⚠️ 解析用**独立的会话号**(`<sid>:vision-parse`),与主请求的 pin 隔离 ——
+     * 解析车道不该被粘到用户会话上,用户会话的亲和 pin 也不该被解析请求占用。
      */
+    // 图像解析车道:设置项 `routes.vision`。没配 = 没有解析能力(见 UpstreamRuntime.routes)。
+    const visionRoute = runtime.routes?.vision;
+
     const parseOneImage = async (
       part: ContentPart,
       sessionId: string,
     ): Promise<string | null> => {
-      const freeUpstream = resolveUpstream(VISION_PARSE_MODEL) ?? resolveUpstream(FREE_PARSE_MODEL);
-      if (!freeUpstream) return null;
-      const parseSession = `${sessionId}:free-parse`;
+      if (visionRoute === undefined) return null;
+      const visionUpstream = resolveUpstream(visionRoute);
+      if (!visionUpstream) {
+        if (!warnedNoVisionRoute) {
+          warnedNoVisionRoute = true;
+          console.warn(`[as-one] 图像解析车道不可用:${visionRoute}(库里没有这个模型),带图请求将原样放行`);
+        }
+        return null;
+      }
+      const parseSession = `${sessionId}:vision-parse`;
       try {
-        const data = await freeUpstream.complete({
-          model: FREE_PARSE_MODEL,
+        const data = await visionUpstream.complete({
+          model: visionRoute,
           messages: [
             {
               role: "user",
@@ -523,7 +542,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
         const content = data.choices?.[0]?.message?.content;
         return typeof content === "string" ? content : null;
       } catch (err) {
-        console.warn(`[as-one] 图片解析失败(${FREE_PARSE_MODEL}):`, err);
+        console.warn(`[as-one] 图片解析失败(${visionRoute}):`, err);
         return null;
       }
     };
@@ -539,7 +558,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
      *   并在消息尾说明(用户定案 2026-10-16):这条路径的档位自己就能看图,降级
      *   成文本白费额度。
      *
-     * 桥接**不阻断主请求**:整个动作失败(取不到 `free` 链等)时原样放行。
+     * 桥接**不阻断主请求**:整个动作失败(取不到 `routes.vision` 链等)时原样放行。
      */
     const bridgeImagesIfNeeded = async (
       req: UpstreamRequest,
@@ -558,6 +577,14 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
       const messages = reqWithImages.messages as unknown as BridgeMessage[];
       const imageCount = imagePartIndices(messages).length;
       if (imageCount === 0) return reqWithImages;
+      // 没配视觉车道 = 没有桥接能力:图原样交给上游(它能不能看是它的事)。
+      if (visionRoute === undefined) {
+        if (!warnedNoVisionRoute) {
+          warnedNoVisionRoute = true;
+          console.warn("[as-one] 未设置 routes.vision:跳过图像桥,带图请求原样放行");
+        }
+        return reqWithImages;
+      }
       const chainHasVision = chain.some(
         (it) => (it.endpoint as { supportsVision?: boolean }).supportsVision === true,
       );
@@ -575,6 +602,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
       if (shouldBridgeImages(chainHasVision)) {
         const bridged = await tryParseImages(messages, {
           parseOne: (part) => parseOneImage(part, sessionId),
+          parseModel: visionRoute,
           chainHasVision: false,
           hardOverflow: imageCount > IMAGE_HARD_LIMIT,
         });

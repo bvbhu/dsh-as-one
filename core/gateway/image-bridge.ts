@@ -39,13 +39,6 @@ import type { ChatContentPart } from "./types.js";
 // ---------------------------------------------------------------------------
 
 /**
- * 图片解析用的**抽象模型名**。它就是库里一条普通的 `logical_model`,
- * **在调度上与其他抽象模型毫无区别** —— 不现算、不按免费名单收人。
- * 「被指定用于图片解析」只是网关这里的一个名字约定。
- */
-export const FREE_PARSE_MODEL = "free";
-
-/**
  * 图像桥的提示词(modlens 式证据 + 明确的失败出口)。
  *
  * 为什么上一版(「用一句简洁的中文描述这张图片」)不行:
@@ -77,9 +70,6 @@ export const FREE_PARSE_UNPARSED = "无法解析";
 
 /** 视觉模型判定「凭这张图无法完成任务」的明确标记。命中即结束本轮、提示换模型。 */
 export const FREE_PARSE_CANNOT_COMPLETE = "无法完成任务";
-
-/** 图像桥解析车道:只提供具备视觉输入的模型;该车道缺失时回落 free。 */
-export const VISION_PARSE_MODEL = "vision";
 
 /**
  * 单张图片解析的输出上限(已不再使用 —— 见下)。
@@ -565,16 +555,16 @@ export function lastUserMessage(messages: BridgeMessage[]): number | null {
  * - `image_url` 取 `image_url.url`(data URL / http(s) URL 都行);
  * - `image` 取顶层 `url`,没有则取 `image_url.url` / `image_url` 字符串。
  *
- * 键前缀 `v3|` + 解析模型名:提示词或解析模型变更时键**自然失效**,无需手工清
- * 缓存。⚠️ 版本号从 `v1` 提到 `v3`:提示词(概括 → modlens 式证据)与「无法解析」
+ * 键前缀 `v3|` + 解析模型名(`parseModel`,即设置项 `routes.vision`):提示词或
+ * 解析模型变更时键**自然失效**,无需手工清缓存。⚠️ 版本号从 `v1` 提到 `v3`:提示词(概括 → modlens 式证据)与「无法解析」
  * 判据都变了,同一张图在旧提示词下的转写与新提示词下的转写**不是同一种东西** ——
  * 不换版本会让升级后第一轮命中旧缓存,看起来「新提示词没生效」。
  */
-export function parseCacheKey(imagePart: ContentPart): string | null {
+export function parseCacheKey(imagePart: ContentPart, parseModel = ""): string | null {
   const canonical = imageUrlOfPart(imagePart);
   if (canonical === null) return null;
   return createHash("sha256")
-    .update(`v3|${FREE_PARSE_MODEL}|${canonical}`, "utf-8")
+    .update(`v3|${parseModel}|${canonical}`, "utf-8")
     .digest("hex");
 }
 
@@ -711,8 +701,10 @@ export interface ImageBridgeResult {
 export async function tryParseImages(
   messages: BridgeMessage[],
   opts: {
-    /** 解析单图(由调用方注入:走 `free` 抽象模型的完整链路)。 */
+    /** 解析单图(由调用方注入:走 `routes.vision` 车道的完整链路)。 */
     parseOne: ParseOneImage;
+    /** 解析模型名(设置项 `routes.vision`):进缓存键,换车道即换键。 */
+    parseModel?: string;
     /** 目标链上有没有视觉端点(失败时保留原图)。 */
     chainHasVision: boolean;
     /** 图片数超过上游硬限(即使有视觉端点也桥)。 */
@@ -788,7 +780,7 @@ export async function tryParseImages(
     const part = content[pi];
     if (part === undefined) continue;
 
-    const key = parseCacheKey(part);
+    const key = parseCacheKey(part, opts.parseModel);
     if (key !== null) {
       const cached = parseCacheGet(key);
       if (cached !== null) {

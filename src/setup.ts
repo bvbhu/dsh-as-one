@@ -50,6 +50,7 @@ import { RequestLogWriter } from "@as-one/core/src/request-log/writer.js";
 import { chQuotaTableForScheduler } from "@as-one/panel/src/index.js";
 import { AppSchedulerRepo } from "./repo.js";
 import { buildResolveUpstream } from "./upstream.js";
+import type { RerouteSettings } from "./reroute.js";
 import { listModelEntries, providersWithCredentials } from "./models.js";
 
 /** sensenova key 自愈结果(与 `@as-one/panel` 的 `PanelBundle["snRepairKey"]` 同形)。 */
@@ -69,6 +70,14 @@ export interface SetupAsOneOptions {
   logDir?: string;
   /** 环境变量来源(默认 process.env),供 EnvKeyProvider 探测 ONE_API_KEY。 */
   env?: Record<string, string | undefined>;
+  /**
+   * 辅助请求的重路由设置(见 `reroute.ts`)。
+   *
+   * 只有「图像解析」这一条在这里消费:网关的图像桥需要一个**真的能看图**的
+   * 模型名,没配就没有解析车道(请求带图原样放行,由上游自己决定能不能看)。
+   * 压缩摘要与会话标题的重路由在 adapter 里做,不经运行时。
+   */
+  routes?: RerouteSettings;
 }
 
 export interface AsOneRuntime {
@@ -381,6 +390,7 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     router,
     registry,
     vault,
+    routes: options.routes,
     // 逻辑模型级输出上限(成员链最小值)—— `max_tokens` 钳制要用。
     // 唯一真源 = db(不读 registry:面板删掉的模型不该还参与钳制)。
     logicalOutputCap: (logicalName: string): number | null => {

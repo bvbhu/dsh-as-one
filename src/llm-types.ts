@@ -119,7 +119,12 @@ export interface DshGenerateOptions {
   stop?: string[];
   reasoningEffort?: string;
   sessionId?: string;
-  /** 宿主标记的请求用途；`compaction` 走独立车道。 */
+  /**
+   * 请求用途（宿主内部发起的辅助请求）：`compaction` / `session-title`。
+   *
+   * ⚠️ **本字段本身不改变任何行为**：是否换模型、换会话号由设置项
+   * `routes`（见 `reroute.ts`）决定，默认全空 = 不重路由。
+   */
   purpose?: string;
   signal?: AbortSignal;
 }

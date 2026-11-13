@@ -30,6 +30,7 @@ import { AS_ONE_PROVIDER, AsOneLlmAdapter } from "./llm-adapter.js";
 import type { DshAttachmentService } from "./llm-types.js";
 import type { Context } from "./context-types.js";
 import { internalSwitch, setCompactHost, type CompactTriggerCompaction } from "./compact-trigger.js";
+import { normalizeReroutes, rerouteCount, type RerouteSettings } from "./reroute.js";
 
 export const name = "@bvbhu/as-one";
 export const inject = ["webServer"];
@@ -43,6 +44,22 @@ export interface AsOnePluginConfig {
   configDir?: string;
   /** SQLite 文件路径覆盖(默认 <dataDir>/as-one.db)。 */
   dbPath?: string;
+  /**
+   * **辅助请求的重路由设置**(压缩摘要 / 图像解析 / 会话标题)。
+   *
+   * 缺省是空 —— **没有任何重路由机制**,所有请求都按客户端给的模型走。
+   * 只有显式写出模型名的那一类才会被切到另一条车道:
+   *
+   * ```yaml
+   * routes:
+   *   compact: free       # purpose: "compaction"
+   *   vision: free        # 图像桥解析(必须真的能看图)
+   *   sessionTitle: free  # purpose: "session-title"
+   * ```
+   *
+   * 配了但库里没有该模型 → 该次请求回落原模型并告警(不产生半个重路由)。
+   */
+  routes?: RerouteSettings;
 }
 
 function ctxDataDir(_ctx: Context): string | undefined {
@@ -66,6 +83,11 @@ export function apply(ctx: Context, config: AsOnePluginConfig = {}): void {
 
 async function startAsOne(ctx: Context, config: AsOnePluginConfig): Promise<void> {
   const { dataDir, configDir, dbPath } = resolveDirs(ctx, config);
+  // 重路由设置只读一次:改了要重载插件(与其它进程内服务同一口径)。
+  const routes = normalizeReroutes(config.routes);
+  if (rerouteCount(routes) > 0) {
+    ctx.logger?.info?.(`[as-one] 重路由已启用:${JSON.stringify(routes)}`);
+  }
 
   let runtime: AsOneRuntime;
   try {
@@ -73,7 +95,7 @@ async function startAsOne(ctx: Context, config: AsOnePluginConfig): Promise<void
     // `<configDir>/logs`(= `<dataDir>/config/logs`),而 Electron 侧是
     // `<dataDir>/logs` —— 两个形态共用一个 dataDir 时日志会分叉成两份,
     // 「这次的请求到底记到哪去了」全靠猜。这里显式按 dataDir 对齐。
-    runtime = await setupAsOne({ configDir, dbPath, logDir: join(dataDir, "logs") });
+    runtime = await setupAsOne({ configDir, dbPath, logDir: join(dataDir, "logs"), routes });
   } catch (err) {
     // 启动失败不能拖垮宿主:记日志,路由不挂(下次 apply / 修复配置后重载)。
     ctx.logger?.warn?.("[as-one] setup failed, gateway routes not mounted:", err);
@@ -166,6 +188,7 @@ async function startAsOne(ctx: Context, config: AsOnePluginConfig): Promise<void
         // ⚠️ 故意不把 attachments 写进 `ctx.inject([...])`:纯 Web 宿主 / 没挂
         // 附件服务的部署里,整个 adapter 都不该因此消失(那样连文本模型都选不到)。
         // 服务缺失时 adapter 如实降级(丢图片块),文本请求照常。
+        routes,
         resolveAttachments: () => {
           try {
             return (child.get("attachments") as DshAttachmentService | undefined) ?? undefined;
