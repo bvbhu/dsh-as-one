@@ -889,6 +889,9 @@ export function dispatchPanel(panel: Panel, method: string, args: unknown[]): Pr
         String(a[1] ?? "day") as UsageGranularity,
         String(a[2] ?? "model") as UsageGroup,
       );
+    // 网关外用量:独立取,不与上面那个相加
+    case "getExternalUsage":
+      return panel.getExternalUsage(String(a[0] ?? "all") as UsageRange);
     // 逻辑模型
     case "getLogicalModels": return panel.getLogicalModels();
     case "writeLogicalModel":

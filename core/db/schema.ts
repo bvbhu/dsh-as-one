@@ -112,6 +112,28 @@ CREATE TABLE IF NOT EXISTS stats_daily (
 CREATE INDEX IF NOT EXISTS ix_stats_provider_model ON stats_daily(provider, model);
 
 -- ============================================================
+-- stats_external_daily 表 —— **网关外**用量(DSH 直连其它 provider)
+-- ============================================================
+-- 为什么单开一张表而不是塞进 stats_daily:
+--   1. 语义不同:这里没有逻辑模型(恒无 logical_model),也没有账号/延迟/TTFT
+--      —— 那些是网关独有的观测;
+--   2. 计数不同:calls 是**上游调用次数**(step/start + 重试),而 stats_daily 的
+--      requests 是**客户端请求数**,同名相加会永远对不上账;
+--   3. 唯一性:所有列 NOT NULL,主键才真正生效(SQLite 对含 NULL 的主键不做唯一约束,
+--      stats_daily 的 NULL 聚合行因此只能靠 UPDATE→INSERT 兜,跨进程有 TOCTOU 窗口)。
+CREATE TABLE IF NOT EXISTS stats_external_daily (
+    day               TEXT NOT NULL,                  -- 'YYYY-MM-DD'
+    provider          TEXT NOT NULL,                  -- DSH 里的 provider id(非 as-one)
+    model             TEXT NOT NULL,                  -- 真实模型名
+    calls             INTEGER NOT NULL DEFAULT 0,     -- 上游调用次数(不是客户端请求数)
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,     -- 含 cached(与 stats_daily 同口径)
+    cached_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    last_seen         INTEGER NOT NULL DEFAULT 0,     -- epoch ms
+    PRIMARY KEY (day, provider, model)
+);
+
+-- ============================================================
 -- setting 表 (schema.sql L234-240)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS setting (

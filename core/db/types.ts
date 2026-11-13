@@ -104,6 +104,27 @@ export interface StatsDailyRow {
 	ttft_requests: number;
 }
 
+/**
+ * stats_external_daily:网关外(DSH 直连其它 provider)的按天用量。
+ *
+ * ⚠️ 没有 logical_model / 账号 / 延迟 —— 这些观测网关根本看不到,留空列只会诱使
+ * 上层把它们和网关行混进同一个分母。
+ */
+export interface StatsExternalRow {
+	/** 'YYYY-MM-DD' */
+	day: string;
+	provider: string;
+	model: string;
+	/** 上游调用次数(step/start + llm/retry-started),**不是**客户端请求数。 */
+	calls: number;
+	/** 含 cached,与 stats_daily.prompt_tokens 同口径。 */
+	prompt_tokens: number;
+	cached_tokens: number;
+	completion_tokens: number;
+	/** epoch ms */
+	last_seen: number;
+}
+
 /** setting 表:键值配置(schema.sql L234-240),k 为主键。 */
 export interface SettingRow {
 	k: string;

@@ -24,6 +24,7 @@ import type {
 	LogicalModelRow,
 	StatsDailyRow,
 	SettingRow,
+	StatsExternalRow,
 } from "./types.js";
 
 /** node:sqlite 接受的绑定参数类型。 */
@@ -54,6 +55,15 @@ export type StatsDelta = Omit<
 			| "latency_sum_ms"
 			| "ttft_sum_ms"
 			| "ttft_requests"
+		>
+	>;
+
+/** stats_external_daily.record 的增量:键列必填,计数列可省略。 */
+export type StatsExternalDelta = Pick<StatsExternalRow, "day" | "provider" | "model"> &
+	Partial<
+		Pick<
+			StatsExternalRow,
+			"calls" | "prompt_tokens" | "cached_tokens" | "completion_tokens" | "last_seen"
 		>
 	>;
 
@@ -143,6 +153,18 @@ export interface NexusDatabase {
 		 * 边界日由调用方按 dayKey(now - 86400s) 传入,保持本层零时间依赖。
 		 */
 		counters(dayFrom24h: string): { stats_rows: number; last_24h: number; errors: number };
+	};
+
+	// ---- stats_external_daily(网关外)------------------------------
+	/**
+	 * DSH 直连其它 provider 的用量。与 statsDaily **完全独立**:
+	 * 没有逻辑模型/账号/延迟,计数列是上游调用次数而不是客户端请求数。
+	 */
+	statsExternalDaily: {
+		/** 按天范围查询(含两端)。 */
+		range(dayFrom: string, dayTo: string): StatsExternalRow[];
+		/** 键存在则累加,否则插入(与 statsDaily.record 同款增量语义)。 */
+		record(delta: StatsExternalDelta): void;
 	};
 
 	// ---- setting ---------------------------------------------------
@@ -521,6 +543,55 @@ export function openDatabase(target: string | ":memory:"): NexusDatabase {
 			},
 		},
 
+		statsExternalDaily: {
+			range(dayFrom, dayTo) {
+				return raw
+					.prepare(
+						"SELECT * FROM stats_external_daily WHERE day >= ? AND day <= ? ORDER BY day, provider, model",
+					)
+					.all(dayFrom, dayTo) as unknown as StatsExternalRow[];
+			},
+			record(delta) {
+				const {
+					day,
+					provider,
+					model,
+					calls = 0,
+					prompt_tokens = 0,
+					cached_tokens = 0,
+					completion_tokens = 0,
+					last_seen = 0,
+				} = delta;
+				assertNonNullable(day, "stats_external_daily.day");
+				assertNonNullable(provider, "stats_external_daily.provider");
+				assertNonNullable(model, "stats_external_daily.model");
+				// 全列 NOT NULL ⇒ 主键真正生效,一条 UPSERT 足够;不需要 stats_daily 那套
+				// 「先 UPDATE ... IS NULL,没命中再 INSERT」的兜底(也就没有那个 TOCTOU 窗口)。
+				raw
+					.prepare(
+						`INSERT INTO stats_external_daily
+							(day, provider, model, calls, prompt_tokens, cached_tokens, completion_tokens, last_seen)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+						 ON CONFLICT (day, provider, model) DO UPDATE SET
+							calls = calls + excluded.calls,
+							prompt_tokens = prompt_tokens + excluded.prompt_tokens,
+							cached_tokens = cached_tokens + excluded.cached_tokens,
+							completion_tokens = completion_tokens + excluded.completion_tokens,
+							last_seen = MAX(last_seen, excluded.last_seen)`,
+					)
+					.run(
+						day,
+						provider,
+						model,
+						calls,
+						prompt_tokens,
+						cached_tokens,
+						completion_tokens,
+						last_seen,
+					);
+			},
+		},
+
 		setting: {
 			get(key) {
 				return raw.prepare("SELECT * FROM setting WHERE k = ?").get(key) as
@@ -549,4 +620,5 @@ export type {
 	LogicalModelRow,
 	StatsDailyRow,
 	SettingRow,
+	StatsExternalRow,
 };

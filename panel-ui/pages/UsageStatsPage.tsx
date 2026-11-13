@@ -16,6 +16,7 @@
 import React from "react";
 import { rendererApi } from "../api";
 import type {
+  ExternalUsage,
   UsageGranularity,
   UsageGroup,
   UsageHistory,
@@ -140,6 +141,8 @@ export default function UsageStatsPage(): React.JSX.Element {
   const [granularity, setGranularity] = React.useState<UsageGranularity>("day");
   const [group, setGroup] = React.useState<UsageGroup>("model");
   const [data, setData] = React.useState<UsageHistory | null>(null);
+  /** 网关外用量:与 data **完全独立**的另一份统计(见页面末尾那一节)。 */
+  const [ext, setExt] = React.useState<ExternalUsage | null>(null);
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   /** 展开状态:模型榜 = `m:<key>`;供应商行 = `p:<key>`。 */
@@ -160,6 +163,8 @@ export default function UsageStatsPage(): React.JSX.Element {
       setData(r);
       setExpanded({});
       setError("");
+      // 外部用量单独取:它失败不该把整页打成错误(两边是独立的两张表)。
+      setExt(await rendererApi.getExternalUsage(range).catch(() => null));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -756,6 +761,71 @@ export default function UsageStatsPage(): React.JSX.Element {
             统计截至 {data.last_day ?? "—"} · 区间 {rangeText} · 数据源 {data.source}
           </p>
         </>
+      ) : null}
+
+      {/* ── 网关外用量(独立统计)─────────────────────────────────────────
+          与上面整页 **完全独立**:另一张表、另一套量纲。刻意不并进上面的
+          KPI/趋势/环形图 —— `calls`(上游调用)与 `requests`(客户端请求)
+          不是一回事,相加只会得到一个谁也解释不了的数。 */}
+      {ext && (ext.totals.tokens > 0 || ext.totals.calls > 0) ? (
+        <section className="usage-sec">
+          <h2>网关外用量</h2>
+          <p className="hint">
+            只统计**没经过网关**的调用(DSH 直连其它 provider),来自会话事件实时采集;
+            与上面的数字**不可相加**:这里是上游调用次数,上面是客户端请求数。
+          </p>
+          <div className="usage-cards">
+            <div className="usage-card">
+              <div className="usage-card-k">Tokens 用量</div>
+              <div className="usage-card-v">{full(ext.totals.tokens)}</div>
+              <div className="usage-card-s">
+                输入 {full(ext.totals.prompt_tokens)} · 输出 {full(ext.totals.completion_tokens)}
+              </div>
+            </div>
+            <div className="usage-card">
+              <div className="usage-card-k">上游调用</div>
+              <div className="usage-card-v">{full(ext.totals.calls)}</div>
+              <div className="usage-card-s">含重试,不含网关已处理的部分</div>
+            </div>
+            <div className="usage-card">
+              <div className="usage-card-k">平均缓存命中</div>
+              <div className="usage-card-v">{rateText(ext.totals.cache_hit_rate)}</div>
+              <div className="usage-card-s">{fmtCount(ext.totals.cached_tokens)} 缓存命中</div>
+            </div>
+            <div className="usage-card">
+              <div className="usage-card-k">活跃天数</div>
+              <div className="usage-card-v">{ext.totals.active_days}</div>
+              <div className="usage-card-s">{ext.from ?? "—"} → {ext.to ?? "—"}</div>
+            </div>
+          </div>
+
+          <ol className="usage-rank">
+            {ext.series.map((row, i) => (
+              <li key={row.key}>
+                <div className="usage-row">
+                  <span className="usage-rank-i">{i + 1}</span>
+                  <i
+                    className="usage-dot"
+                    style={{ background: MODEL_COLORS[i % MODEL_COLORS.length] }}
+                  />
+                  <span className="usage-name">
+                    <span className="usage-name-m">{row.model}</span>
+                    <span className="usage-name-s">
+                      {row.provider} · {fmtCount(row.calls)} 次调用
+                    </span>
+                  </span>
+                  <span className="usage-val">{full(row.tokens)}</span>
+                  <span className="usage-pct">{fmtPct(row.percent)}</span>
+                </div>
+              </li>
+            ))}
+          </ol>
+
+          <p className="hint usage-foot">
+            统计截至 {ext.last_day ?? "—"} · 区间 {ext.from ?? "—"} → {ext.to ?? "—"} ·
+            数据源 stats_external_daily(实时采集,无历史回填)
+          </p>
+        </section>
       ) : null}
 
       {data && !hasData ? (

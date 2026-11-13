@@ -32,6 +32,8 @@ export const PANEL_METHODS = [
   "restartGateway",
   // 用量
   "getUsageHistory",
+  // 网关外用量(独立表,实时采集)
+  "getExternalUsage",
   // 逻辑模型
   "getLogicalModels",
   "writeLogicalModel",

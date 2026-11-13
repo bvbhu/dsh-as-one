@@ -25,7 +25,7 @@ function indexNames(db: DatabaseSync, table: string): string[] {
 }
 
 describe("SCHEMA_V7 — 结构", () => {
-	it("建出 6 张表(provider/credential/real_model/logical_model/stats_daily/setting)", () => {
+	it("建出 7 张表(provider/credential/real_model/logical_model/stats_daily/stats_external_daily/setting)", () => {
 		const db = new DatabaseSync(":memory:");
 		db.exec(SCHEMA_V7);
 		expect(tableNames(db)).toEqual([
@@ -35,11 +35,12 @@ describe("SCHEMA_V7 — 结构", () => {
 			"real_model",
 			"setting",
 			"stats_daily",
+			"stats_external_daily",
 		]);
 		db.close();
 	});
 
-	it("总列数 38(按实际 SQL 核对;logical_model 加了 display_name)", () => {
+	it("总列数 46(按实际 SQL 核对;stats_external_daily 8 列)", () => {
 		const db = new DatabaseSync(":memory:");
 		db.exec(SCHEMA_V7);
 		const perTable: Record<string, number> = {};
@@ -51,9 +52,10 @@ describe("SCHEMA_V7 — 结构", () => {
 			real_model: 10,
 			setting: 2,
 			stats_daily: 12,
+			stats_external_daily: 8,
 		});
 		const total = Object.values(perTable).reduce((a, b) => a + b, 0);
-		expect(total).toBe(38);
+		expect(total).toBe(46);
 		db.close();
 	});
 

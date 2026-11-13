@@ -256,6 +256,53 @@ export interface UsageHistory {
   providers: UsageProvider[];
 }
 
+/**
+ * 网关外用量 —— DSH 直连其它 provider 的调用。
+ *
+ * ⚠️ 与 {@link UsageHistory} **完全独立**,不是它的子集:
+ * - 这里没有逻辑模型、没有账号、没有延迟/TTFT(网关看不到);
+ * - `calls` 是**上游调用次数**,与网关的 `requests`(客户端请求数)不是一个量纲,
+ *   所以两张表的数字**永远不要相加**;
+ * - 数据源是 `session/event` 实时采集(`stats_external_daily`),不回填、不导入。
+ */
+export interface ExternalUsageTotals {
+  tokens: number;
+  /** 上游调用次数(step/start + 重试),不是客户端请求数。 */
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  /** cached ÷ prompt;prompt 为 0 → null(不显示 0%)。 */
+  cache_hit_rate: number | null;
+  active_days: number;
+}
+
+export interface ExternalUsageSeries {
+  /** `provider/model`。 */
+  key: string;
+  provider: string;
+  model: string;
+  tokens: number;
+  calls: number;
+  percent: number;
+}
+
+export interface ExternalUsageDaily {
+  day: string;
+  tokens: number;
+  calls: number;
+}
+
+export interface ExternalUsage {
+  range: UsageRange;
+  from: string | null;
+  to: string | null;
+  last_day: string | null;
+  totals: ExternalUsageTotals;
+  series: ExternalUsageSeries[];
+  daily: ExternalUsageDaily[];
+}
+
 // ─────────────────────────── 逻辑模型 ───────────────────────────
 
 /** 逻辑模型的一员(真实模型)名下的一枚凭据端点(Nexus `_logical_list` 的 `accounts[]`)。 */
@@ -1148,6 +1195,14 @@ export interface RendererApi {
     granularity: UsageGranularity,
     group: UsageGroup,
   ): Promise<UsageHistory>;
+  /**
+   * 网关外用量(DSH 直连其它 provider)。
+   *
+   * 与 {@link getUsageHistory} 分开取:两者量纲不同(`calls` vs `requests`)、
+   * 时间窗口也可能不同(外部表从插件安装当天开始有数据),混在一个响应里会让
+   * 「总量」变成两套口径的和。
+   */
+  getExternalUsage(range: UsageRange): Promise<ExternalUsage>;
   // 逻辑模型
   getLogicalModels(): Promise<LogicalModelGroup[]>;
   writeLogicalModel(input: LogicalModelsWriteInput): Promise<ApiResult>;

@@ -31,7 +31,7 @@
 import React from "react";
 import { rendererApi } from "../../api";
 import type { DeploymentItem } from "../../api";
-import { fmtDuration, fmtInt, fmtSecFromMs } from "../../format";
+import { fmtDuration, fmtInt, fmtPct, fmtSecFromMs } from "../../format";
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -139,12 +139,19 @@ function hasTps(d: DeploymentItem): boolean {
   return v !== null && v !== undefined && Number.isFinite(v);
 }
 
+/** 缓存命中率与 TTFT/TPS **同一天、同一批行**,三者要么一起有、要么一起没有。 */
+function hasCache(d: DeploymentItem): boolean {
+  const v = d.cache_hit_rate;
+  return v !== null && v !== undefined && Number.isFinite(v);
+}
+
 /** 悬浮精确值(最近记录来源日期 + 原样数值)。 */
 function latencyTitle(d: DeploymentItem): string {
   const parts: string[] = [];
   if (d.latency_day) parts.push(`${d.latency_day} 记录`);
   if (d.avg_ttft_ms != null) parts.push(`平均 TTFT ${d.avg_ttft_ms} ms`);
   if (d.avg_tps != null) parts.push(`平均 TPS ${d.avg_tps}`);
+  if (d.cache_hit_rate != null) parts.push(`缓存命中 ${fmtPct(d.cache_hit_rate)}(cached ÷ prompt)`);
   return parts.join(" · ");
 }
 
@@ -474,6 +481,13 @@ export function DeploymentsPage(_props: DeploymentsPageProps): React.JSX.Element
                       {hasTps(d) ? (
                         <span className="pill metric" title={latencyTitle(d)}>
                           TPS {fmtTps(d)}
+                        </span>
+                      ) : null}
+                      {/* 缓存命中率:与 TTFT/TPS **同一天**的口径(modelDayStats 选中的那一天),
+                          三者永远来自同一批行,不会出现「TTFT 是 11-13、缓存是 11-12」。 */}
+                      {hasCache(d) ? (
+                        <span className="pill metric" title={latencyTitle(d)}>
+                          缓存 {fmtPct(d.cache_hit_rate)}
                         </span>
                       ) : null}
 

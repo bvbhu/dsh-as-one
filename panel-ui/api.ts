@@ -31,6 +31,7 @@ import type {
   DataDirInfo,
   DeploymentList,
   DiscoverChannelResult,
+  ExternalUsage,
   GatewayStatus,
   LogicalModelGroup,
   LogicalModelsWriteInput,
@@ -130,6 +131,11 @@ export function createPanelApi(): RendererApi {
     // 用量
     async getUsageHistory(range: UsageRange, granularity: UsageGranularity, group: UsageGroup) {
       return call<UsageHistory>("getUsageHistory", range, granularity, group);
+    },
+
+    /** 网关外用量(独立口径,页面单独成块,不与上面的数字相加)。 */
+    async getExternalUsage(range: UsageRange) {
+      return call<ExternalUsage>("getExternalUsage", range);
     },
     // 逻辑模型
     async getLogicalModels() {

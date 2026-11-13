@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 describe("openDatabase(:memory:)", () => {
-	it("建出 6 张表并种上版本行", () => {
+	it("建出 7 张表并种上版本行", () => {
 		const rows = db.raw
 			.prepare(
 				"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
@@ -25,6 +25,7 @@ describe("openDatabase(:memory:)", () => {
 			"real_model",
 			"setting",
 			"stats_daily",
+			"stats_external_daily",
 		]);
 		expect(db.setting.get("version")?.v).toBe("4");
 	});
@@ -368,6 +369,61 @@ describe("stats_daily", () => {
 		});
 		const inRange = db.statsDaily.range("2026-04-30", "2026-05-01", null);
 		expect(inRange.map((r) => r.day)).toEqual(["2026-04-30", "2026-05-01"]);
+	});
+});
+
+describe("stats_external_daily", () => {
+	it("增量累加 + 按天范围查询", () => {
+		db.statsExternalDaily.record({
+			day: "2026-11-14",
+			provider: "yn",
+			model: "deepseek-v4.1-flash",
+			calls: 1,
+			prompt_tokens: 100,
+			cached_tokens: 80,
+			completion_tokens: 10,
+			last_seen: 1_000,
+		});
+		db.statsExternalDaily.record({
+			day: "2026-11-14",
+			provider: "yn",
+			model: "deepseek-v4.1-flash",
+			calls: 2,
+			prompt_tokens: 50,
+			completion_tokens: 5,
+			last_seen: 2_000,
+		});
+		db.statsExternalDaily.record({
+			day: "2026-11-13",
+			provider: "hyperai",
+			model: "m",
+			calls: 1,
+		});
+
+		const rows = db.statsExternalDaily.range("2026-11-14", "2026-11-14");
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			provider: "yn",
+			calls: 3,
+			prompt_tokens: 150,
+			cached_tokens: 80,
+			completion_tokens: 15,
+			// last_seen 取最大值,不是累加
+			last_seen: 2_000,
+		});
+
+		expect(db.statsExternalDaily.range("2026-11-01", "2026-11-30")).toHaveLength(2);
+	});
+
+	it("全列 NOT NULL ⇒ 主键真正生效(不会像 stats_daily 的 NULL 行那样重复)", () => {
+		const delta = { day: "2026-11-14", provider: "yn", model: "m", calls: 1 };
+		db.statsExternalDaily.record(delta);
+		db.statsExternalDaily.record(delta);
+		const rows = db.raw
+			.prepare("SELECT COUNT(*) AS n FROM stats_external_daily")
+			.get() as { n: number };
+		expect(rows.n).toBe(1);
+		expect(db.statsExternalDaily.range("2026-11-14", "2026-11-14")[0]?.calls).toBe(2);
 	});
 });
 

@@ -65,6 +65,9 @@ import type {
   UsageBucket,
   UsageGranularity,
   UsageGroup,
+  ExternalUsage,
+  ExternalUsageDaily,
+  ExternalUsageSeries,
   UsageHistory,
   UsageProvider,
   UsageRange,
@@ -87,6 +90,8 @@ export interface OverviewDomain {
     restartGateway(): Promise<ApiResult>;
     getRuntime(): Promise<RuntimeSnapshot>;
     getUsageHistory(range: UsageRange, granularity: UsageGranularity, group: UsageGroup): Promise<UsageHistory>;
+    /** 网关外用量(独立口径,不与 getUsageHistory 相加)。 */
+    getExternalUsage(range: UsageRange): Promise<ExternalUsage>;
     getMetrics(days?: number): Promise<MetricsSnapshot>;
     getRecentRequests(limit?: number): Promise<RecentRequest[]>;
     /**
@@ -774,6 +779,90 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         series,
         buckets,
         providers,
+      };
+    },
+
+    /**
+     * 网关外用量(DSH 直连其它 provider)。
+     *
+     * **与 getUsageHistory 完全独立**:不合并、不相加、不共享 KPI。两边的
+     * `calls`(上游调用)与 `requests`(客户端请求)不是一个量纲,一旦混算就再也
+     * 对不上账。数据来自 `session/event` 实时采集,没有历史回填。
+     */
+    async getExternalUsage(range: UsageRange): Promise<ExternalUsage> {
+      const rng: UsageRange = (["all", "7", "30", "90", "365"] as UsageRange[]).includes(range)
+        ? range
+        : "all";
+      const allRows = ctx.db.statsExternalDaily.range("0000-01-01", "9999-12-31");
+      const sortedDays = [...new Set(allRows.map((r) => r.day))].sort();
+      const { from, to } = usageWindow(rng, sortedDays);
+      const rows = from !== null && to !== null ? ctx.db.statsExternalDaily.range(from, to) : [];
+
+      let tokens = 0;
+      let calls = 0;
+      let prompt = 0;
+      let completion = 0;
+      let cached = 0;
+      const active = new Set<string>();
+      const perKey = new Map<string, { tokens: number; calls: number }>();
+      const perDay = new Map<string, { tokens: number; calls: number }>();
+
+      for (const row of rows) {
+        // total = prompt + completion(cached 是 prompt 的子集,不双计)
+        const t = row.prompt_tokens + row.completion_tokens;
+        tokens += t;
+        calls += row.calls;
+        prompt += row.prompt_tokens;
+        completion += row.completion_tokens;
+        cached += row.cached_tokens;
+        if (t > 0 || row.calls > 0) active.add(row.day);
+
+        const key = `${row.provider}/${row.model}`;
+        const k = perKey.get(key) ?? { tokens: 0, calls: 0 };
+        k.tokens += t;
+        k.calls += row.calls;
+        perKey.set(key, k);
+
+        const d = perDay.get(row.day) ?? { tokens: 0, calls: 0 };
+        d.tokens += t;
+        d.calls += row.calls;
+        perDay.set(row.day, d);
+      }
+
+      const series: ExternalUsageSeries[] = [...perKey.entries()]
+        .map(([key, v]) => {
+          const idx = key.indexOf("/");
+          return {
+            key,
+            provider: idx >= 0 ? key.slice(0, idx) : key,
+            model: idx >= 0 ? key.slice(idx + 1) : key,
+            tokens: v.tokens,
+            calls: v.calls,
+            percent: tokens > 0 ? v.tokens / tokens : 0,
+          };
+        })
+        .sort((a, b) => b.tokens - a.tokens || b.calls - a.calls);
+
+      const daily: ExternalUsageDaily[] = [...perDay.entries()]
+        .map(([day, v]) => ({ day, tokens: v.tokens, calls: v.calls }))
+        .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+
+      return {
+        range: rng,
+        from,
+        to,
+        last_day: sortedDays.length > 0 ? sortedDays[sortedDays.length - 1] : null,
+        totals: {
+          tokens,
+          calls,
+          prompt_tokens: prompt,
+          completion_tokens: completion,
+          cached_tokens: cached,
+          cache_hit_rate: prompt > 0 ? Math.round((cached / prompt) * 1e4) / 1e4 : null,
+          active_days: active.size,
+        },
+        series,
+        daily,
       };
     },
 

@@ -30,6 +30,7 @@ import type { DshAttachmentService } from "./llm-types.js";
 import type { Context } from "./context-types.js";
 import { internalSwitch, setCompactHost, type CompactTriggerCompaction } from "./compact-trigger.js";
 import { rerouteSettingsFrom } from "./reroute.js";
+import { createExternalUsageCollector } from "./usage-external.js";
 
 export const name = "@bvbhu/as-one";
 export const inject = ["webServer"];
@@ -120,6 +121,41 @@ async function startAsOne(ctx: Context): Promise<void> {
     );
   } catch (err) {
     ctx.logger?.warn?.("[as-one] compact trigger registration skipped:", err);
+  }
+
+  // ── 网关外用量 ─────────────────────────────────────────────────────
+  // 只采 `session/event` 里**没经过 as-one** 的调用(`provider !== "as-one"`),
+  // 写独立的 `stats_external_daily`;不回填历史(用户定案:网关库里已有大量用量,
+  // 再导一遍就是重复统计)。没有任何事件源时这段是纯 no-op,不影响插件加载。
+  try {
+    const collector = createExternalUsageCollector({
+      exclude: [AS_ONE_PROVIDER],
+      record: (sample) => {
+        runtime.db.statsExternalDaily.record({
+          day: sample.day,
+          provider: sample.provider,
+          model: sample.model,
+          calls: sample.calls,
+          prompt_tokens: sample.promptTokens,
+          cached_tokens: sample.cachedTokens,
+          completion_tokens: sample.completionTokens,
+          last_seen: Math.round(sample.at),
+        });
+      },
+      logger: ctx.logger,
+    });
+    const host = ctx as unknown as {
+      on(event: string, listener: (session: { id?: string }, event: unknown) => void): void;
+    };
+    host.on("session/event", (session, event) => {
+      collector.onEvent(session?.id ?? "", event as { type?: string });
+    });
+    host.on("session/disposed", (session) => {
+      collector.onSessionDisposed(session?.id ?? "");
+    });
+    ctx.logger?.info?.("[as-one] 网关外用量采集已挂上 session/event");
+  } catch (err) {
+    ctx.logger?.warn?.("[as-one] 网关外用量采集挂载失败(统计会缺这一块):", err);
   }
 
   ctx.inject(["llm"], (child) => {
