@@ -97,13 +97,13 @@ export interface UpstreamRuntime {
   registry: ProviderRegistry;
   vault: CredentialVault;
   /**
-   * 辅助请求的重路由设置(见 `reroute.ts`)。
+   * 重路由设置的**现读口**(来自 `setting` 表,见 `reroute.ts`)。
    *
    * 这里只消费 `vision`:图像桥要把图转成文字,必须有一条**真的能看图**的车道。
    * **没配 = 没有图像解析**(带图请求原样放行),而不是偷偷用主模型 ——
    * 主模型能不能看图是上游的事实,网关不猜。
    */
-  routes?: RerouteSettings;
+  routes?: () => RerouteSettings;
   /**
    * 逻辑模型的**最大输出上限** = 成员链中最小的 `max_output_tokens`
    * (Nexus `_logical_output_cap`)。用于 `max_tokens` 钳制的「逻辑模型级上限」
@@ -500,7 +500,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
      * 解析车道不该被粘到用户会话上,用户会话的亲和 pin 也不该被解析请求占用。
      */
     // 图像解析车道:设置项 `routes.vision`。没配 = 没有解析能力(见 UpstreamRuntime.routes)。
-    const visionRoute = runtime.routes?.vision;
+    const visionRoute = runtime.routes?.().vision;
 
     const parseOneImage = async (
       part: ContentPart,

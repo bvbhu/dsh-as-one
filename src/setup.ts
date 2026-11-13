@@ -13,7 +13,7 @@
  */
 
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { openDatabase, type NexusDatabase } from "@as-one/core/src/db/database.js";
 import { ProviderRegistry } from "@as-one/core/src/config/providers.js";
@@ -50,7 +50,7 @@ import { RequestLogWriter } from "@as-one/core/src/request-log/writer.js";
 import { chQuotaTableForScheduler } from "@as-one/panel/src/index.js";
 import { AppSchedulerRepo } from "./repo.js";
 import { buildResolveUpstream } from "./upstream.js";
-import type { RerouteSettings } from "./reroute.js";
+import { rerouteSettingsFrom } from "./reroute.js";
 import { listModelEntries, providersWithCredentials } from "./models.js";
 
 /** sensenova key 自愈结果(与 `@as-one/panel` 的 `PanelBundle["snRepairKey"]` 同形)。 */
@@ -62,26 +62,19 @@ export interface SensenovaKeyRepairResult {
 }
 
 export interface SetupAsOneOptions {
-  /** 配置目录:放 as-one.providers.json 等导入/导出文件。 */
-  configDir: string;
-  /** SQLite 文件路径(或 ":memory:")。 */
+  /** SQLite 文件路径(或 ":memory:")—— 唯一真源,没有旁路配置文件。 */
   dbPath: string;
-  /** 请求明细日志目录(默认 `<configDir>/logs`,与 electron 同口径)。 */
+  /** 数据目录(默认 dbPath 所在目录);面板「数据目录」与日志都在它下面。 */
+  dataDir?: string;
+  /** 请求明细日志目录(默认 `<dbPath 所在目录>/logs`)。 */
   logDir?: string;
   /** 环境变量来源(默认 process.env),供 EnvKeyProvider 探测 ONE_API_KEY。 */
   env?: Record<string, string | undefined>;
-  /**
-   * 辅助请求的重路由设置(见 `reroute.ts`)。
-   *
-   * 只有「图像解析」这一条在这里消费:网关的图像桥需要一个**真的能看图**的
-   * 模型名,没配就没有解析车道(请求带图原样放行,由上游自己决定能不能看)。
-   * 压缩摘要与会话标题的重路由在 adapter 里做,不经运行时。
-   */
-  routes?: RerouteSettings;
 }
 
 export interface AsOneRuntime {
-  configDir: string;
+  /** 数据目录:库、日志、一切可持久化的东西都在这里。 */
+  dataDir: string;
   dbPath: string;
   logDir: string;
   db: NexusDatabase;
@@ -93,8 +86,18 @@ export interface AsOneRuntime {
   ledger: Router["ledger"];
   health: Router["health"];
   keyProvider: KeyProvider;
-  /** 账户启用/停用 overlay(内存态;setAccountEnabled 写入,阶段二再持久化)。 */
+  /**
+   * 账户启用/停用覆盖:
+   * - 内存这份是**读缓存**(调度与面板的读数路径全是同步的);
+   * - 唯一真源是 `setting` 表的 `account.enabled`(JSON `{引用: 布尔}`)。
+   *
+   * 只写「被显式拨过的」账号:没有行 = 跟随 registry 的默认值。
+   */
   accountOverlay: Map<string, boolean>;
+  /** 账号启停的唯一写口(更新缓存 + 落库)。 */
+  setAccountEnabled(ref: string, enabled: boolean): void;
+  /** `setting` 表只读口(面板设置页 / 重路由共用;每次现读)。 */
+  getSetting(key: string): string | null;
   resolveUpstream: (model: string) => Upstream | undefined;
   listModels: () => ModelEntry[] | Promise<ModelEntry[]>;
   /**
@@ -157,6 +160,30 @@ export async function syncSensenovaPool(vault: CredentialVault): Promise<void> {
 }
 
 // ── 设置读取小工具(与 electron 同口径的缺省值) ──────────────────────────
+
+/**
+ * 账号启停覆盖的持久化键 —— JSON `{"<provider>/<username>": boolean}`。
+ *
+ * 只存**被显式拨过的**账号:没有键 = 跟随 registry 的默认值。
+ */
+const ACCOUNT_OVERLAY_KEY = "account.enabled";
+
+/** 从 `setting` 表恢复启停覆盖;坏 JSON 按「无覆盖」处理(不阻断启动)。 */
+function loadAccountOverlay(db: NexusDatabase): Map<string, boolean> {
+  const out = new Map<string, boolean>();
+  const raw = settingOf(db, ACCOUNT_OVERLAY_KEY);
+  if (raw === null || raw === "") return out;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return out;
+    for (const [ref, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "boolean") out.set(ref, value);
+    }
+  } catch (err) {
+    console.error("[as-one] account.enabled 解析失败,按无覆盖处理:", err);
+  }
+  return out;
+}
 
 function settingOf(db: NexusDatabase, key: string): string | null {
   const row = db.setting.get(key);
@@ -222,21 +249,19 @@ function parseAllowsOff(raw: boolean | number | null | undefined): boolean | nul
 }
 
 export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRuntime> {
-  const { configDir, dbPath } = options;
+  const { dbPath } = options;
   const env = options.env ?? process.env;
   const startedAtMs = Date.now();
 
-  mkdirSync(configDir, { recursive: true });
+  const dataDir = options.dataDir ?? dirname(dbPath);
+  mkdirSync(dataDir, { recursive: true });
 
   // 1. DB 先开 —— 它是唯一真源(WAL + foreign_keys + SCHEMA_V7,缺失自动建)。
   const db = openDatabase(dbPath);
 
   // 2. 注册表 = 数据库在内存里的索引(provider / real_model / logical_model /
   //    scheduler.rules 全部来自表;JSON 已退化为导入/导出格式)。
-  const providersPath = join(configDir, "as-one.providers.json");
-  const registry = ProviderRegistry.fromSnapshot(snapshotFromDb(db).snapshot, {
-    filePath: providersPath,
-  });
+  const registry = ProviderRegistry.fromSnapshot(snapshotFromDb(db).snapshot);
 
   /** 把库里的最新状态重新投影进注册表(面板写库之后调用,索引即时对齐)。 */
   const syncRegistry = (): void => {
@@ -266,8 +291,17 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     }
   }
 
-  // 账户启用/停用 overlay(内存态;setAccountEnabled 写入,阶段二再持久化)。
-  const accountOverlay = new Map<string, boolean>();
+  // 账户启用/停用覆盖:真源在 setting 表,内存这份只是同步读缓存。
+  const accountOverlay = loadAccountOverlay(db);
+  const setAccountEnabled = (ref: string, enabled: boolean): void => {
+    accountOverlay.set(ref, enabled);
+    try {
+      db.setting.set(ACCOUNT_OVERLAY_KEY, JSON.stringify(Object.fromEntries(accountOverlay)));
+    } catch (err) {
+      // 落库失败不影响本进程:这次拨动仍然生效,只是重启后回退。
+      console.error("[as-one] 账号启停落库失败:", err);
+    }
+  };
 
   // 6. 调度 + 路由。
   const repo = new AppSchedulerRepo(db, registry, {
@@ -296,7 +330,7 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
   const keyProvider: KeyProvider = new EnvKeyProvider("ONE_API_KEY", env);
 
   // 8. 请求日志:明细写 <logDir>/requests-YYYYMMDD.jsonl(按天),聚合走 stats_daily。
-  const logDir = options.logDir ?? join(configDir, "logs");
+  const logDir = options.logDir ?? join(dataDir, "logs");
   const requestLogWriter = new RequestLogWriter(logDir);
   const requestLogMode = createContentModeResolver((key) => settingOf(db, key));
 
@@ -390,7 +424,7 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     router,
     registry,
     vault,
-    routes: options.routes,
+    routes: () => rerouteSettingsFrom((key) => settingOf(db, key)),
     // 逻辑模型级输出上限(成员链最小值)—— `max_tokens` 钳制要用。
     // 唯一真源 = db(不读 registry:面板删掉的模型不该还参与钳制)。
     logicalOutputCap: (logicalName: string): number | null => {
@@ -475,7 +509,7 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
   });
 
   return {
-    configDir,
+    dataDir,
     dbPath,
     logDir,
     db,
@@ -488,6 +522,8 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     health: router.health,
     keyProvider,
     accountOverlay,
+    setAccountEnabled,
+    getSetting: (key: string) => settingOf(db, key),
     secretPresence,
     syncRegistry,
     resolveUpstream,

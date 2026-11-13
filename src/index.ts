@@ -10,12 +10,11 @@
  * apply 里现建现放,持久状态只放 SQLite(<dataDir>/as-one.db),挂载点留
  * dispose。改动 src/setup.ts / src/routes.ts 后 DSH 热重载即生效。
  *
- * 路径规则(全部可被 cordis.patch.yml 的 config 覆盖):
- *   dataDir  → config.dataDir ?? $AS_ONE_DATA_DIR ?? ctx.dataDir ?? <homedir>/.as-one
- *   configDir→ config.configDir ?? <dataDir>/config   (导入/导出用的 JSON 备份目录)
- *   dbPath   → config.dbPath ?? <dataDir>/as-one.db
- * 数据库是唯一真源;configDir 只剩「JSON 导入 / 导出 / 备份」用途。
- * 默认绝不写死到用户桌面 profile 的既定文件。
+ * 存储:唯一真源是 SQLite(`<homedir>/.as-one/as-one.db`)。
+ *
+ * **没有配置文件、没有 YAML config** —— 路径固定,设置项(含重路由车道)全部
+ * 在 `setting` 表,由面板「设置」页读写;保存后**下一个请求**即生效,不需要重载。
+ * 这是刻意的:同一份设置有两个真源时,「改哪边生效」永远说不清。
  */
 
 import { homedir } from "node:os";
@@ -30,72 +29,27 @@ import { AS_ONE_PROVIDER, AsOneLlmAdapter } from "./llm-adapter.js";
 import type { DshAttachmentService } from "./llm-types.js";
 import type { Context } from "./context-types.js";
 import { internalSwitch, setCompactHost, type CompactTriggerCompaction } from "./compact-trigger.js";
-import { normalizeReroutes, rerouteCount, type RerouteSettings } from "./reroute.js";
+import { rerouteSettingsFrom } from "./reroute.js";
 
 export const name = "@bvbhu/as-one";
 export const inject = ["webServer"];
 
-export interface AsOnePluginConfig {
-  /** 保留字段:与独立 Electron 版(DEFAULT_GATEWAY_PORT=4000)对齐;宿主路由形态不建端口。 */
-  gatewayPort?: number;
-  /** 数据目录覆盖(默认 <homedir>/.as-one)。 */
-  dataDir?: string;
-  /** 配置目录覆盖(默认 <dataDir>/config)。 */
-  configDir?: string;
-  /** SQLite 文件路径覆盖(默认 <dataDir>/as-one.db)。 */
-  dbPath?: string;
-  /**
-   * **辅助请求的重路由设置**(压缩摘要 / 图像解析 / 会话标题)。
-   *
-   * 缺省是空 —— **没有任何重路由机制**,所有请求都按客户端给的模型走。
-   * 只有显式写出模型名的那一类才会被切到另一条车道:
-   *
-   * ```yaml
-   * routes:
-   *   compact: free       # purpose: "compaction"
-   *   vision: free        # 图像桥解析(必须真的能看图)
-   *   sessionTitle: free  # purpose: "session-title"
-   * ```
-   *
-   * 配了但库里没有该模型 → 该次请求回落原模型并告警(不产生半个重路由)。
-   */
-  routes?: RerouteSettings;
+/** 固定路径布局:数据、库、日志都在这一个目录里。 */
+export function resolveDirs(): { dataDir: string; dbPath: string; logDir: string } {
+  const dataDir = join(homedir(), ".as-one");
+  return { dataDir, dbPath: join(dataDir, "as-one.db"), logDir: join(dataDir, "logs") };
 }
 
-function ctxDataDir(_ctx: Context): string | undefined {
-  // 当前 DSH 无公开 ctx.dataDir 服务:访问 ctx.dataDir 会触发
-  // "cannot get property without inject" 代理错误,所以只以
-  // config / 环境变量 / 用户主目录兜底(见 resolveDirs)。
-  return undefined;
+export function apply(ctx: Context): void {
+  void startAsOne(ctx);
 }
 
-export function resolveDirs(ctx: Context, config: AsOnePluginConfig = {}) {
-  const dataDir =
-    config.dataDir ?? process.env.AS_ONE_DATA_DIR ?? ctxDataDir(ctx) ?? join(homedir(), ".as-one");
-  const configDir = config.configDir ?? join(dataDir, "config");
-  const dbPath = config.dbPath ?? join(dataDir, "as-one.db");
-  return { dataDir, configDir, dbPath };
-}
-
-export function apply(ctx: Context, config: AsOnePluginConfig = {}): void {
-  void startAsOne(ctx, config);
-}
-
-async function startAsOne(ctx: Context, config: AsOnePluginConfig): Promise<void> {
-  const { dataDir, configDir, dbPath } = resolveDirs(ctx, config);
-  // 重路由设置只读一次:改了要重载插件(与其它进程内服务同一口径)。
-  const routes = normalizeReroutes(config.routes);
-  if (rerouteCount(routes) > 0) {
-    ctx.logger?.info?.(`[as-one] 重路由已启用:${JSON.stringify(routes)}`);
-  }
+async function startAsOne(ctx: Context): Promise<void> {
+  const { dataDir, dbPath, logDir } = resolveDirs();
 
   let runtime: AsOneRuntime;
   try {
-    // ⚠️ 明细日志必须和独立应用写同一个地方。setupAsOne 的缺省是
-    // `<configDir>/logs`(= `<dataDir>/config/logs`),而 Electron 侧是
-    // `<dataDir>/logs` —— 两个形态共用一个 dataDir 时日志会分叉成两份,
-    // 「这次的请求到底记到哪去了」全靠猜。这里显式按 dataDir 对齐。
-    runtime = await setupAsOne({ configDir, dbPath, logDir: join(dataDir, "logs"), routes });
+    runtime = await setupAsOne({ dataDir, dbPath, logDir });
   } catch (err) {
     // 启动失败不能拖垮宿主:记日志,路由不挂(下次 apply / 修复配置后重载)。
     ctx.logger?.warn?.("[as-one] setup failed, gateway routes not mounted:", err);
@@ -105,7 +59,7 @@ async function startAsOne(ctx: Context, config: AsOnePluginConfig): Promise<void
   ctx.effect(
     () => {
       const gatewayRoutes = buildGatewayRoutes(runtime, { logger: ctx.logger as unknown as Pick<Console, "warn" | "error"> });
-      const panelRoutes = buildPanelRoutes(runtime, { gatewayPort: config.gatewayPort });
+      const panelRoutes = buildPanelRoutes(runtime);
       const disposers: (() => void)[] = [];
       for (const route of [...gatewayRoutes, ...panelRoutes]) {
         try {
@@ -151,17 +105,6 @@ async function startAsOne(ctx: Context, config: AsOnePluginConfig): Promise<void
     })(),
     warn: (message, error) => ctx.logger?.warn?.(message, error),
   });
-  // 只补「内部换档」这一种宿主看不见的压缩触发;不接管任何宿主压缩事件。
-  setCompactHost({
-    compaction: (() => {
-      try {
-        return (ctx.get("compaction") as CompactTriggerCompaction | undefined) ?? undefined;
-      } catch {
-        return undefined;
-      }
-    })(),
-    warn: (message, error) => ctx.logger?.warn?.(message, error),
-  });
   try {
     const host = ctx as unknown as {
       on(event: string, listener: (payload: unknown, next: () => unknown) => unknown, opts?: unknown): void;
@@ -188,7 +131,8 @@ async function startAsOne(ctx: Context, config: AsOnePluginConfig): Promise<void
         // ⚠️ 故意不把 attachments 写进 `ctx.inject([...])`:纯 Web 宿主 / 没挂
         // 附件服务的部署里,整个 adapter 都不该因此消失(那样连文本模型都选不到)。
         // 服务缺失时 adapter 如实降级(丢图片块),文本请求照常。
-        routes,
+        // 现读 setting 表:面板保存后下一个请求就换车道。
+        reroutes: () => rerouteSettingsFrom(runtime.getSetting),
         resolveAttachments: () => {
           try {
             return (child.get("attachments") as DshAttachmentService | undefined) ?? undefined;

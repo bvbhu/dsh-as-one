@@ -1,15 +1,3 @@
 - insert:
     - id: as-one-gateway
       name: '@bvbhu/as-one'
-      config:
-        gatewayPort: 4000
-        # 辅助请求的重路由:不写某一项 = 该用途不重路由(按客户端给的模型走)。
-        # 本机三条都指向 free;换车道改这里,整段删掉 = 关掉重路由。
-        routes:
-          compact: free # purpose: "compaction"(压缩摘要,会被分块再摘要)
-          vision: free # 图像桥解析(必须真的能看图)
-          sessionTitle: free # purpose: "session-title"(会话标题)
-        # 以下路径全部可选覆盖;不设则走插件默认(见 src/index.ts resolveDirs):
-        # dataDir: null   # 数据目录(默认 <homedir>/.as-one)
-        # configDir: null # 配置目录(默认 <dataDir>/config,放 as-one.providers.json / as-one.credentials.json)
-        # dbPath: null    # SQLite 文件路径(默认 <dataDir>/as-one.db)

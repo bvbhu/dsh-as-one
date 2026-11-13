@@ -26,7 +26,6 @@ describe("setupAsOne", () => {
   it("在 tmp 目录建库、加载空配置、构造调度器与路由(不抛)", async () => {
     const dir = makeTmpDir();
     const rt = await setupAsOne({
-      configDir: join(dir, "config"),
       dbPath: join(dir, "as-one.db"),
       env: {}, // 无 ONE_API_KEY → 网关放行(与 core EnvKeyProvider 语义一致)
     });
@@ -51,7 +50,6 @@ describe("setupAsOne", () => {
 
   it("带 stub 提供方(表播种)+ dummy 凭据时能构造出链(不上网)", async () => {
     const dir = makeTmpDir();
-    const configDir = join(dir, "config");
     const dbPath = join(dir, "as-one.db");
 
     // 直接把夹具写进表 —— 数据库是唯一真源,启动不再读 JSON。
@@ -88,7 +86,6 @@ describe("setupAsOne", () => {
     seed.close();
 
     const rt = await setupAsOne({
-      configDir,
       dbPath,
       env: {},
     });
@@ -151,7 +148,6 @@ describe("setupAsOne", () => {
     const dir = makeTmpDir();
 
     const rt = await setupAsOne({
-      configDir: join(dir, "config"),
       dbPath: join(dir, "as-one.db"),
       env: {},
     });
@@ -178,6 +174,42 @@ describe("setupAsOne", () => {
     // 拆掉也不抛(卸载路径)
     expect(() => rt.setSensenovaKeyRepair(null)).not.toThrow();
 
+    rt.dispose();
+  });
+
+  it("账号启停落库:换一个进程(重新 setup)仍然记得停用", async () => {
+    const dir = makeTmpDir();
+    const dbPath = join(dir, "as-one.db");
+    const seed = openDatabase(dbPath);
+    seed.provider.insert({ id: "stub", base_url: "http://127.0.0.1:9", protocol: "openai", env_prefix: null });
+    seed.credential.set({
+      provider: "stub",
+      username: "u1",
+      secret: "sk-dummy-not-real",
+      refresh_secret: null,
+      expires_at: null,
+      raw_json: null,
+    });
+    seed.close();
+
+    const first = await setupAsOne({ dbPath, env: {} });
+    first.setAccountEnabled("stub/u1", false);
+    first.dispose();
+
+    // 模拟重启:同一个库、新的运行时。
+    const second = await setupAsOne({ dbPath, env: {} });
+    expect(second.accountOverlay.get("stub/u1")).toBe(false);
+    // 调度侧立刻按覆盖走(链为空 = 该账号没被算进来)
+    expect(second.scheduler.chain("stub/u1")).toEqual([]);
+    second.dispose();
+  });
+
+  it("重路由设置来自 setting 表(默认空 → 不重路由)", async () => {
+    const dir = makeTmpDir();
+    const rt = await setupAsOne({ dbPath: join(dir, "as-one.db"), env: {} });
+    expect(rt.getSetting("route.compact")).toBeNull();
+    rt.db.setting.set("route.compact", "free");
+    expect(rt.getSetting("route.compact")).toBe("free");
     rt.dispose();
   });
 });

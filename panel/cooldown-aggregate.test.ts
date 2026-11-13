@@ -109,7 +109,7 @@ function ctxWith(input: {
         raw: {},
       }),
     },
-    configDir: ".",
+    dataDir: ".",
     dbPath: ":memory:",
     secretPresence: new Map<string, boolean>(),
     startedAtMs: Date.now() - 1000,

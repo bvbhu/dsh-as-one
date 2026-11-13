@@ -62,7 +62,7 @@ function makeCtx(creds: FakeCred[], opts: { providerThrows?: boolean } = {}): Pa
     restartGateway: async () => "",
     startedAtMs: Date.now(),
     accountOverlay: new Map<string, boolean>(),
-    configDir: tmpdir(),
+    dataDir: tmpdir(),
     dbPath: ":memory:",
     secretPresence: () => false,
     syncRegistry: () => {},

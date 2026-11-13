@@ -988,7 +988,8 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       const accounts = ctx.registry.listAccounts(String(providerId ?? ""));
       const account = accounts[Number(index)];
       if (!account) return;
-      ctx.accountOverlay.set(account.credentialRef, Boolean(enabled));
+      // 唯一写口:缓存 + 落库(重启后仍然记得「这个账号被停用了」)。
+      ctx.setAccountEnabled(account.credentialRef, Boolean(enabled));
     },
 
     async getSettings(): Promise<SettingsRead> {
@@ -1156,7 +1157,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       const rawEnabled = ctx.db.setting.get("request_log.enabled")?.v ?? "1";
       const rawMode = ctx.db.setting.get("request_log.content_mode")?.v;
       const mode = parseContentMode(rawMode, "off");
-      const logsDir = join(ctx.configDir, "logs");
+      const logsDir = join(ctx.dataDir, "logs");
       let logFiles: string[] = [];
       try {
         logFiles = readdirSync(logsDir).filter((f) => /^requests-\d{8}\.jsonl$/.test(f)).sort();
@@ -1229,10 +1230,10 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
 
     // ── 数据目录 ────────────────────────────────────────────────────────────
     async getDataDir(): Promise<DataDirInfo> {
-      const logsDir = join(ctx.configDir, "logs");
+      const logsDir = join(ctx.dataDir, "logs");
       return {
-        data_dir: ctx.configDir,
-        credentials_dir: ctx.configDir,
+        data_dir: ctx.dataDir,
+        credentials_dir: ctx.dataDir,
         logs: existsSync(logsDir) ? logsDir : "",
         state: "ok",
       };

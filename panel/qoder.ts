@@ -2,15 +2,16 @@
  * Qoder 面板域 —— 独立管理页的数据面(账号池 / 模型目录 / 额度 / 签到 / 最近错误)。
  *
  * 与 assembly-sensenova.ts 同一套模式:deps 注入 + `methods` 返回,deps 只有
- * {@link PanelContext}(读 vault / configDir / accountOverlay),不碰网关闭包。
+ * {@link PanelContext}(读 vault / db / accountOverlay),不碰网关闭包。
  *
  * 三个「真源」约定:
  * 1. **凭证真源是 vault**(`provider` = 区域名 `qoder` / `qoder-global`,
  *    `secret` = PAT `pt-…`)。本域只读写 vault,不自建账号表。
  * 2. **启停真源是 `ctx.accountOverlay`**(与其它供应商一致):`false` = 停用,
  *    缺省 = 启用。页面上的开关写这里,调度侧读同一份。
- * 3. **模型勾选真源是 configDir 下的 `qoder-models.json`**:勾选是本地偏好
- *    (上游目录只读,不能改它),放库表反而要迁移,所以用一个小 JSON 文件。
+ * 3. **模型勾选真源是 `setting` 表的 `qoder.models`**:勾选是本地偏好
+ *    (上游目录只读,不能改它),与其它设置同库同表 —— 备份只拷 `as-one.db`
+ *    就够,不存在「配置文件丢了、下次启动勾选全空」的坑。
  *    **勾选同时登记 `real_model`**(取消即删行并摘逻辑模型成员)—— 用户要的是
  *    「勾上就能调度」,不是勾完再去「其他供应商」页手建一遍;清单外的端点在
  *    保存时删掉,语义对齐渠道页的 `setChannelModels`。
@@ -21,8 +22,6 @@
  * @module main/assembly-qoder
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 
 import {
   QODER_REGIONS,
@@ -304,13 +303,16 @@ export function createQoderDomain(ctx: PanelContext): QoderDomain {
    * **绝不打上游** —— 没拉过就是没有(卡头显示「未采集」,展开后刷新才有数)。
    */
   const lastCredits = new Map<string, import("./types.js").QoderCreditsView>();
-  const selectionPath = join(ctx.configDir, "qoder-models.json");
+  /** 模型勾选的持久化键 —— 与其它偏好一样进 `setting` 表(唯一真源)。 */
+  const SELECTION_KEY = "qoder.models";
+
   let selection = loadSelection();
 
   function loadSelection(): QoderSelectionFile {
+    const raw = ctx.db.setting.get(SELECTION_KEY)?.v ?? null;
+    if (raw === null || raw === "") return { version: 1, selected: {} };
     try {
-      if (!existsSync(selectionPath)) return { version: 1, selected: {} };
-      const parsed = JSON.parse(readFileSync(selectionPath, "utf8")) as Partial<QoderSelectionFile>;
+      const parsed = JSON.parse(raw) as Partial<QoderSelectionFile>;
       const selected: Record<string, string[]> = {};
       for (const [region, keys] of Object.entries(parsed.selected ?? {})) {
         if (!isQoderRegion(region)) continue;
@@ -325,16 +327,17 @@ export function createQoderDomain(ctx: PanelContext): QoderDomain {
 
   function saveSelection(): void {
     try {
-      writeFileSync(selectionPath, JSON.stringify(selection, null, 2), "utf8");
-    } catch {
-      // 落盘失败不该让页面崩:勾选仍然在当前进程内生效,只是重启后回退。
+      ctx.db.setting.set(SELECTION_KEY, JSON.stringify(selection));
+    } catch (err) {
+      // 落库失败不该让页面崩:勾选仍然在当前进程内生效,只是重启后回退。
+      console.error("[as-one] qoder 模型勾选落库失败:", err);
     }
   }
 
   /**
    * 页面上「看起来被勾选」的集合。
    *
-   * 用户还没动过勾选(`qoder-models.json` 里该区域为空)时,目录里的
+   * 用户还没动过勾选(`qoder.models` 里该区域为空)时,目录里的
    * `isDefault` / `enable` 模型按默认勾选展示 —— 这里必须与
    * {@link toCatalogRows} 的判定保持同一口径,否则第一次点选时会把
    * 「看着勾上但没进库」的那批模型一起删掉。
@@ -666,7 +669,7 @@ export function createQoderDomain(ctx: PanelContext): QoderDomain {
         // `FOREIGN KEY constraint failed`(2026-10-30 实测)。
         ensureQoderProviderRow(ctx.db, region);
         await ctx.vault.put({ provider: region, username, secret: token, raw: { kind: "pat" } });
-        ctx.accountOverlay.set(`${region}/${username}`, true);
+        ctx.setAccountEnabled(`${region}/${username}`, true);
         // 写完立刻探一次:凭据错了要在「添加」这一步就说,而不是等页面空着。
         try {
           const models = await getQoderClient(region).fetchModels(token);
@@ -696,7 +699,7 @@ export function createQoderDomain(ctx: PanelContext): QoderDomain {
 
       async qoderSetAccountEnabled(region, name, enabled) {
         if (!isQoderRegion(region)) return { ok: false, message: `未知区域: ${region}` };
-        ctx.accountOverlay.set(`${region}/${name}`, Boolean(enabled));
+        ctx.setAccountEnabled(`${region}/${name}`, Boolean(enabled));
         return { ok: true, message: `${name} 已${enabled ? "启用" : "停用"}`, provider: region, username: name };
       },
 

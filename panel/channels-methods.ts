@@ -1501,8 +1501,8 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
             // 所以这里如实说明**怎么接入**,而不是假装扫了一圈没扫到。
             message:
               "WorkBuddy 没有可自动发现的本机登录态(官方客户端令牌在加密存储里,离线读不出)。" +
-              "请从 WorkBuddy 客户端导出访问令牌后手动添加:面板导入或编辑 config 目录下的 " +
-              "as-one.credentials.json(provider=workbuddy)。",
+              "请从 WorkBuddy 客户端导出访问令牌,在「渠道」页手动添加账号 —— " +
+              "凭据只写数据库,不存在可手改的凭据文件。",
           };
         case "sensenova":
           return {

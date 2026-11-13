@@ -267,8 +267,8 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
 
   const od = createOverviewDomain(ctx, { realModelMap });
 
-  // Qoder 域(第七刀):独立管理页的数据面。账号池真源是 vault,启停是
-  // accountOverlay,模型勾选是 configDir/qoder-models.json —— 都不改库表。
+  // Qoder 域(第七刀):独立管理页的数据面。账号池真源是 vault;账号启停与
+  // 模型勾选都进 setting 表(account.enabled / qoder.models),内存只是缓存。
   const qd = createQoderDomain(ctx);
 
   // 模型域(第六刀):逻辑模型 / 部署与暴露 / 供应商侧读写。
@@ -847,7 +847,7 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
     
     // ── 逻辑模型 ───────────────────────────────────────────────────────────
     // ⚠️ 逻辑模型唯一真源 = db.logical_model(用户指示:删除后必须从页面消失、
-    // 调度必须跟着 db 走,providers.json 的 logicalModels 段只作空库首启播种)。
+    // 调度必须跟着 db 走;没有任何 JSON 播种源)。
     
     
     

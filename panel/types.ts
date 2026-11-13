@@ -1344,7 +1344,7 @@ export interface RendererApi {
   getQoderModels(region?: string): Promise<QoderCatalogRow[]>;
   /** 强制刷新目录(绕过 5 分钟缓存)。 */
   qoderRefreshCatalog(region?: string): Promise<ApiResult>;
-  /** 勾选/取消一个模型(本地偏好,落 configDir/qoder-models.json)。 */
+  /** 勾选/取消一个模型(本地偏好,落 setting 表的 `qoder.models`)。 */
   qoderSetModelEnabled(region: string, key: string, enabled: boolean): Promise<ApiResult>;
   /** 积分/额度读数(逐账号;失败时 ok=false 并带错误文案)。 */
   qoderCredits(region: string, account?: string): Promise<QoderCreditsView[]>;

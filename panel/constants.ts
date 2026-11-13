@@ -263,4 +263,25 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     min: 1,
     max: 500,
   },
+  // ── 重路由车道(辅助请求换模型) ────────────────────────────────────────
+  // 键名与 `src/reroute.ts` 的 REROUTE_SETTING_KEYS 逐字对应;**默认空 = 不重路由**。
+  // 值填 as-one 里的抽象模型名(逻辑模型名),例如 free。
+  {
+    key: "route.compact",
+    def: "",
+    kind: "str",
+    label: "压缩摘要走的模型(空 = 不重路由)",
+  },
+  {
+    key: "route.vision",
+    def: "",
+    kind: "str",
+    label: "图片解析走的模型(空 = 不做图像桥,必须能看图)",
+  },
+  {
+    key: "route.session_title",
+    def: "",
+    kind: "str",
+    label: "会话标题走的模型(空 = 不重路由)",
+  },
 ];

@@ -18,7 +18,13 @@ import type {
 } from "@as-one/core/src/gateway/types.js";
 import type { AsOneRuntime } from "../src/setup.js";
 import { AsOneLlmAdapter } from "../src/llm-adapter.js";
-import { normalizeReroutes, rerouteCount, rerouteModel } from "../src/reroute.js";
+import {
+  normalizeReroutes,
+  rerouteCount,
+  rerouteModel,
+  rerouteSettingsFrom,
+  type RerouteSettings,
+} from "../src/reroute.js";
 import type { DshGenerateOptions, DshStreamChunk } from "../src/llm-types.js";
 
 // ---------------------------------------------------------------------------
@@ -45,12 +51,10 @@ function completionOf(text: string): ChatCompletion {
   } as unknown as ChatCompletion;
 }
 
-function fixture() {
-  const captured: { stream: UpstreamRequest[]; complete: UpstreamRequest[] } = {
-    stream: [],
-    complete: [],
-  };
-  const upstream: Upstream = {
+type Captured = { stream: UpstreamRequest[]; complete: UpstreamRequest[] };
+
+function fakeUpstream(captured: Captured): Upstream {
+  return {
     stream(req) {
       captured.stream.push(req);
       return (async function* () {
@@ -62,13 +66,18 @@ function fixture() {
       return completionOf("SUMMARY");
     },
   };
+}
+
+function fixture() {
+  const captured: Captured = { stream: [], complete: [] };
+  const upstream = fakeUpstream(captured);
   const rt = {
     listModels: async () => [],
     resolveUpstream: (model: string) => (model === "auto" || model === "free" ? upstream : undefined),
     onRequestDone: () => {},
   } as unknown as AsOneRuntime;
-  const adapter = (routes?: Record<string, string>) =>
-    new AsOneLlmAdapter(rt, routes ? { routes } : undefined);
+  const adapter = (routes?: RerouteSettings) =>
+    new AsOneLlmAdapter(rt, routes ? { reroutes: () => routes } : undefined);
   return { adapter, captured };
 }
 
@@ -128,6 +137,22 @@ describe("normalizeReroutes", () => {
   });
 });
 
+describe("rerouteSettingsFrom", () => {
+  it("键名与设置页一致,空串 = 不重路由", () => {
+    const table: Record<string, string | null> = {
+      "route.compact": " free ",
+      "route.vision": "",
+      "route.session_title": null,
+    };
+    expect(rerouteSettingsFrom((k) => table[k] ?? null)).toEqual({ compact: "free" });
+  });
+
+  it("没有读口 / 全空 → 空设置", () => {
+    expect(rerouteSettingsFrom(undefined)).toEqual({});
+    expect(rerouteSettingsFrom(() => null)).toEqual({});
+  });
+});
+
 describe("rerouteModel", () => {
   const routes = { compact: "free", vision: "vis", sessionTitle: "cheap" };
 
@@ -152,6 +177,24 @@ describe("rerouteModel", () => {
 // ---------------------------------------------------------------------------
 
 describe("AsOneLlmAdapter 重路由", () => {
+  it("设置改了不用重载:下一个请求就换车道", async () => {
+    const { captured } = fixture();
+    let current: RerouteSettings = {};
+    const live = new AsOneLlmAdapter(
+      {
+        listModels: async () => [],
+        resolveUpstream: (m: string) => (m === "auto" || m === "free" ? fakeUpstream(captured) : undefined),
+        onRequestDone: () => {},
+      } as unknown as AsOneRuntime,
+      { reroutes: () => current },
+    );
+    await drain(live.stream(options("session-title")));
+    expect(captured.stream[0]?.model).toBe("auto");
+    current = { sessionTitle: "free" };
+    await drain(live.stream(options("session-title")));
+    expect(captured.stream[1]?.model).toBe("free");
+  });
+
   it("默认(未配置):purpose 不改变任何东西", async () => {
     const { adapter, captured } = fixture();
     await drain(adapter().stream(options("compaction")));

@@ -1,20 +1,8 @@
 export const name: string;
 export const inject: string[];
-export interface AsOneRerouteSettings {
-  compact?: string;
-  vision?: string;
-  sessionTitle?: string;
-}
-export interface AsOnePluginConfig {
-  gatewayPort?: number;
-  dataDir?: string;
-  configDir?: string;
-  dbPath?: string;
-  routes?: AsOneRerouteSettings;
-}
-export function resolveDirs(ctx: unknown, config?: AsOnePluginConfig): {
+export function resolveDirs(): {
   dataDir: string;
-  configDir: string;
   dbPath: string;
+  logDir: string;
 };
-export function apply(ctx: unknown, config?: AsOnePluginConfig): void;
+export function apply(ctx: unknown): void;

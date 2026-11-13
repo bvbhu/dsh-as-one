@@ -59,7 +59,15 @@ export interface PanelContext {
   restartGateway: () => Promise<string>;
   startedAtMs: number;
   accountOverlay: Map<string, boolean>;
-  configDir: string;
+  /**
+   * 账号启停的**唯一写口**(缓存 + 落库 `setting` 表)。
+   *
+   * 面板不再直接 `accountOverlay.set()` —— 那样只改内存,重启后停用的账号
+   * 会被重新启用(凭据还在库里),属于安全问题。
+   */
+  setAccountEnabled: (ref: string, enabled: boolean) => void;
+  /** 数据目录(库、日志都在里面);面板只读展示。 */
+  dataDir: string;
   dbPath: string;
   /**
    * 密钥在场表(`"<provider>/<username>" → true`)。

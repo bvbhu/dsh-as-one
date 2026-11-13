@@ -789,12 +789,12 @@ export interface AsOneLlmAdapterOptions {
    */
   resolveAttachments?: () => DshAttachmentService | undefined;
   /**
-   * 辅助请求(压缩摘要 / 图像解析 / 会话标题)的重路由设置。
+   * 重路由设置的**现读口**(来自 `setting` 表,见 `reroute.ts`)。
    *
-   * **缺省 = 不重路由**:任何 `purpose` 都按客户端给的模型走。设置项见
-   * `reroute.ts`;配了但模型不存在时回落原模型(见 `stream()`)。
+   * 传函数而不是快照:面板保存设置后,下一个请求就要换车道,不能等重载。
+   * **缺省 = 不重路由**:任何 `purpose` 都按客户端给的模型走。
    */
-  routes?: RerouteSettings;
+  reroutes?: () => RerouteSettings;
 }
 
 /**
@@ -814,7 +814,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
   private readonly provider: string;
   private readonly providerName: string;
   private readonly resolveAttachments: (() => DshAttachmentService | undefined) | undefined;
-  private readonly routes: RerouteSettings;
+  private readonly reroutes: () => RerouteSettings;
 
   constructor(
     private readonly rt: Pick<AsOneRuntime, "listModels" | "resolveUpstream" | "onRequestDone">,
@@ -823,7 +823,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     this.provider = opts.provider ?? AS_ONE_PROVIDER;
     this.providerName = opts.providerName ?? AS_ONE_PROVIDER_NAME;
     this.resolveAttachments = opts.resolveAttachments;
-    this.routes = opts.routes ?? {};
+    this.reroutes = opts.reroutes ?? (() => ({}));
   }
 
   /** `id` 必须**逐字**等于注册时的 provider,否则宿主判 `INVALID_ADAPTER`。 */
@@ -964,7 +964,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
   /** 唯一的抽象:产出**语法合法**的块流。 */
   async *stream(options: DshGenerateOptions): AsyncGenerator<DshStreamChunk> {
     // 辅助请求按设置项重路由;**没配就是没机制** —— 模型、会话号、图片都原样。
-    const target = rerouteModel(this.routes, options.purpose);
+    const target = rerouteModel(this.reroutes(), options.purpose);
     let rerouted = target !== undefined;
     let model = target ?? options.model;
     let upstream: Upstream | undefined = this.rt.resolveUpstream(model);

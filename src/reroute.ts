@@ -38,6 +38,38 @@ const PURPOSE_TO_KEY: Record<string, keyof RerouteSettings> = {
   "session-title": "sessionTitle",
 };
 
+/**
+ * 设置表里的键(`setting` 表;面板「设置」页读写的同一套键)。
+ *
+ * 命名是 `域.项`、全小写 snake —— 面板按首个点分组,所以设置页会自动出现
+ * 「route」一段,不需要为它写任何前端代码。
+ */
+export const REROUTE_SETTING_KEYS: Record<keyof RerouteSettings, string> = {
+  compact: "route.compact",
+  vision: "route.vision",
+  sessionTitle: "route.session_title",
+};
+
+/** 读设置的最小契约(装配层传 `setting` 表的读口)。 */
+export type SettingReader = (key: string) => string | null;
+
+/**
+ * 从设置表现读重路由设置 —— **每次调用都现读**,不缓存。
+ *
+ * 为什么现读:面板保存设置后要让**下一个请求**就换车道,而不是等重载。
+ * 这与 `retryPolicy` / `request_log.content_mode` 是同一口径(见 setup.ts)。
+ */
+export function rerouteSettingsFrom(getSetting: SettingReader | undefined): RerouteSettings {
+  if (!getSetting) return {};
+  const out: RerouteSettings = {};
+  for (const key of Object.keys(REROUTE_SETTING_KEYS) as (keyof RerouteSettings)[]) {
+    const raw = getSetting(REROUTE_SETTING_KEYS[key]);
+    const model = typeof raw === "string" ? raw.trim() : "";
+    if (model.length > 0) out[key] = model;
+  }
+  return out;
+}
+
 /** 配置里接受的键名别名(容忍 kebab / snake / 旧名)。 */
 const KEY_ALIASES: Record<keyof RerouteSettings, string[]> = {
   compact: ["compact", "compaction"],
