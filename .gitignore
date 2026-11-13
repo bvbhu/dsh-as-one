@@ -1,0 +1,43 @@
+# 忽略构建/缓存/临时产物
+node_modules/
+dist/
+out/
+release/
+.tmp-probe/
+.dsh-tmp/
+.tmp-*.txt
+.tmp-*.mjs
+.tmp-*.cjs
+.tmp-bundle-out.mjs
+.tmp-parse.mjs
+.tmp-scan.mjs
+*.log
+.DS_Store
+.asar-out/
+.npm-cache/
+.pnpm-cache/
+.pnpm-home/
+.pnpm-store/
+.electron-cache/
+.eb-cache/
+.venv/
+__pycache__/
+*.tsbuildinfo
+.workbuddy/
+# 本地数据/本地缓存
+.userdata/
+.e2e/
+.sfx-cache/
+*.db
+*.db-wal
+*.db-shm
+
+
+# git worktrees(����������,������汾����)
+.wt/
+.agents/
+
+# 内部文档不入库
+docs/
+ARCHIVED.md
+README.legacy.md

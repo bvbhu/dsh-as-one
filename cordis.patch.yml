@@ -1,0 +1,9 @@
+- insert:
+    - id: as-one-gateway
+      name: '@bvbhu/as-one'
+      config:
+        gatewayPort: 4000
+        # 以下路径全部可选覆盖;不设则走插件默认(见 src/index.ts resolveDirs):
+        # dataDir: null   # 数据目录(默认 <homedir>/.as-one)
+        # configDir: null # 配置目录(默认 <dataDir>/config,放 as-one.providers.json / as-one.credentials.json)
+        # dbPath: null    # SQLite 文件路径(默认 <dataDir>/as-one.db)

@@ -1,0 +1,9 @@
+/* SFX stub 的资源脚本 —— 让 As-One-x.y.z.exe 在资源管理器里显示 nexus 的图标。
+ *
+ * 图标来源:D:\projects\nexus\shell\src\Nexus.Shell.App\app.ico
+ * 已同步到 apps/electron/build/icon.ico(见 scripts/sync-icon.mjs)。
+ *
+ * 注意:资源 ID 用 1(而不是 IDI_ICON1)—— IDI_ICON1 需要额外定义,
+ * 而 Windows 取 PE 的第一个 RT_GROUP_ICON,编号 1 足够。
+ */
+1 ICON "icon.ico"
