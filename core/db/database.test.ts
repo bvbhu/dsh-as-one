@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openDatabase, type NexusDatabase } from "./database.js";
 
 let db: NexusDatabase;
@@ -322,6 +325,39 @@ describe("stats_daily", () => {
 		expect(rows).toHaveLength(1); // NULL 聚合行不会被重复插入
 		expect(rows[0].logical_model).toBeNull();
 		expect(rows[0].requests).toBe(3);
+	});
+
+	it("NULL 键写入在单个写事务里完成,不残留未结束的事务", () => {
+		db.statsDaily.record({ day, logical_model: null, provider: "p1", model: "m1", requests: 1 });
+		// 残留事务会让下一次 BEGIN 直接抛 "cannot start a transaction within a transaction";
+		// 能正常开启并回滚 = record() 的 BEGIN IMMEDIATE 已经 COMMIT 干净。
+		expect(() => {
+			db.raw.exec("BEGIN IMMEDIATE");
+			db.raw.exec("ROLLBACK");
+		}).not.toThrow();
+	});
+
+	it("跨连接的 NULL 键写入不会写出重复行(TOCTOU 回归)", () => {
+		// 必须落在同一个真实文件上(:memory: 的两个连接是两个独立库)。
+		const dir = mkdtempSync(join(tmpdir(), "as-one-db-"));
+		const file = join(dir, "as-one.db");
+		const a = openDatabase(file);
+		const b = openDatabase(file);
+		const day2 = "2026-04-29";
+		const write = (handle: NexusDatabase, requests: number) =>
+			handle.statsDaily.record({ day: day2, logical_model: null, provider: "p1", model: "m1", requests });
+		// 两个连接各写一次同一 NULL 键:老实现是 UPDATE→INSERT 两步,窗口内可能双插。
+		write(b, 2);
+		write(a, 3);
+		const dup = a.raw
+			.prepare(
+				"SELECT COUNT(*) AS n FROM stats_daily WHERE day = ? AND logical_model IS NULL AND provider = ? AND model = ?",
+			)
+			.get(day2, "p1", "m1") as { n: number };
+		expect(Number(dup.n)).toBe(1);
+		expect(a.statsDaily.range(day2, day2, null)[0].requests).toBe(5);
+		a.close();
+		b.close();
 	});
 
 	it("range 按日期范围过滤(含两端)", () => {

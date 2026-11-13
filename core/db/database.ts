@@ -73,6 +73,14 @@ export interface NexusDatabase {
 	raw: DatabaseSync;
 	/** 关闭连接。 */
 	close(): void;
+	/**
+	 * `PRAGMA data_version` —— **别的连接**提交后才会变的版本号(本连接自己的提交不变)。
+	 *
+	 * 用途:多实例共用一个库时,把「内存快照」按它做失效判断,而不是每次全量重读。
+	 * 语义边界(重要):它只反映跨连接提交;同进程同连接里我们自己写的值由调用方
+	 * 直接更新缓存,不依赖这个号。
+	 */
+	dataVersion(): number;
 
 	// ---- provider --------------------------------------------------
 	provider: {
@@ -170,6 +178,8 @@ export interface NexusDatabase {
 	// ---- setting ---------------------------------------------------
 	setting: {
 		get(key: string): SettingRow | undefined;
+		/** 按键前缀批量读(`account.enabled.` 这类「一族一键」的设置用)。 */
+		entries(prefix: string): SettingRow[];
 		set(key: string, value: string | null): void;
 		delete(key: string): void;
 	};
@@ -288,6 +298,15 @@ export function openDatabase(target: string | ":memory:"): NexusDatabase {
 		raw,
 		close() {
 			raw.close();
+		},
+
+		dataVersion() {
+			// PRAGMA 返回单行 `{ data_version: n }`;取不到(极旧 SQLite)按 0 处理,
+			// 调用方会退化成「每次重读」,不影响正确性。
+			const row = raw.prepare("PRAGMA data_version").get() as
+				| { data_version?: unknown }
+				| undefined;
+			return Number(row?.data_version ?? 0);
 		},
 
 		provider: {
@@ -458,34 +477,71 @@ export function openDatabase(target: string | ":memory:"): NexusDatabase {
 				assertNonNullable(day, "stats_daily.day");
 				assertNonNullable(provider, "stats_daily.provider");
 				assertNonNullable(model, "stats_daily.model");
-				// NULL logical_model 的聚合行:UPSERT 的 ON CONFLICT 无法匹配 NULL 键,
-				// 与 repo.py L1155-1197 一样先 UPDATE(logical_model IS NULL),没命中再 INSERT。
+				// NULL logical_model 的聚合行:UPSERT 的 ON CONFLICT 匹配不到 NULL 键
+				// (SQLite 认为 NULL ≠ NULL),只能「有则累加、无则插入」。
+				//
+				// ⚠️ 这两步必须在**同一个写事务**里:多实例共用同一个库时,裸着做
+				// UPDATE→INSERT 存在跨进程 TOCTOU 窗口(A 的 UPDATE 落空、B 也落空、
+				// 两边各插一行),而含 NULL 的主键没有唯一约束兜底 —— 重复行一旦写进去
+				// 就永久存在,面板会把它们加两遍(见 docs/multi-instance.md §2.3)。
+				// BEGIN IMMEDIATE 先拿写锁,另一个实例的写会阻塞到本事务结束。
 				if (logical_model === undefined || logical_model === null) {
-					const upd = raw.prepare(
-						`UPDATE stats_daily SET
-							requests = requests + ?,
-							fails = fails + ?,
-							prompt_tokens = prompt_tokens + ?,
-							cached_tokens = cached_tokens + ?,
-							completion_tokens = completion_tokens + ?,
-							latency_sum_ms = latency_sum_ms + ?,
-							ttft_sum_ms = ttft_sum_ms + ?,
-							ttft_requests = ttft_requests + ?
-						 WHERE day = ? AND logical_model IS NULL AND provider = ? AND model = ?`,
-					).run(
-						requests,
-						fails,
-						prompt_tokens,
-						cached_tokens,
-						completion_tokens,
-						latency_sum_ms,
-						ttft_sum_ms,
-						ttft_requests,
-						day,
-						provider,
-						model,
-					);
-					if (Number(upd.changes) > 0) return;
+					raw.exec("BEGIN IMMEDIATE");
+					try {
+						const upd = raw.prepare(
+							`UPDATE stats_daily SET
+								requests = requests + ?,
+								fails = fails + ?,
+								prompt_tokens = prompt_tokens + ?,
+								cached_tokens = cached_tokens + ?,
+								completion_tokens = completion_tokens + ?,
+								latency_sum_ms = latency_sum_ms + ?,
+								ttft_sum_ms = ttft_sum_ms + ?,
+								ttft_requests = ttft_requests + ?
+							 WHERE day = ? AND logical_model IS NULL AND provider = ? AND model = ?`,
+						).run(
+							requests,
+							fails,
+							prompt_tokens,
+							cached_tokens,
+							completion_tokens,
+							latency_sum_ms,
+							ttft_sum_ms,
+							ttft_requests,
+							day,
+							provider,
+							model,
+						);
+						if (Number(upd.changes) === 0) {
+							raw.prepare(
+								`INSERT INTO stats_daily
+									(day, logical_model, provider, model, requests, fails, prompt_tokens,
+									 cached_tokens, completion_tokens, latency_sum_ms, ttft_sum_ms, ttft_requests)
+								 VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+							).run(
+								day,
+								provider,
+								model,
+								requests,
+								fails,
+								prompt_tokens,
+								cached_tokens,
+								completion_tokens,
+								latency_sum_ms,
+								ttft_sum_ms,
+								ttft_requests,
+							);
+						}
+						raw.exec("COMMIT");
+					} catch (err) {
+						try {
+							raw.exec("ROLLBACK");
+						} catch {
+							/* 事务可能已因错误自动回滚 */
+						}
+						throw err;
+					}
+					return;
 				}
 				raw.prepare(
 					`INSERT INTO stats_daily
@@ -597,6 +653,13 @@ export function openDatabase(target: string | ":memory:"): NexusDatabase {
 				return raw.prepare("SELECT * FROM setting WHERE k = ?").get(key) as
 					| SettingRow
 					| undefined;
+			},
+			entries(prefix) {
+				// 用 substr 而不是 LIKE:键盘上的 `%`/`_` 在供应商名里都可能出现
+				// (`_` 尤其常见),LIKE 会把它们当通配符 → 读到不该读的键。
+				return raw
+					.prepare("SELECT * FROM setting WHERE substr(k, 1, ?) = ? ORDER BY k")
+					.all(prefix.length, prefix) as unknown as SettingRow[];
 			},
 			set(key, value) {
 				raw.prepare(

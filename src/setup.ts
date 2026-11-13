@@ -88,8 +88,9 @@ export interface AsOneRuntime {
   keyProvider: KeyProvider;
   /**
    * 账户启用/停用覆盖:
-   * - 内存这份是**读缓存**(调度与面板的读数路径全是同步的);
-   * - 唯一真源是 `setting` 表的 `account.enabled`(JSON `{引用: 布尔}`)。
+   * - 内存这份是**读缓存**(调度与面板的读数路径全是同步的),读前按
+   *   `PRAGMA data_version` 判断要不要重读 —— 别的实例改过就能立刻看到;
+   * - 唯一真源是 `setting` 表的**逐键行** `account.enabled.<引用>`(不再是整份 JSON)。
    *
    * 只写「被显式拨过的」账号:没有行 = 跟随 registry 的默认值。
    */
@@ -162,27 +163,136 @@ export async function syncSensenovaPool(vault: CredentialVault): Promise<void> {
 // ── 设置读取小工具(与 electron 同口径的缺省值) ──────────────────────────
 
 /**
- * 账号启停覆盖的持久化键 —— JSON `{"<provider>/<username>": boolean}`。
+ * 账号启停覆盖的持久化键(2026-11-14 起):**一个账号一个键** ——
+ * `account.enabled.<provider>/<username>` = `"1"` / `"0"`。
+ *
+ * 以前是整份 JSON `account.enabled`(`{引用: 布尔}`)。那样写有个跨实例的
+ * 数据竞争:每个实例启动时读一次快照,之后**每次都把整份快照写回**,于是
+ * A 实例停用账号 X 的改动会被 B 实例的下一次拨动整块覆盖掉(丢更新),B 也
+ * 永远看不到 A 的改动(陈旧读,安全向 —— 停用的凭据还在库里照用)。
+ * 改成逐键之后,写只碰自己那一个键,UPSERT 语义天然是「按账号合并」。
  *
  * 只存**被显式拨过的**账号:没有键 = 跟随 registry 的默认值。
  */
-const ACCOUNT_OVERLAY_KEY = "account.enabled";
+const ACCOUNT_OVERLAY_PREFIX = "account.enabled.";
 
-/** 从 `setting` 表恢复启停覆盖;坏 JSON 按「无覆盖」处理(不阻断启动)。 */
-function loadAccountOverlay(db: NexusDatabase): Map<string, boolean> {
-  const out = new Map<string, boolean>();
-  const raw = settingOf(db, ACCOUNT_OVERLAY_KEY);
-  if (raw === null || raw === "") return out;
+/** 旧版整份 JSON 的键:只在迁移期出现,吸收完即删(不留两个真源)。 */
+const ACCOUNT_OVERLAY_LEGACY_KEY = "account.enabled";
+
+function overlayKeyOf(ref: string): string {
+  return ACCOUNT_OVERLAY_PREFIX + ref;
+}
+
+/**
+ * 把旧版整份 JSON **吸收**成逐键行,然后删掉旧键。
+ *
+ * 为什么要「每次失效都吸」而不是只启动时吸一次:同一个库上可能还跑着旧版
+ * 实例(比如还没升级的 qqbot / web profile),它会继续写整份 JSON。吸收式
+ * 迁移让那些写入落到逐键上,`account.enabled` 不再是并存真源。
+ */
+function absorbLegacyAccountOverlay(db: NexusDatabase, into: Map<string, boolean>): void {
+  const raw = settingOf(db, ACCOUNT_OVERLAY_LEGACY_KEY);
+  if (raw === null || raw === "") return;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return out;
-    for (const [ref, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof value === "boolean") out.set(ref, value);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      // 坏 JSON:删掉,否则每次失效都要重新解析一次垃圾。
+      db.setting.delete(ACCOUNT_OVERLAY_LEGACY_KEY);
+      return;
     }
+    for (const [ref, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value !== "boolean") continue;
+      const key = overlayKeyOf(ref);
+      // 陈旧快照不许盖掉已经落成逐键的新值:逐键行存在就以它为准。
+      if (db.setting.get(key)) continue;
+      db.setting.set(key, value ? "1" : "0");
+      into.set(ref, value);
+    }
+    db.setting.delete(ACCOUNT_OVERLAY_LEGACY_KEY);
   } catch (err) {
-    console.error("[as-one] account.enabled 解析失败,按无覆盖处理:", err);
+    console.error("[as-one] account.enabled 旧格式迁移失败,按无覆盖处理:", err);
   }
-  return out;
+}
+
+/**
+ * 账号启停覆盖:内存 Map 只是**同步读缓存**,真源是 `setting` 表的逐键行。
+ *
+ * 跨实例一致性靠 `PRAGMA data_version`(别的连接一提交就变)做失效判断:
+ * 读数前现比一次,变了才整族重读 —— 于是 A 实例停用账号,B 实例下一个
+ * 调度决策就能看到。成本是一次 pragma(微秒级),不是一次全表扫。
+ */
+class LiveAccountOverlay extends Map<string, boolean> {
+  private version: number;
+
+  constructor(private readonly db: NexusDatabase) {
+    super();
+    this.version = db.dataVersion();
+    this.reload();
+  }
+
+  /** 无条件重读逐键家族(构造期与「检测到别的实例提交」时调用)。 */
+  private reload(): void {
+    super.clear();
+    for (const row of this.db.setting.entries(ACCOUNT_OVERLAY_PREFIX)) {
+      const ref = row.k.slice(ACCOUNT_OVERLAY_PREFIX.length);
+      if (ref === "") continue;
+      super.set(ref, row.v === "1" || row.v === "true");
+    }
+    absorbLegacyAccountOverlay(this.db, this);
+    this.version = this.db.dataVersion();
+  }
+
+  /** 别的实例提交过就重读;自己实例的写入不改变 data_version,靠下面直接改内存。 */
+  private sync(): void {
+    let now: number;
+    try {
+      now = this.db.dataVersion();
+    } catch {
+      return; // 库已关闭(dispose 之后):保持最后一版快照
+    }
+    if (now !== this.version) this.reload();
+  }
+
+  override get(ref: string): boolean | undefined {
+    this.sync();
+    return super.get(ref);
+  }
+
+  override has(ref: string): boolean {
+    this.sync();
+    return super.has(ref);
+  }
+
+  override entries(): MapIterator<[string, boolean]> {
+    this.sync();
+    return super.entries();
+  }
+
+  override keys(): MapIterator<string> {
+    this.sync();
+    return super.keys();
+  }
+
+  override values(): MapIterator<boolean> {
+    this.sync();
+    return super.values();
+  }
+
+  /**
+   * 删掉一个覆盖 = 回到「跟随 registry 默认值」。
+   *
+   * 覆盖掉 `Map.delete` 是为了**连库一起删**:qoder 删账号走的是
+   * `accountOverlay.delete()`,只删内存的话重启后那条覆盖还躺着(指向一个
+   * 不存在的账号),属于同一类「内存与库不同步」的老毛病。
+   */
+  override delete(ref: string): boolean {
+    try {
+      this.db.setting.delete(overlayKeyOf(ref));
+    } catch (err) {
+      console.error("[as-one] 账号覆盖删除落库失败:", err);
+    }
+    return super.delete(ref);
+  }
 }
 
 function settingOf(db: NexusDatabase, key: string): string | null {
@@ -291,12 +401,13 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     }
   }
 
-  // 账户启用/停用覆盖:真源在 setting 表,内存这份只是同步读缓存。
-  const accountOverlay = loadAccountOverlay(db);
+  // 账户启用/停用覆盖:真源在 setting 表的逐键行,内存这份只是同步读缓存。
+  // 写只碰「这一个账号的键」——不会再出现整份覆盖写导致的跨实例丢更新。
+  const accountOverlay = new LiveAccountOverlay(db);
   const setAccountEnabled = (ref: string, enabled: boolean): void => {
     accountOverlay.set(ref, enabled);
     try {
-      db.setting.set(ACCOUNT_OVERLAY_KEY, JSON.stringify(Object.fromEntries(accountOverlay)));
+      db.setting.set(overlayKeyOf(ref), enabled ? "1" : "0");
     } catch (err) {
       // 落库失败不影响本进程:这次拨动仍然生效,只是重启后回退。
       console.error("[as-one] 账号启停落库失败:", err);
