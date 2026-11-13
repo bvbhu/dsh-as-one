@@ -29,6 +29,10 @@ import type {
 import { fmtCount, fmtDuration } from "../format";
 // 渠道风险提示文案(与「模型 → 渠道」页共用同一份,见 @as-one/panel 的同名模块)。
 import { providerRiskNote } from "@as-one/panel/src/channel-risk-note.js";
+import {
+  checkinSignedText,
+  formatCheckinCreditInline,
+} from "@as-one/panel/src/checkin-chip-format.js";
 
 /** 「直连」文案:逻辑模型为空 = 客户端直接调真实模型。 */
 const DIRECT_LABEL = "直连";
@@ -148,39 +152,17 @@ function CheckinRow({ c }: { c: CheckinChannelStatus }): React.JSX.Element {
   } else if (c.checkedIn === null) {
     state = "未知";
     cls = "na";
-  } else if (c.pending !== null && c.pending > 0) {
-    // ⚠️ **部分已签要把已签数说出来**(2026-11-09 用户报「trae 还是没有显示
-    // 两个账号」):以前这里只给「未签 N」,把已签的那几个全丢了 ——
-    // 2 个账号「1 个已签 1 个未签」显示成「未签 1」,看起来像「一个都没签」。
-    //
-    // ⚠️ 文案要**短**(2026-11-09 第二版):`已签 1/2(待签 1)` 在窄列里会折成
-    // 两行(截图里括号被挤到下一行),所以改成 `1/2 已签` —— 比例在前、状态在后,
-    // 比「已签 1/2(待签 1)」短一半,且信息量不减(2 减 1 就是待签数)。
-    //
-    // ⚠️ **countExact=false 时不能直接判「未签」**(2026-11-11 用户报
-    // 「trae 点击签到后仍显示未签」):trae 不报分母,但 `checkedIn>0` 说明
-    // **这个渠道今天确实领到了**。以前这里一刀切显示「未签」,把已签的事实抹掉,
-    // 用户以为签到失败。现在:有账号签上 → 「已签」(ok),一个都没签 → 「未签」。
-    if (c.countExact && c.accounts > 1) {
-      state = `${c.checkedIn}/${c.accounts} 已签`;
-      cls = "ok";
-    } else if (c.checkedIn > 0) {
-      state = "已签";
-      cls = "ok";
-    } else {
-      state = "未签";
-      cls = "warn";
-    }
-  } else if (c.countExact && c.accounts > 1) {
-    state = `${c.checkedIn}/${c.accounts} 已签`;
-    cls = "ok";
   } else {
-    state = "已签";
-    cls = "ok";
+    // 状态词走共享纯函数(**总览卡与渠道 chip 同一份**):
+    // 「2/3 已签」/「0/3 未签」。以前这里 `checkedIn === 0` 也拼「已签」,
+    // 于是出现「0/2 已签」这种自相矛盾的状态(2026-11-14 用户截图)。
+    state = checkinSignedText(c);
+    cls = c.checkedIn > 0 ? "ok" : "warn";
   }
 
   const meta: string[] = [];
-  if (c.dailyCredit !== null) meta.push(`今日 +${c.dailyCredit}`);
+  const credit = formatCheckinCreditInline(c);
+  if (credit !== null) meta.push(`今日 ${credit}`);
   if (c.streak !== null) meta.push(`连签 ${c.streak} 天`);
   if (c.reason) meta.push(c.reason);
   if (c.error) meta.push(c.error);

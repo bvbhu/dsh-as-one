@@ -30,7 +30,11 @@
 import React from "react";
 import { rendererApi } from "../../api";
 import type { ChannelOverview, ChannelOverviewCard, CheckinChannelStatus, CheckinOverview } from "../../api";
-import { checkinChipText, formatCheckinCredit } from "@as-one/panel/src/checkin-chip-format.js";
+import {
+  checkinChipText,
+  checkinSignedText,
+  formatCheckinCredit,
+} from "@as-one/panel/src/checkin-chip-format.js";
 import { providerRiskNote } from "@as-one/panel/src/channel-risk-note.js";
 import ChannelPage from "./ChannelPage";
 import QoderPage from "./QoderPage";
@@ -123,10 +127,8 @@ function checkinChip(
   if (c.pending > 0) {
     if (c.countExact && c.accounts > 1) {
       const points = formatCheckinCredit(c);
-      return {
-        text: `${c.checkedIn}/${c.accounts} 已签${points}`,
-        tone: "warn",
-      };
+      // 状态词与总览卡共用一份:`0/2 未签`,不是「0/2 已签」。
+      return { text: `${checkinSignedText(c)}${points}`, tone: "warn" };
     }
     // ⚠️ **countExact=false 且有账号签上 → 仍报「已签」**(2026-11-11 用户报
     // 「trae 点击签到后仍显示未签」):trae 不报分母,但 `checkedIn>0` 说明这个

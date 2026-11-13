@@ -17,43 +17,41 @@
 
 import { describe, expect, it } from "vitest";
 
-/** 与 panel-ui 的 CheckinRow / checkinChip 同口径(只覆盖 pending>0 那段)。 */
+import { checkinSignedText } from "./checkin-chip-format.js";
+
+/**
+ * ⚠️ 这里**不再抄一份逻辑**:以前测试里内联实现了 `stateOf`,于是实现改成
+ * 「0/2 已签」这种自相矛盾的状态时,测试也跟着一起错(2026-11-14 截图)。
+ * 现在直接测生产函数,总览卡与渠道 chip 都用它。
+ */
 function stateOf(c: {
   accounts: number;
   countExact: boolean;
-  checkedIn: number;
-  pending: number;
+  checkedIn: number | null;
 }): string {
-  if (c.pending > 0) {
-    if (c.countExact && c.accounts > 1) return `${c.checkedIn}/${c.accounts} 已签`;
-    if (c.checkedIn > 0) return "已签";
-    return "未签";
-  }
-  if (c.countExact && c.accounts > 1) return `${c.checkedIn}/${c.accounts} 已签`;
-  return "已签";
+  return checkinSignedText(c);
 }
 
 describe("签到状态展示", () => {
   it("trae 典型场景:2 账号、1 签 1 被设备挡住 → 显示「已签」(不是「未签」)", () => {
     // 这是用户截图里的真实状态:bvbhu 签上、用户2767 被 9095 挡住。
-    expect(
-      stateOf({ accounts: 2, countExact: false, checkedIn: 1, pending: 1 }),
-    ).toBe("已签");
+    expect(stateOf({ accounts: 2, countExact: false, checkedIn: 1 })).toBe("已签");
   });
 
   it("trae 一个都没签上 → 才是「未签」", () => {
-    expect(
-      stateOf({ accounts: 2, countExact: false, checkedIn: 0, pending: 2 }),
-    ).toBe("未签");
+    expect(stateOf({ accounts: 2, countExact: false, checkedIn: 0 })).toBe("未签");
   });
 
-  it("countExact=true 的多账号仍报比例(该分母是真实可签的)", () => {
-    expect(
-      stateOf({ accounts: 2, countExact: true, checkedIn: 1, pending: 1 }),
-    ).toBe("1/2 已签");
-    expect(
-      stateOf({ accounts: 2, countExact: true, checkedIn: 2, pending: 0 }),
-    ).toBe("2/2 已签");
+  it("countExact=true 的多账号报比例;0 个已签必须是「未签」", () => {
+    expect(stateOf({ accounts: 2, countExact: true, checkedIn: 1 })).toBe("1/2 已签");
+    expect(stateOf({ accounts: 2, countExact: true, checkedIn: 2 })).toBe("2/2 已签");
+    // 2026-11-14 用户截图:以前这里显示「0/2 已签」。
+    expect(stateOf({ accounts: 2, countExact: true, checkedIn: 0 })).toBe("0/2 未签");
+    expect(stateOf({ accounts: 3, countExact: true, checkedIn: 0 })).toBe("0/3 未签");
+  });
+
+  it("上限未知 → 「签到未知」,不编状态", () => {
+    expect(stateOf({ accounts: 2, countExact: true, checkedIn: null })).toBe("签到未知");
   });
 });
 

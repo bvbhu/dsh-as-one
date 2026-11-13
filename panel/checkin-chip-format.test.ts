@@ -11,7 +11,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { checkinChipText, formatCheckinCredit } from "./checkin-chip-format.js";
+import {
+  checkinChipText,
+  checkinSignedText,
+  formatCheckinCredit,
+  formatCheckinCreditInline,
+} from "./checkin-chip-format.js";
 import type { CheckinChannelStatus } from "./types.js";
 
 function status(over: Partial<CheckinChannelStatus>): CheckinChannelStatus {
@@ -81,5 +86,33 @@ describe("checkinChipText", () => {
       status({ provider: "qoder", label: "Qoder", dailyCredit: 200, perAccountCredit: 100 }),
     );
     expect(text).toContain("100×2");
+  });
+});
+
+describe("formatCheckinCreditInline(总览卡)", () => {
+  it("多账号一致 → 单账号值×账号数(+400×2 / +100×3)", () => {
+    expect(formatCheckinCreditInline(status({}))).toBe("+400×2");
+    expect(
+      formatCheckinCreditInline(
+        status({ provider: "qoder", label: "Qoder", accounts: 3, checkedIn: 0, pending: 3, dailyCredit: 300, perAccountCredit: 100 }),
+      ),
+    ).toBe("+100×3");
+  });
+
+  it("各账号不一致 / 单账号 → 合计", () => {
+    expect(formatCheckinCreditInline(status({ perAccountCredit: null, dailyCredit: 900 }))).toBe("+900");
+    expect(
+      formatCheckinCreditInline(status({ accounts: 1, checkedIn: 1, dailyCredit: 100, perAccountCredit: 100 })),
+    ).toBe("+100");
+  });
+
+  it("没有数字 → null(不显示「今日 +null」)", () => {
+    expect(formatCheckinCreditInline(status({ dailyCredit: null, perAccountCredit: null }))).toBeNull();
+  });
+
+  it("状态词与积分的组合:0/2 未签 + 400×2", () => {
+    const c = status({ checkedIn: 0, pending: 2 });
+    expect(checkinSignedText(c)).toBe("0/2 未签");
+    expect(formatCheckinCreditInline(c)).toBe("+400×2");
   });
 });
