@@ -86,6 +86,17 @@ export const EXTERNAL_PROVIDER_RENAMES: Readonly<Record<string, string>> = {
 	"deepseek-account": "deepseek-official",
 };
 
+/**
+ * DSH 的 subagent 委派标记,不是真实上游调用。
+ *
+ * 委派这一步的 `provider` 与 `model` **都叫 `agent`**,且从不带 usage ——
+ * 真正的模型调用发生在被委派的子会话里(那里才有真 provider/model)。
+ * 记下来只会让 `calls` 多出一份没有 token 对应的空调用,和子会话重复计数。
+ */
+export function isDelegationMarker(provider: string, model: string): boolean {
+	return provider === "agent" && model === "agent";
+}
+
 /** 把账号级 provider 名归到厂商名;没登记的原样返回(含空串)。 */
 export function renameExternalProvider(raw: string): string {
 	const name = typeof raw === "string" ? raw.trim() : "";
@@ -208,6 +219,7 @@ export class ExternalUsageFold {
 			const tokens = tokensOf(data.usage);
 			if (!route || !tokens) return [];
 			if (exclude.has(route.provider)) return [];
+			if (isDelegationMarker(route.provider, route.model)) return [];
 			const key = dedupeKey(data);
 			if (key !== null) {
 				if (this.seen.has(key)) return [];
@@ -242,6 +254,7 @@ export class ExternalUsageFold {
 			// 摘要调用在 agent loop 之外,事件自带 provider/model。
 			const route = routeOf({ provider: data.provider as string, model: data.model as string });
 			if (!route || exclude.has(route.provider)) return [];
+			if (isDelegationMarker(route.provider, route.model)) return [];
 			const tokens = tokensOf(data.usage);
 			return [
 				{
@@ -269,6 +282,7 @@ export class ExternalUsageFold {
 		const calls = this.pendingCalls;
 		this.pendingCalls = 0;
 		if (exclude.has(route.provider)) return [];
+		if (isDelegationMarker(route.provider, route.model)) return [];
 		return [
 			{
 				day,

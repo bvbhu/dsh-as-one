@@ -166,8 +166,16 @@ for (const { file } of bySessionId.values()) {
 
 // ── 4. 与库里现状对照 ──────────────────────────────────────────────
 const db = new DatabaseSync(DB_PATH);
+// subagent 委派行(provider 与 model 都叫 agent)不是真实上游调用,历史上被误记过:
+// 它们是「委派」这一步本身,没有 usage,真正的调用在被委派的子会话里。
+// 先清掉,再谈按天替换 —— 否则「会话那天更少 ⇒ 保留库里」的规则会把它留下来。
+const delegationRows = db
+	.prepare("SELECT COUNT(*) n FROM stats_external_daily WHERE provider = 'agent' AND model = 'agent'")
+	.get().n;
 const existing = db
-	.prepare("SELECT day, provider, model, calls, prompt_tokens, cached_tokens, completion_tokens, last_seen FROM stats_external_daily")
+	.prepare(
+		"SELECT day, provider, model, calls, prompt_tokens, cached_tokens, completion_tokens, last_seen FROM stats_external_daily WHERE NOT (provider = 'agent' AND model = 'agent')",
+	)
 	.all();
 
 const dayTotals = (rows) => {
@@ -240,7 +248,8 @@ console.log(`库:${DB_PATH}`);
 console.log(`模式:${APPLY ? "真写(会先备份)" : "预演(只读)"}\n`);
 console.log(`会话文件 ${bySessionId.size} 个(解析成功 ${fileCount},失败 ${badFiles}),事件 ${fmt(eventCount)},样本 ${fmt(sampleCount)}`);
 console.log(`会话侧(排除网关名 + 归并账号名):${fmt(sessionTotal.calls)} 次调用 / ${fmt(sessionTotal.tokens)} tokens`);
-console.log(`库里现状:${fmt(existingTotal.calls)} 次调用 / ${fmt(existingTotal.tokens)} tokens,${existing.length} 行\n`);
+console.log(`库里现状:${fmt(existingTotal.calls)} 次调用 / ${fmt(existingTotal.tokens)} tokens,${existing.length} 行`);
+if (delegationRows > 0) console.log(`  另有 ${delegationRows} 行 subagent 委派标记(provider=model=agent),将清除`);
 
 console.log("按 provider(会话侧):");
 const byProv = new Map();
@@ -289,8 +298,12 @@ const insert = db.prepare(
 const del = db.prepare("DELETE FROM stats_external_daily WHERE day = ?");
 
 let written = 0;
+let dropped = 0;
 db.exec("BEGIN IMMEDIATE");
 try {
+	dropped = Number(
+		db.prepare("DELETE FROM stats_external_daily WHERE provider = 'agent' AND model = 'agent'").run().changes,
+	);
 	for (const day of replaceDays) {
 		del.run(day);
 		for (const r of sessionRows) {
@@ -310,7 +323,7 @@ try {
 const after = db.prepare("SELECT COUNT(*) n, SUM(calls) c, SUM(prompt_tokens+completion_tokens) t FROM stats_external_daily").get();
 const integrity = db.prepare("PRAGMA integrity_check").get();
 db.close();
-console.log(`写入 ${written} 行,覆盖 ${replaceDays.size} 天`);
+console.log(`写入 ${written} 行,覆盖 ${replaceDays.size} 天;清除委派标记 ${dropped} 行`);
 console.log(`表内合计:${Number(after.n)} 行 / ${fmt(Number(after.c))} 次调用 / ${fmt(Number(after.t))} tokens`);
 console.log(`integrity_check: ${integrity.integrity_check}`);
 console.log(`\n回滚:关掉宿主,把备份覆盖回 ${DB_PATH}(同时删掉 -wal/-shm)再启动。`);

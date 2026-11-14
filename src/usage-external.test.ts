@@ -285,3 +285,50 @@ describe("网关历史 provider 名", () => {
 		expect(record).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("subagent 委派标记", () => {
+	it("provider 与 model 都叫 agent → 整条丢弃(委派本身不调模型)", () => {
+		expect(
+			foldEvent({
+				type: "assistant/message",
+				data: {
+					turn: 1,
+					step: 1,
+					usage: { inputTokens: 100, outputTokens: 50 },
+					message: { source: { provider: "agent", model: "agent" } },
+				},
+			}),
+		).toEqual([]);
+	});
+
+	it("step/start 攒下的调用不落到委派路由上", () => {
+		const fold = new ExternalUsageFold();
+		const out = [
+			...fold.fold(
+				{ type: "request/context", time: AT, data: { provider: "agent", model: "agent" } },
+				EXCLUDE,
+			),
+			...fold.fold({ type: "step/start", time: AT, data: {} }, EXCLUDE),
+		];
+		expect(out).toEqual([]);
+		// 换成真实路由后,后面那次 step 照常记账
+		fold.fold({ type: "request/context", time: AT, data: { provider: "yn", model: "m" } }, EXCLUDE);
+		const next = fold.fold({ type: "step/start", time: AT, data: {} }, EXCLUDE);
+		expect(next).toHaveLength(1);
+		expect(next[0]).toMatchObject({ provider: "yn", model: "m", calls: 1 });
+	});
+
+	it("只排除这个组合,不许误伤同名 provider 的真实模型", () => {
+		expect(
+			foldEvent({
+				type: "assistant/message",
+				data: {
+					turn: 1,
+					step: 1,
+					usage: { inputTokens: 10, outputTokens: 1 },
+					message: { source: { provider: "agent", model: "some-real-model" } },
+				},
+			}),
+		).toHaveLength(1);
+	});
+});
