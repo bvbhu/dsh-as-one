@@ -35,7 +35,8 @@ import type {
 } from "@as-one/core/src/gateway/types.js";
 import { UpstreamError } from "@as-one/core/src/gateway/types.js";
 import type { AsOneRuntime } from "./setup.js";
-import { planCompactChunks, buildMergePrompt } from "./compact-chunk.js";
+import { buildMergePrompt, joinDigests, needsMerge, planCompactChunks } from "./compact-chunk.js";
+import { estimateMessagesTokens } from "./gateway-upstream-context.js";
 import { rerouteModel, type RerouteSettings } from "./reroute.js";
 import type {
   DshAttachmentService,
@@ -54,11 +55,6 @@ import type {
   DshStreamChunk,
   DshUsage,
 } from "./llm-types.js";
-
-const COMPACT_INPUT_BUDGET = 24_000;
-const COMPACT_MERGE_TOKENS = 8_192;
-const COMPACT_CHUNK_PROMPT =
-  "把下列会话片段压缩成简洁要点。保留精确文件路径、命令、错误原文、标识符与数值;不要输出额外解释。\n\n";
 
 /** 注册用的 provider id —— 必须与 `registerAdapter(["as-one"], …)` 逐字一致。 */
 export const AS_ONE_PROVIDER = "as-one";
@@ -772,6 +768,94 @@ function blockEndOf(block: OpenBlock): DshStreamChunk {
 }
 
 // ---------------------------------------------------------------------------
+// 压缩请求(compact)
+// ---------------------------------------------------------------------------
+
+/**
+ * compact 分块的输入预算(按目标模型的窗口现算,不写死)。
+ *
+ * 上一版写死 24,000 → 块预算 19,200,一个 3M token 的会话要切 **179 块**,
+ * 串行跑完要几十分钟。窗口的 50% 封顶 160k:再大单块的 prefill 也会被上游
+ * 按 TPM 拦(实测 `inference exceeds tpm/rpm limit`),而且归并压力更大。
+ */
+const COMPACT_BUDGET_RATIO = 0.5;
+const COMPACT_BUDGET_MIN = 16_000;
+const COMPACT_BUDGET_MAX = 160_000;
+/** 窗口未知(逻辑模型的 `max_input_tokens` 常常是空)时的保守预算。 */
+const COMPACT_BUDGET_FALLBACK = 48_000;
+/** 同时跑几块 —— 每块一次独立上游调用,并发受调度器的端点容量约束。 */
+const COMPACT_CONCURRENCY = 3;
+/**
+ * 归并输出上限。
+ *
+ * 4,096 而不是 8,192:归并是一次**串行尾延迟**(要等所有块出来才能开始),
+ * 输出 token 数直接换成墙钟时间。8,192 tok 的输出在 50 tok/s 的模型上就是
+ * 160 秒 —— 比整个分块阶段还长,而检查点写 8k 还是 4k 对后续对话几乎没差别。
+ */
+const COMPACT_MERGE_TOKENS = 4_096;
+const COMPACT_CHUNK_PROMPT =
+  "把下列会话片段压缩成简洁要点。保留精确文件路径、命令、错误原文、标识符与数值;不要输出额外解释。\n\n";
+
+/** 模型窗口 → 分块输入预算。 */
+export function compactInputBudget(windowTokens: number | undefined): number {
+  if (!(typeof windowTokens === "number") || !Number.isFinite(windowTokens) || windowTokens <= 0) {
+    return COMPACT_BUDGET_FALLBACK;
+  }
+  return Math.max(
+    COMPACT_BUDGET_MIN,
+    Math.min(COMPACT_BUDGET_MAX, Math.floor(windowTokens * COMPACT_BUDGET_RATIO)),
+  );
+}
+
+/**
+ * 有上限的并发池:按 `limit` 逐批推,失败不打断其它块。
+ *
+ * 刻意不用「一次发 N 个 Promise.all」——块数可能上百,一次全发会把调度器的
+ * 并发账本打满、把用户的下一条消息挤死,还会同时撞上游 TPM。
+ */
+async function eachLimit<T>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  const width = Math.max(1, Math.min(Math.trunc(limit) || 1, items.length));
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      await run(items[index] as T, index);
+    }
+  };
+  await Promise.all(Array.from({ length: width }, () => worker()));
+}
+
+const sleepMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 把一组行对半切开(单行时按字符切)。切不动 → null。
+ *
+ * 「切不动」只发生在字符级也已经很短时 —— 那种情况再切只会得到一个
+ * 无意义的片段,不如如实报失败。
+ */
+function splitLinesInHalf(lines: readonly string[]): [string[], string[]] | null {
+  if (lines.length >= 2) {
+    const mid = Math.ceil(lines.length / 2);
+    return [lines.slice(0, mid), lines.slice(mid)];
+  }
+  const line = lines[0] ?? "";
+  if (line.length < 512) return null;
+  const mid = Math.floor(line.length / 2);
+  return [[line.slice(0, mid)], [line.slice(mid)]];
+}
+
+/** 客户端有没有走掉(包一层是为了每次都现读,不被上一处 `=== true` 收窄类型)。 */
+function abortedNow(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+// ---------------------------------------------------------------------------
 // adapter
 // ---------------------------------------------------------------------------
 
@@ -924,41 +1008,154 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     }));
   }
 
-  /** 分块摘要 → 单级归并 → 合成宿主认得的块流(只借用压缩算法)。 */
+  /**
+   * 分块摘要 →（必要时）单级归并 → 合成宿主认得的块流(只借用压缩算法)。
+   *
+   * 2026-11-14 提速重做,四件事:
+   * 1. **块预算按目标模型窗口算**(`compactInputBudget`),不再写死 24k;
+   * 2. **块并行**(`COMPACT_CONCURRENCY` 路),每块独立会话号,免得同一条亲和
+   *    pin 把并发挤成串行(`concurrency=1` 的端点会直接 `all_busy`);
+   * 3. **能省归并就省**(`needsMerge`):归并要再读写一遍全部 digest,实测占整次
+   *    压缩 15%~25% 墙钟;
+   * 4. **单块失败不拖垮整次**:重试一次(限流退避),仍失败就跳过 —— 只要还有
+   *    一块成功,就还能交出一份能用的检查点。
+   */
   private async *compactStream(
     upstream: Upstream,
     request: UpstreamRequest,
     model: string,
   ): AsyncGenerator<DshStreamChunk> {
-    void model;
-    const plan = planCompactChunks(request.messages, { inputBudgetTokens: COMPACT_INPUT_BUDGET });
-    const digests: string[] = [];
-    for (const chunk of plan.chunks) {
-      const result = await upstream.complete({
+    const started = Date.now();
+    const window = await this.contextWindowOf(model);
+    const budget = compactInputBudget(window);
+    const plan = planCompactChunks(request.messages, { inputBudgetTokens: budget });
+    const baseSession = String(request.extra?.session_id ?? request.prompt_cache_key ?? "anon");
+    const concurrency = Math.max(1, Math.min(COMPACT_CONCURRENCY, plan.chunks.length));
+
+    const digests: string[] = new Array<string>(plan.chunks.length).fill("");
+    let failed = 0;
+    /** 每块一个唯一后缀:并发的两条请求不能共用同一条亲和键。 */
+    let slotSeq = 0;
+
+    /** 一块(或切小后的半块)出一次 digest。 */
+    const runChunk = async (lines: string[], capTokens: number, depth: number): Promise<string> => {
+      const slot = slotSeq;
+      slotSeq += 1;
+      const body: UpstreamRequest = {
         ...request,
         stream: false,
-        messages: [{ role: "user", content: COMPACT_CHUNK_PROMPT + chunk.lines.join("\n") }],
-        max_tokens: chunk.capTokens,
-      });
-      const text = result.choices?.[0]?.message?.content;
-      if (typeof text === "string" && text.trim()) digests.push(text);
-    }
-    let summary = digests.join("\n\n");
-    if (plan.split && digests.length > 0) {
-      const merged = await upstream.complete({
-        ...request,
-        stream: false,
-        messages: [{ role: "user", content: buildMergePrompt(digests) }],
-        max_tokens: COMPACT_MERGE_TOKENS,
-      });
-      const text = merged.choices?.[0]?.message?.content;
-      if (typeof text === "string" && text.trim()) summary = text;
+        messages: [{ role: "user", content: COMPACT_CHUNK_PROMPT + lines.join("\n") }],
+        max_tokens: Math.max(48, Math.floor(capTokens / (depth + 1))),
+        tools: undefined,
+        // 每块一条独立的亲和键:同一条键会把并发请求排到同一个凭据上,
+        // 那个凭据 `concurrency=1` 时后续请求直接 `all_busy`。
+        prompt_cache_key: `${baseSession}#${slot}`,
+        extra: { ...(request.extra ?? {}), session_id: `${baseSession}#${slot}` },
+      };
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        if (abortedNow(request.clientSignal)) return "";
+        try {
+          const result = await upstream.complete(body);
+          const text = result.choices?.[0]?.message?.content;
+          return typeof text === "string" ? text : "";
+        } catch (err) {
+          if (abortedNow(request.clientSignal)) return "";
+          if (attempt === 1) {
+            // 限流要等一会儿(同一个配额窗口);其它错误也短暂让一下,再原样重试一次。
+            await sleepMs(err instanceof UpstreamError && err.kind === "rate_limit" ? 2_000 : 300);
+            continue;
+          }
+          // 还是失败 → 按错误性质分流,别一律重试:
+          // · 限流(429):切小不会减少总 token,只是多几条请求 —— 直接放弃这一块;
+          // · 报文被拒(400/422):多半就是「这一块太长」,减半再试,内容一点不丢;
+          // · 其它(5xx/连接/鉴权):再切也只是把同一个错误复制一份,放弃。
+          const kind = err instanceof UpstreamError ? err.kind : "server";
+          const worthSplitting = kind === "bad_request";
+          if (!worthSplitting || depth >= 2) {
+            failed += 1;
+            console.warn(
+              `[as-one] compact 分块失败(已减半两次仍失败,跳过):${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+            return "";
+          }
+          const halves = splitLinesInHalf(lines);
+          if (halves === null) {
+            failed += 1;
+            console.warn(
+              `[as-one] compact 分块失败(单行且无法再切,跳过):${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+            return "";
+          }
+          const halfCap = Math.max(48, Math.floor(capTokens / 2));
+          const [a, b] = await Promise.all([
+            runChunk(halves[0], halfCap, depth + 1),
+            runChunk(halves[1], halfCap, depth + 1),
+          ]);
+          return [a, b].filter((part) => part.trim() !== "").join("\n\n");
+        }
+      }
+      return "";
+    };
+
+    await eachLimit(plan.chunks, concurrency, async (chunk, index) => {
+      digests[index] = await runChunk(chunk.lines, chunk.capTokens, 0);
+    });
+
+    const kept = digests.filter((d) => d.trim() !== "");
+    let summary = joinDigests(kept);
+    let merged = false;
+    if (needsMerge(kept.length) && !abortedNow(request.clientSignal)) {
+      try {
+        const result = await upstream.complete({
+          ...request,
+          stream: false,
+          messages: [{ role: "user", content: buildMergePrompt(kept) }],
+          max_tokens: COMPACT_MERGE_TOKENS,
+          tools: undefined,
+          prompt_cache_key: `${baseSession}#merge`,
+          extra: { ...(request.extra ?? {}), session_id: `${baseSession}#merge` },
+        });
+        const text = result.choices?.[0]?.message?.content;
+        if (typeof text === "string" && text.trim()) {
+          summary = text;
+          merged = true;
+        }
+      } catch (err) {
+        // 归并失败不算失败:手里已经有一份按块组织、可直接用的摘要。
+        console.warn(
+          `[as-one] compact 归并失败,改用分块拼接:${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
     }
     if (!summary.trim()) throw new AsOneLlmError("compact 摘要为空", "SERVER");
+
+    console.info(
+      `[as-one] compact model=${model} budget=${budget} 块=${plan.chunks.length}` +
+        `(并发 ${concurrency},失败 ${failed}) 区域≈${plan.regionTokens}tok` +
+        ` 截断=${plan.trimmedChars}字符 归并=${merged ? "是" : "否"}` +
+        ` 耗时=${Date.now() - started}ms`,
+    );
+
     yield { type: "block-start", index: 0, blockType: "text" };
     yield { type: "text-delta", index: 0, text: summary };
     yield { type: "block-end", index: 0, block: { type: "text", text: summary } as DshContentBlock };
     yield { type: "finish", reason: { kind: "stop" } };
+  }
+
+  /** 目标模型的窗口(拿不到 → undefined,预算走保守兜底)。 */
+  private async contextWindowOf(model: string): Promise<number | undefined> {
+    try {
+      const info = await this.resolveModel(this.provider, model);
+      return positiveInt(info.context?.contextWindow);
+    } catch {
+      return undefined;
+    }
   }
 
   /** 唯一的抽象:产出**语法合法**的块流。 */
@@ -1001,9 +1198,24 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     });
     // ⚠️ 不要把 purpose 写进 `extra`:`extra` 除 session_id 外会整体透传进上游
     // 报文体,多一个未知字段就可能被上游 400(见 types.ts 的 extra 说明)。
-    if (rerouted && options.purpose === "compaction") {
-      yield* this.compactStream(upstream, request, model);
-      return;
+    if (options.purpose === "compaction") {
+      if (rerouted) {
+        yield* this.compactStream(upstream, request, model);
+        return;
+      }
+      // 🧯 安全网:没配 `route.compact` 时,宿主的原生摘要请求是**整段历史一条
+      //    报文**;装得下就原样放行(它的 prompt 比我们的分块更强),装不下才接管。
+      //    实测失败长这样:7,390 条消息 / 12.0M 字符 → 3,429,735 token → 400
+      //    `context_length_exceeded`,用户看到「Compaction could not produce a
+      //    useful summary」。窗口未知时不接管(判不了就别动)。
+      const window = await this.contextWindowOf(model);
+      if (window !== undefined && estimateMessagesTokens(request.messages) > window - 1024) {
+        console.warn(
+          `[as-one] compact 请求装不下目标窗口(窗口 ${window}),改走分块摘要`,
+        );
+        yield* this.compactStream(upstream, request, model);
+        return;
+      }
     }
     const t0 = Date.now();
     let firstChunkMs: number | undefined;

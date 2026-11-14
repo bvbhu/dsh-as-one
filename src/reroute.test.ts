@@ -215,7 +215,10 @@ describe("AsOneLlmAdapter 重路由", () => {
     expect(captured.complete.length).toBeGreaterThan(0);
     const req = captured.complete[0];
     expect(req?.model).toBe("free");
-    expect(req?.extra?.session_id).toBe("s1:compaction");
+    // 会话号 = 客户端号 + 车道后缀 + **块序号**。块序号是 2026-11-14 提速加的:
+    // 并发出去的几块共用同一条亲和键时,会被路由器排到同一个凭据上串行(那个
+    // 凭据 `concurrency=1` 时后几块直接 all_busy),等于白加并发。
+    expect(req?.extra?.session_id).toMatch(/^s1:compaction#\d+$/);
     expect(req?.tools).toBeUndefined();
     // 图片没有被读成 base64,而是留下了可寻址占位
     const body = JSON.stringify(req?.messages ?? []);

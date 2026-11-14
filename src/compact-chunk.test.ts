@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@as-one/core/src/gateway/types.js";
 import {
   buildMergePrompt,
+  digestBudgetFor,
   flattenMessages,
+  joinDigests,
   lineTokens,
+  needsMerge,
   planCompactChunks,
   stage0Clean,
 } from "./compact-chunk.js";
@@ -83,5 +86,73 @@ describe("buildMergePrompt", () => {
     expect(prompt).toContain("分块 2/2");
     expect(prompt).toContain("第一块");
     expect(prompt).toContain("精确文件路径");
+  });
+});
+
+describe("Stage 0 的第二刀:超长工具输出截断", () => {
+  const long = "x".repeat(5000);
+  const messages: ChatMessage[] = [
+    { role: "user", content: "跑一下" },
+    { role: "tool", content: long },
+    { role: "assistant", content: long },
+  ];
+
+  it("只截工具结果,不动用户/助手叙述(它们不可再造)", () => {
+    const plan = planCompactChunks(messages, { inputBudgetTokens: 10_000 });
+    const text = plan.chunks[0]!.lines.join("\n");
+    expect(text).toContain("压缩时省略");
+    // 助手那条 5000 字符必须原样留着
+    expect(text.split("\n").filter((l) => l === long)).toHaveLength(1);
+    expect(plan.trimmedChars).toBeGreaterThan(3000);
+  });
+
+  it("切断的字符数是可回收的输入量(用来解释这次压缩省了多少)", () => {
+    const plan = planCompactChunks(messages, { inputBudgetTokens: 10_000, toolOutputChars: 800 });
+    expect(plan.trimmedChars).toBe(5000 - 800 <= 0 ? 0 : 5000 - 900 - 300);
+  });
+
+  it("toolOutputChars=0 关闭截断(短会话不需要丢信息)", () => {
+    const plan = planCompactChunks(messages, { inputBudgetTokens: 10_000, toolOutputChars: 0 });
+    expect(plan.chunks[0]!.lines.join("\n")).not.toContain("压缩时省略");
+    expect(plan.trimmedChars).toBe(0);
+  });
+});
+
+describe("摘要预算按区域大小现算", () => {
+  it("小区域:预算跟着缩小(宿主校验要求摘要严格小于被替换的内容)", () => {
+    // 实测失败形态:区域 136 token、摘要 390 token → summary is not smaller
+    const budget = digestBudgetFor(136);
+    expect(budget).toBeLessThan(136);
+    expect(budget).toBeGreaterThanOrEqual(48);
+  });
+
+  it("大区域:封顶 8192,不随区域线性膨胀", () => {
+    expect(digestBudgetFor(3_000_000)).toBe(8192);
+    expect(digestBudgetFor(100_000)).toBe(8192);
+  });
+
+  it("空区域不至于给出 0 预算(那会让 max_tokens 变 0)", () => {
+    expect(digestBudgetFor(0)).toBe(48);
+  });
+
+  it("单块计划的 capTokens 不会超过它自己要替换的内容", () => {
+    const plan = planCompactChunks([{ role: "user", content: "短" }], {
+      inputBudgetTokens: 10_000,
+    });
+    expect(plan.chunks[0]!.capTokens).toBeLessThanOrEqual(48);
+  });
+});
+
+describe("归并决策", () => {
+  it("块少时直接拼(归并要再读写一遍全部摘要,实测占 15%~25% 墙钟)", () => {
+    expect(needsMerge(1)).toBe(false);
+    expect(needsMerge(5)).toBe(false);
+    expect(needsMerge(6)).toBe(true);
+  });
+
+  it("拼接保留分片标题,单块不加标题", () => {
+    expect(joinDigests(["a"])).toBe("a");
+    expect(joinDigests(["a", "b"])).toContain("片段 1/2");
+    expect(joinDigests(["a", "b"])).toContain("片段 2/2");
   });
 });

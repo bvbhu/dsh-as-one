@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import { UpstreamError } from "@as-one/core/src/gateway/types.js";
 import type {
   ChatCompletionChunk,
+  ChatMessage,
   ModelEntry,
   RequestDoneInfo,
   Upstream,
@@ -37,7 +38,7 @@ import {
   toUpstreamRequestFromOptions,
   translateStream,
 } from "../src/llm-adapter.js";
-import type { DshGenerateOptions, DshStreamChunk } from "../src/llm-types.js";
+import type { DshGenerateOptions, DshMessage, DshStreamChunk } from "../src/llm-types.js";
 
 // ---------------------------------------------------------------------------
 // 夹具:宿主 validateStream 的逐字转录
@@ -980,5 +981,235 @@ describe("AsOneLlmAdapter", () => {
     const adapter = new AsOneLlmAdapter(rt);
     const out = await collectLegal(adapter.stream(emptyOptions));
     expect(out.at(-1)?.type).toBe("finish");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compact:分块 / 并行 / 省归并 / 失败降级
+// ---------------------------------------------------------------------------
+
+interface CompactCall {
+  index: number;
+  prompt: string;
+  maxTokens: number | undefined;
+  session: unknown;
+}
+
+/**
+ * 造一个只认 `complete` 的运行时:每块回固定长度的摘要,并记下调用顺序。
+ * `listModels` 里给窗口 —— 分块预算是按它算的(这是本次改动的核心)。
+ */
+function compactRuntime(opts: {
+  windowTokens?: number;
+  calls: CompactCall[];
+  fail?: (index: number, attempt: number) => boolean;
+  failKind?: "rate_limit" | "connection" | "bad_request";
+  digest?: (index: number) => string;
+}): AsOneRuntime {
+  let counter = 0;
+  const upstream: Upstream = {
+    stream() {
+      throw new Error("compact 不走 stream");
+    },
+    async complete(req: UpstreamRequest) {
+      const index = counter;
+      counter += 1;
+      const prompt = String(req.messages?.[0]?.content ?? "");
+      opts.calls.push({
+        index,
+        prompt,
+        maxTokens: req.max_tokens,
+        session: req.extra?.session_id,
+      });
+      const attempt = opts.calls.filter((c) => c.index === index).length;
+      if (opts.fail?.(index, attempt) === true) {
+        throw new UpstreamError(opts.failKind ?? "connection", "模拟失败");
+      }
+      return {
+        choices: [{ message: { content: opts.digest?.(index) ?? `摘要${index}` } }],
+      } as never;
+    },
+  };
+  return {
+    listModels: async () => [
+      entry({ id: "free", litenexus_kind: "logical", owned_by: "router" }),
+      entry({ id: "big", max_input_tokens: opts.windowTokens ?? 40_000 }),
+    ],
+    resolveUpstream: () => upstream,
+    onRequestDone: () => undefined,
+  } as unknown as AsOneRuntime;
+}
+
+/** 造一条大到必须分块的 user 消息(纯 ASCII,1 token ≈ 3.4 字符)。 */
+function bigMessage(chars: number, role: ChatMessage["role"] = "user"): DshMessage {
+  return { role, content: [{ type: "text", text: "x".repeat(chars) }] } as unknown as DshMessage;
+}
+
+async function drain(adapter: AsOneLlmAdapter, options: DshGenerateOptions): Promise<DshStreamChunk[]> {
+  const out: DshStreamChunk[] = [];
+  for await (const chunk of adapter.stream(options)) out.push(chunk);
+  return out;
+}
+
+describe("compactStream", () => {
+  it("块预算按目标模型窗口算:40k 窗口 → 20k/块,不再写死 19.2k 的 179 块", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({ windowTokens: 40_000, calls }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    // 约 35k token 的区域 → 16k/块的硬预算下必须切成多块
+    await drain(adapter, {
+      ...emptyOptions,
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(120_000)],
+    } as DshGenerateOptions);
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("每块一条独立亲和键(同一条键会把并发排队挤成串行)", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({ windowTokens: 40_000, calls }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    await drain(adapter, {
+      ...emptyOptions,
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(120_000)],
+    } as DshGenerateOptions);
+    const sessions = calls.map((c) => String(c.session));
+    expect(new Set(sessions).size).toBe(sessions.length);
+    expect(sessions.every((s) => s.startsWith("s-1:compaction#"))).toBe(true);
+  });
+
+  it("块数不超过归并阈值时不发归并请求(省一次完整往返)", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({ windowTokens: 40_000, calls }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    const chunks = await drain(adapter, {
+      ...emptyOptions,
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(120_000)],
+    } as DshGenerateOptions);
+    expect(calls.length).toBeLessThanOrEqual(5);
+    expect(calls.every((c) => !c.prompt.includes("合并成一份完整"))).toBe(true);
+    const text = chunks.find((c) => c.type === "text-delta");
+    expect(String((text as { text?: string }).text)).toContain("片段 1/");
+  });
+
+  it("单块区域:一次调用就够,不归并", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({ windowTokens: 40_000, calls }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    await drain(adapter, {
+      ...emptyOptions,
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(3_000)],
+    } as DshGenerateOptions);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("块多到拼不动时才归并(>5 块),归并也算一次调用", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({ windowTokens: 40_000, calls }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    await drain(adapter, {
+      ...emptyOptions,
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(400_000)],
+    } as DshGenerateOptions);
+    const merge = calls.filter((c) => c.prompt.includes("合并成一份完整"));
+    expect(merge).toHaveLength(1);
+    expect(String(merge[0]!.session)).toBe("s-1:compaction#merge");
+  });
+
+  it("某块第一次失败会重试,不把整次压缩打死", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({
+        windowTokens: 40_000,
+        calls,
+        fail: (index, attempt) => index === 0 && attempt === 1,
+      }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    const chunks = await drain(adapter, {
+      ...emptyOptions,
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(120_000)],
+    } as DshGenerateOptions);
+    const text = String((chunks.find((c) => c.type === "text-delta") as { text?: string }).text);
+    expect(text).toContain("摘要");
+  });
+
+  it("没有块成功才报错(否则交出一份能用的摘要)", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({ windowTokens: 40_000, calls, fail: () => true }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    await expect(
+      drain(adapter, {
+        ...emptyOptions,
+        purpose: "compaction",
+        sessionId: "s-1",
+        messages: [bigMessage(3_000)],
+      } as DshGenerateOptions),
+    ).rejects.toThrow(/摘要为空/);
+  });
+
+  it("安全网:没配 route.compact 但请求装不下窗口时也走分块(不再直发 3.4M token)", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(compactRuntime({ windowTokens: 40_000, calls }));
+    await drain(adapter, {
+      ...emptyOptions,
+      model: "big",
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(400_000)],
+    } as DshGenerateOptions);
+    expect(calls.length).toBeGreaterThan(1);
+  });
+
+  it("安全网不越界:装得下就原样放行宿主的原生摘要请求", async () => {
+    const calls: CompactCall[] = [];
+    const captured: Captured = {};
+    const runtime = compactRuntime({ windowTokens: 40_000, calls });
+    const adapter = new AsOneLlmAdapter(runtime);
+    // 走 stream 分支 → 用 fakeRuntime 的 stream 记录请求
+    const upstream: Upstream = {
+      stream(req) {
+        captured.req = req;
+        return of(...[]);
+      },
+      complete: async () => {
+        throw new Error("不该走 complete");
+      },
+    };
+    (runtime as unknown as { resolveUpstream: () => Upstream }).resolveUpstream = () => upstream;
+    await expect(
+      drain(adapter, {
+        ...emptyOptions,
+        model: "big",
+        purpose: "compaction",
+        sessionId: "s-1",
+        messages: [bigMessage(3_000)],
+      } as DshGenerateOptions),
+    ).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+    expect(captured.req?.messages).toHaveLength(1);
   });
 });
