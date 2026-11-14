@@ -450,7 +450,7 @@ export default function UsageStatsPage(): React.JSX.Element {
 
         <p className="hint usage-foot">
           统计截至 {e.last_day ?? "—"} · 区间 {e.from ?? "—"} → {e.to ?? "—"} ·
-          数据源 stats_external_daily(实时采集,无历史回填) · 供应商名已归并(网关历史名归到「网关」)
+          数据源 stats_external_daily(实时采集,无历史回填)
         </p>
       </section>
     );

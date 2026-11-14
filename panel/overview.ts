@@ -33,7 +33,7 @@ import { dayKey, parseContentMode } from "@as-one/core/src/request-log/index.js"
 import { computeTps } from "@as-one/core/src/request-log/tps.js";
 import { providerDisplayName } from "@as-one/core/src/config/provider-labels.js";
 import { KIND_BY_PROTOCOL, KNOWN_PROTOCOLS, REQUEST_LOG_CONTENT_MODES, SETTING_FIELDS } from "./constants.js";
-import { createProviderCanonicalizer } from "./provider-name.js";
+import { renameProvider } from "./provider-name.js";
 import type { SettingFieldSpec } from "./constants.js";
 import {
   clampDay,
@@ -117,20 +117,6 @@ export interface OverviewDomain {
     setRequestLog(patch: { enabled?: boolean; content_mode?: RequestLogContentMode }): Promise<ApiResult>;
     getDataDir(): Promise<DataDirInfo>;
   };
-}
-
-/**
- * 已知 provider id —— 供应商名归并时的"规范写法"来源。
- *
- * 读不出来时(单测里 mock 的 context 常常只给 db)返回空表:归并退化成
- * "只认网关别名、其余原样",不因为缺注册表而把整页统计打挂。
- */
-function knownProviderIds(ctx: PanelContext): string[] {
-  try {
-    return ctx.registry.listProviders().map((p) => p.id);
-  } catch {
-    return [];
-  }
 }
 
 export function createOverviewDomain(ctx: PanelContext, deps: OverviewDomainDeps): OverviewDomain {
@@ -523,11 +509,10 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       const skipRow = (row: typeof allRows[number]): boolean =>
         grp === "logical" && !(row.logical_model ?? "").trim();
 
-      // 供应商名归并(2026-11-14):网关别名 → 「网关」,同一供应商的大小写/分隔符
-      // 变体 → provider 表里的规范 id。只影响展示聚合,不写回历史行
-      // (见 panel/provider-name.ts 的说明)。
-      const canonProv = createProviderCanonicalizer(knownProviderIds(ctx));
-      const provKeyOf = (row: { provider: string }): string => canonProv(row.provider);
+      // 供应商名改写(2026-11-14):只走 `panel/provider-name.ts` 那张**逐条人工核对**
+      // 的改写表(目前仅 workbuddy_yn → hyperai)。没有通配/模糊匹配 —— 不同厂商
+      // 被"看起来像"合并到一起就是错账。只影响展示聚合,不写回历史行。
+      const provKeyOf = (row: { provider: string }): string => renameProvider(row.provider);
 
       const seriesKeyOf = (row: typeof allRows[number]): string =>
         grp === "model"
@@ -815,8 +800,8 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       const rng: UsageRange = (["all", "7", "30", "90", "365"] as UsageRange[]).includes(range)
         ? range
         : "all";
-      // 同一套归并口径(网关别名 → 「网关」,拼写变体 → 规范 id)。
-      const canonProv = createProviderCanonicalizer(knownProviderIds(ctx));
+      // 同一张改写表(逐条人工核对,不做通用归一化)。
+      const canonProv = renameProvider;
       const allRows = ctx.db.statsExternalDaily.range("0000-01-01", "9999-12-31");
       const sortedDays = [...new Set(allRows.map((r) => r.day))].sort();
       const { from, to } = usageWindow(rng, sortedDays);
