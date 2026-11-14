@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	createExternalUsageCollector,
 	ExternalUsageFold,
+	GATEWAY_PROVIDER_HISTORY,
 	routeOf,
+	sessionIdOf,
 	tokensOf,
 	type ExternalUsageSample,
 } from "../src/usage-external.js";
@@ -222,5 +224,64 @@ describe("createExternalUsageCollector", () => {
 		collector.onSessionDisposed("s1");
 		collector.onEvent("s1", event); // 状态没了 ⇒ 同 (turn, step) 会再记一次(新会话语义)
 		expect(record).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("sessionIdOf(宿主会话形态)", () => {
+	it("宿主传的是 { header: { id } }", () => {
+		expect(sessionIdOf({ header: { id: "s-1" } })).toBe("s-1");
+	});
+
+	it("兼容直接把 id 摊平的对象,并挡住缺失/null", () => {
+		expect(sessionIdOf({ id: "s-2" })).toBe("s-2");
+		expect(sessionIdOf({ header: { id: "" }, id: "s-3" })).toBe("s-3");
+		expect(sessionIdOf({})).toBe("");
+		expect(sessionIdOf(null)).toBe("");
+		expect(sessionIdOf(undefined)).toBe("");
+	});
+
+	it("header 优先于摊平字段(两处都有时取宿主那一份)", () => {
+		expect(sessionIdOf({ header: { id: "real" }, id: "stale" })).toBe("real");
+	});
+});
+
+describe("网关历史 provider 名", () => {
+	it("默认排除表逐条列出 4 个核对过的网关名", () => {
+		expect([...GATEWAY_PROVIDER_HISTORY].sort()).toEqual(["as-one", "litenexus", "nexus", "one"]);
+	});
+
+	it("不传 exclude 时,4 个网关名下的调用一条都不落库", () => {
+		const record = vi.fn();
+		const collector = createExternalUsageCollector({ record });
+		for (const provider of GATEWAY_PROVIDER_HISTORY) {
+			collector.onEvent("s1", {
+				type: "assistant/message",
+				time: AT,
+				data: {
+					turn: 1,
+					step: 1,
+					usage: { inputTokens: 10, outputTokens: 1 },
+					message: { source: { provider, model: "sensenova/deepseek-flash" } },
+				},
+			});
+		}
+		expect(record).not.toHaveBeenCalled();
+		expect(collector.stats().excluded).toBe(0); // excluded 由 fold 内部判定,不在这里计数
+	});
+
+	it("直连 provider 照常落库(排除表不许误伤)", () => {
+		const record = vi.fn();
+		const collector = createExternalUsageCollector({ record });
+		collector.onEvent("s1", {
+			type: "assistant/message",
+			time: AT,
+			data: {
+				turn: 1,
+				step: 1,
+				usage: { inputTokens: 10, outputTokens: 1 },
+				message: { source: { provider: "yn", model: "deepseek-v4.1-flash" } },
+			},
+		});
+		expect(record).toHaveBeenCalledTimes(1);
 	});
 });

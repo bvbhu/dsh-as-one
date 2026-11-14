@@ -24,6 +24,75 @@
 
 import { dayKey } from "@as-one/core/src/request-log/index.js";
 
+/**
+ * 网关自己用过的 DSH provider 名 —— 这些名字下的调用**属于网关**,不是网关外。
+ *
+ * 逐条核对(2026-11-14,证据在 `~/.dsh/sessions` 的事件里):
+ * - `as-one`   当前插件注册名(`src/llm-adapter.ts` 的 `AS_ONE_PROVIDER`);
+ * - `one`      上一个插件版本的注册名,11-01 同日与 `as-one` 交替出现,
+ *              两者用的是同一套逻辑模型名(`sensenova/deepseek-flash` 等);
+ * - `nexus`    更早的注册名(项目原名),逻辑模型名与上面完全一致;
+ * - `litenexus` 同期精简版,同样是 `workbuddy/hy4-preview` 这种 `provider/model` 形态。
+ *
+ * 只有这 4 个是核对过的。不要按"看起来像"往里加 —— 少记一条只是数字小,
+ * 把网关流量记成网关外则是账目错位(那一份在 `stats_daily` 里已经记过一次)。
+ */
+export const GATEWAY_PROVIDER_HISTORY: readonly string[] = ["as-one", "one", "nexus", "litenexus"];
+
+/**
+ * 会话对象 → 会话号。
+ *
+ * 宿主传进来的是 `{ header: { id } }`(`app.asar` 里 `sessions.get(session.header.id)`),
+ * **不是** `{ id }`。曾经按 `session.id` 取,拿到 undefined 后整条事件被当空会话丢弃,
+ * 外部表因此一直是空的。这里两种形态都认,顺便挡住 null。
+ */
+export function sessionIdOf(value: unknown): string {
+	const v = value as { id?: unknown; header?: { id?: unknown } } | null | undefined;
+	const fromHeader = v?.header?.id;
+	if (typeof fromHeader === "string" && fromHeader !== "") return fromHeader;
+	const direct = v?.id;
+	return typeof direct === "string" ? direct : "";
+}
+
+/**
+ * 会话里的账号级 provider 名 → 厂商名。
+ *
+ * 为什么需要:DSH 里同一家厂商开多把 key 时,用户会起 `sensenova-1` / `sensenova-2`
+ * 这种名字(不同 key、不同额度)。`stats_external_daily` 没有账号维度,保留序号会让
+ * 排名里同一家厂商散成好几行,跨期也没法对比(8 月的历史行是 `sensenova`)。
+ *
+ * **逐条核对,不做任何模糊匹配** —— 键必须完全相等。加条目之前先确认是同厂商:
+ * 只看名字像不像会把两家不同的渠道并成一家,那是错账,比少记严重得多。
+ * 依据来自 `~/.dsh/sessions` 的事件(`source.provider` + `source.model`):
+ * - `sensenova-1/-2/-3`、`sensenova-token-plans`、`sensenova-vision` 跑的都是
+ *   `deepseek-v4-flash` / `sensenova-6.8-flash-lite` / `glm-5.2` 这一套;
+ * - `minmax` 是建 provider 时的笔误,与 `minimax2` 跑同一个 `minimax-m3.1-flash`;
+ * - `yn` / `yn-deepseek` / `hyperai-deepseek` 的 baseURL 都是 `ai.hyperai.icu`,
+ *   与已核对的 `hyperai` 同一个上游(见 `stats_daily` 里历史行的证据)。
+ */
+export const EXTERNAL_PROVIDER_RENAMES: Readonly<Record<string, string>> = {
+	"sensenova-1": "sensenova",
+	"sensenova-2": "sensenova",
+	"sensenova-3": "sensenova",
+	"sensenova-token-plans": "sensenova",
+	"sensenova-vision": "sensenova",
+	"tokenrhythm-1": "tokenrhythm",
+	"tokenrhythm-2": "tokenrhythm",
+	minmax: "minimax",
+	minimax2: "minimax",
+	yn: "hyperai",
+	"yn-deepseek": "hyperai",
+	"hyperai-deepseek": "hyperai",
+	"deepseek-account": "deepseek-official",
+};
+
+/** 把账号级 provider 名归到厂商名;没登记的原样返回(含空串)。 */
+export function renameExternalProvider(raw: string): string {
+	const name = typeof raw === "string" ? raw.trim() : "";
+	if (name === "") return "";
+	return EXTERNAL_PROVIDER_RENAMES[name] ?? name;
+}
+
 /** 一条要落库的外部用量增量。 */
 export interface ExternalUsageSample {
 	/** 本地日历日 `YYYY-MM-DD`(与 stats_daily 同一个 dayKey)。 */
@@ -223,7 +292,7 @@ function dedupeKey(data: { turn?: unknown; step?: unknown }): string | null {
 export interface ExternalUsageCollectorDeps {
 	/** 落库回调(由装配层接到 `db.statsExternalDaily.record`)。 */
 	record(sample: ExternalUsageSample): void;
-	/** 不归本模块管的 provider(默认 `as-one`)。 */
+	/** 不归本模块管的 provider(默认 `GATEWAY_PROVIDER_HISTORY`)。 */
 	exclude?: readonly string[];
 	logger?: { warn?(message: string, error?: unknown): void };
 }
@@ -243,7 +312,7 @@ export interface ExternalUsageCollector {
  * ⚠️ `record` 抛错绝不能冒泡 —— 记账失败不能影响对话(与会话事件的其他监听者同款契约)。
  */
 export function createExternalUsageCollector(deps: ExternalUsageCollectorDeps): ExternalUsageCollector {
-	const exclude = new Set(deps.exclude ?? ["as-one"]);
+	const exclude = new Set(deps.exclude ?? GATEWAY_PROVIDER_HISTORY);
 	const folds = new Map<string, ExternalUsageFold>();
 	const counters = { unknownRoute: 0, excluded: 0, recorded: 0 };
 
@@ -263,8 +332,11 @@ export function createExternalUsageCollector(deps: ExternalUsageCollectorDeps): 
 				return;
 			}
 			for (const sample of samples) {
+				// 汇总到厂商名之后再落库(账号序号不留在统计里);exclude 判定用的是原始名。
+				const provider = renameExternalProvider(sample.provider);
+				if (provider === "") continue;
 				try {
-					deps.record(sample);
+					deps.record(provider === sample.provider ? sample : { ...sample, provider });
 					counters.recorded += 1;
 				} catch (err) {
 					deps.logger?.warn?.("[as-one] 外部用量落库失败", err);

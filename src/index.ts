@@ -30,7 +30,7 @@ import type { DshAttachmentService } from "./llm-types.js";
 import type { Context } from "./context-types.js";
 import { internalSwitch, setCompactHost, type CompactTriggerCompaction } from "./compact-trigger.js";
 import { rerouteSettingsFrom } from "./reroute.js";
-import { createExternalUsageCollector } from "./usage-external.js";
+import { createExternalUsageCollector, sessionIdOf } from "./usage-external.js";
 
 export const name = "@bvbhu/as-one";
 export const inject = ["webServer"];
@@ -145,13 +145,15 @@ async function startAsOne(ctx: Context): Promise<void> {
       logger: ctx.logger,
     });
     const host = ctx as unknown as {
-      on(event: string, listener: (session: { id?: string }, event: unknown) => void): void;
+      on(event: string, listener: (session: unknown, event: unknown) => void): void;
     };
     host.on("session/event", (session, event) => {
-      collector.onEvent(session?.id ?? "", event as { type?: string });
+      // 宿主给的是 `{ header: { id } }`;按 `session.id` 取会拿到 undefined,
+      // 于是每条事件都被当空会话丢掉(外部表曾经一直是空的)。
+      collector.onEvent(sessionIdOf(session), event as { type?: string });
     });
     host.on("session/disposed", (session) => {
-      collector.onSessionDisposed(session?.id ?? "");
+      collector.onSessionDisposed(sessionIdOf(session));
     });
     ctx.logger?.info?.("[as-one] 网关外用量采集已挂上 session/event");
   } catch (err) {
