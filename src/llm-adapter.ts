@@ -785,6 +785,8 @@ const COMPACT_BUDGET_MAX = 160_000;
 const COMPACT_BUDGET_FALLBACK = 48_000;
 /** 同时跑几块 —— 每块一次独立上游调用,并发受调度器的端点容量约束。 */
 const COMPACT_CONCURRENCY = 3;
+/** 块很多(大区域)时的并发上限:并发才是几十块场景里真正省时间的东西。 */
+const COMPACT_CONCURRENCY_MAX = 6;
 /**
  * 归并输出上限。
  *
@@ -1030,7 +1032,10 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     const budget = compactInputBudget(window);
     const plan = planCompactChunks(request.messages, { inputBudgetTokens: budget });
     const baseSession = String(request.extra?.session_id ?? request.prompt_cache_key ?? "anon");
-    const concurrency = Math.max(1, Math.min(COMPACT_CONCURRENCY, plan.chunks.length));
+    // 块多的时候把并发抬到上限:大区域(几十块)才是并发真正省时间的地方,
+    // 小块区域多开并发只会平白多占端点并发位。
+    const width = plan.chunks.length >= 12 ? COMPACT_CONCURRENCY_MAX : COMPACT_CONCURRENCY;
+    const concurrency = Math.max(1, Math.min(width, plan.chunks.length));
 
     const digests: string[] = new Array<string>(plan.chunks.length).fill("");
     let failed = 0;
@@ -1052,7 +1057,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
         prompt_cache_key: `${baseSession}#${slot}`,
         extra: { ...(request.extra ?? {}), session_id: `${baseSession}#${slot}` },
       };
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
         if (abortedNow(request.clientSignal)) return "";
         try {
           const result = await upstream.complete(body);
@@ -1060,21 +1065,27 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
           return typeof text === "string" ? text : "";
         } catch (err) {
           if (abortedNow(request.clientSignal)) return "";
+          const kind = err instanceof UpstreamError ? err.kind : "server";
+          // 限流要等一个配额窗口再试(2s → 5s)。切小并不能减少总 token,只是
+          // 把一次 429 变成两次,所以这里只退避、不切块。
+          if (kind === "rate_limit" && attempt < 3) {
+            await sleepMs(attempt === 1 ? 2_000 : 5_000);
+            continue;
+          }
           if (attempt === 1) {
-            // 限流要等一会儿(同一个配额窗口);其它错误也短暂让一下,再原样重试一次。
-            await sleepMs(err instanceof UpstreamError && err.kind === "rate_limit" ? 2_000 : 300);
+            // 其它错误先短暂让一下再原样重试一次。
+            await sleepMs(300);
             continue;
           }
           // 还是失败 → 按错误性质分流,别一律重试:
-          // · 限流(429):切小不会减少总 token,只是多几条请求 —— 直接放弃这一块;
           // · 报文被拒(400/422):多半就是「这一块太长」,减半再试,内容一点不丢;
-          // · 其它(5xx/连接/鉴权):再切也只是把同一个错误复制一份,放弃。
-          const kind = err instanceof UpstreamError ? err.kind : "server";
+          // · 限流(429,已退避两次)与其它 5xx/连接/鉴权:切小只会把同一个错误
+          //   复制两份,如实放弃这一块并记日志。
           const worthSplitting = kind === "bad_request";
           if (!worthSplitting || depth >= 2) {
             failed += 1;
             console.warn(
-              `[as-one] compact 分块失败(已减半两次仍失败,跳过):${
+              `[as-one] compact 分块失败(重试后放弃,这块内容不在摘要里):${
                 err instanceof Error ? err.message : String(err)
               }`,
             );
