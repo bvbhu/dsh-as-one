@@ -33,7 +33,6 @@ import { dayKey, parseContentMode } from "@as-one/core/src/request-log/index.js"
 import { computeTps } from "@as-one/core/src/request-log/tps.js";
 import { providerDisplayName } from "@as-one/core/src/config/provider-labels.js";
 import { KIND_BY_PROTOCOL, KNOWN_PROTOCOLS, REQUEST_LOG_CONTENT_MODES, SETTING_FIELDS } from "./constants.js";
-import { renameProvider } from "./provider-name.js";
 import type { SettingFieldSpec } from "./constants.js";
 import {
   clampDay,
@@ -509,15 +508,10 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       const skipRow = (row: typeof allRows[number]): boolean =>
         grp === "logical" && !(row.logical_model ?? "").trim();
 
-      // 供应商名改写(2026-11-14):只走 `panel/provider-name.ts` 那张**逐条人工核对**
-      // 的改写表(目前仅 workbuddy_yn → hyperai)。没有通配/模糊匹配 —— 不同厂商
-      // 被"看起来像"合并到一起就是错账。只影响展示聚合,不写回历史行。
-      const provKeyOf = (row: { provider: string }): string => renameProvider(row.provider);
-
       const seriesKeyOf = (row: typeof allRows[number]): string =>
         grp === "model"
-          ? `${provKeyOf(row)}/${row.model}`
-          : String(row.logical_model ?? "").trim() || `${provKeyOf(row)}/${row.model}`;
+          ? `${row.provider}/${row.model}`
+          : String(row.logical_model ?? "").trim() || `${row.provider}/${row.model}`;
 
       const seriesMeta = (key: string): { name: string; provider: string | null; logical_model: string | null } => {
         if (grp === "model") {
@@ -566,11 +560,10 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         if (!sb) { sb = { tokens: 0, requests: 0, fails: 0, prompt: 0, completion: 0, cached: 0 }; s.buckets.set(bucketKey, sb); }
         addTo(sb, row, tokens);
 
-        const pkey = provKeyOf(row);
-        let p = provAgg.get(pkey);
-        if (!p) { p = { tokens: 0, requests: 0, fails: 0, prompt: 0, completion: 0, cached: 0, models: new Map() }; provAgg.set(pkey, p); }
+        let p = provAgg.get(row.provider);
+        if (!p) { p = { tokens: 0, requests: 0, fails: 0, prompt: 0, completion: 0, cached: 0, models: new Map() }; provAgg.set(row.provider, p); }
         addTo(p, row, tokens);
-        const mkey = `${pkey}/${row.model}`;
+        const mkey = `${row.provider}/${row.model}`;
         let pm = p.models.get(mkey);
         if (!pm) { pm = { tokens: 0, requests: 0, fails: 0, prompt: 0, completion: 0, cached: 0 }; p.models.set(mkey, pm); }
         addTo(pm, row, tokens);
@@ -606,8 +599,8 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         for (const row of rows) {
           if (skipRow(row)) continue;
           if (seriesKeyOf(row) !== seriesKey) continue;
-          const mk = `${provKeyOf(row)}/${row.model}`;
-          const cur = byModel.get(mk) ?? { tokens: 0, provider: provKeyOf(row) };
+          const mk = `${row.provider}/${row.model}`;
+          const cur = byModel.get(mk) ?? { tokens: 0, provider: row.provider };
           cur.tokens += tokensOf(row);
           byModel.set(mk, cur);
         }
@@ -800,8 +793,6 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       const rng: UsageRange = (["all", "7", "30", "90", "365"] as UsageRange[]).includes(range)
         ? range
         : "all";
-      // 同一张改写表(逐条人工核对,不做通用归一化)。
-      const canonProv = renameProvider;
       const allRows = ctx.db.statsExternalDaily.range("0000-01-01", "9999-12-31");
       const sortedDays = [...new Set(allRows.map((r) => r.day))].sort();
       const { from, to } = usageWindow(rng, sortedDays);
@@ -826,7 +817,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         cached += row.cached_tokens;
         if (t > 0 || row.calls > 0) active.add(row.day);
 
-        const key = `${canonProv(row.provider)}/${row.model}`;
+        const key = `${row.provider}/${row.model}`;
         const k = perKey.get(key) ?? { tokens: 0, calls: 0 };
         k.tokens += t;
         k.calls += row.calls;
