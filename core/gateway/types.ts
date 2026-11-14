@@ -192,7 +192,20 @@ export interface ModelEntry {
    * ⚠️ `id` 永远是调用串,不随显示名变 —— 显示层怎么改都不影响路由。
    */
   display_name?: string;
+  /**
+   * 输入窗口。**逻辑模型取的是成员的「最小」窗口** —— 保证任何一次选路都装得下,
+   * 所以它是「不会 400」的保守值。
+   */
   max_input_tokens?: number;
+  /**
+   * **成员里最大的那个窗口**(只有逻辑模型有;真实模型与 `max_input_tokens` 同值)。
+   *
+   * 为什么要单列:压缩分块时块大小是按窗口算的,按最小值切会让 1M 成员也只能
+   * 收 32k 的块(块数翻几倍、压缩慢几倍)。有了这个值,调用方可以按「真实模型
+   * 能装下的最大窗口」切块,再在请求上带 `minInputTokens` 让选路避开装不下的
+   * 端点 —— 两边一对,大块就能真的落到大窗口那台上。
+   */
+  max_member_input_tokens?: number;
   max_output_tokens?: number;
   supports_vision?: boolean;
   /**
@@ -390,6 +403,16 @@ export interface UpstreamRequest {
   stop?: string[];
   tools?: ChatToolDefinition[];
   tool_choice?: unknown;
+  /**
+   * 这条报文的 prompt 量(估算 token):选路时用来排除装不下它的端点。
+   *
+   * **只在进程内用,不进上游报文体**(`bodyFor` 是白名单构造,不会带出去)。
+   * 目前只有压缩分块会填:块大小按真实模型的窗口算,就得让选路配合,
+   * 否则同一个逻辑模型下 64k 的成员会被分到 160k 的块。
+   *
+   * 缺省/0 = 不约束 —— 普通对话一个字都不受影响。
+   */
+  minInputTokens?: number;
   reasoning_effort?: string;
   /**
    * **缓存路由键**(billion-context 插件的 `prompt_cache_key`)—— 网关内部键。

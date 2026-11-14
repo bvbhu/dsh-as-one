@@ -716,6 +716,8 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
             // 选路走普通的非视觉池(与 Nexus 同一口径)。
             needsVision: hasVision(bridged.messages),
             ignoreCooldown: directRequest,
+            // 压缩分块会填:块大小按真实模型窗口算,选路就不许挑装不下它的端点。
+            minInputTokens: req.minInputTokens,
           });
           const item = plan.item;
           if (!item) throw planErrorOf(plan.reason ?? "", lastError);
@@ -1220,6 +1222,8 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
             // 选路走普通的非视觉池(与 Nexus 同一口径)。
             needsVision: hasVision(bridged.messages),
             ignoreCooldown: directRequest,
+            // 压缩分块会填:块大小按真实模型窗口算,选路就不许挑装不下它的端点。
+            minInputTokens: req.minInputTokens,
           });
           const item = plan.item;
           if (!item) throw planErrorOf(plan.reason ?? "", lastError);

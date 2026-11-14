@@ -352,11 +352,25 @@ export class Router {
     sessionId?: string;
     needsVision?: boolean;
     ignoreCooldown?: boolean;
+    /**
+     * 本次报文的 prompt 量(token):装不下它的端点不参与选路。
+     *
+     * 只给**压缩分块**用(块大小是按窗口算的):同一个逻辑模型下可能挂着 64k
+     * 与 1M 两种成员,按最小成员切块会让块数翻几倍。给了这个约束,块就能按
+     * 「真实模型能装下的最大窗口」来切,再由选路保证落到装得下的那台上。
+     *
+     * `null`/`0`/缺省 = 不约束(普通对话的语义不变)。
+     */
+    minInputTokens?: number | null;
   }): Plan {
     const chain = opts.chain;
     const sessionId = opts.sessionId ?? "";
     const needsVision = opts.needsVision ?? false;
     const ignoreCooldown = opts.ignoreCooldown ?? false;
+    const minInputTokens =
+      typeof opts.minInputTokens === "number" && Number.isFinite(opts.minInputTokens) && opts.minInputTokens > 0
+        ? Math.floor(opts.minInputTokens)
+        : 0;
 
     if (!chain || chain.length === 0) {
       return planResult(null, "all_blackout");
@@ -377,6 +391,18 @@ export class Router {
       if (vision.length > 0) {
         pool = vision;
       }
+    }
+
+    // 输入窗口约束(仅压缩分块):装不下这条报文的端点不参与。
+    // ⚠️ **全滤光时不过滤**:否则会变成 all_busy,而真正该走的兜底是
+    // 「让更小的窗口试一次、失败就减半重切」—— 那条路在调用方。
+    if (minInputTokens > 0) {
+      const fits = pool.filter((item) => {
+        const window = item.endpoint.maxInputTokens;
+        // `null`/0 = 这个端点没声明窗口:保留,不能凭未知就排除它。
+        return window === null || window <= 0 || window >= minInputTokens;
+      });
+      if (fits.length > 0) pool = fits;
     }
 
     // 1) 会话亲和:跨优先级优先回到粘住的那台

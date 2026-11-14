@@ -179,6 +179,9 @@ export function listModelEntries(
       name: l.base,
       display_name: labels[i],
       max_input_tokens: windows.length > 0 ? Math.min(...windows) : undefined,
+      // 最大成员窗口:压缩分块按它切块(配合请求上的 `minInputTokens` 让选路
+      // 避开装不下的小窗口成员),详见 `ModelEntry.max_member_input_tokens`。
+      max_member_input_tokens: windows.length > 0 ? Math.max(...windows) : undefined,
       supports_vision: l.members.some((m) => visionOf.get(`${m.provider}/${m.model}`) === true),
       reasoning_efforts: LOGICAL_REASONING_EFFORTS,
       reasoning_allows_off: true,
