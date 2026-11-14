@@ -649,7 +649,12 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         b: [string, { tokens: number }],
       ): number => b[1].tokens - a[1].tokens || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
 
-      const sortedSeries = [...seriesAgg.entries()].sort(byTokensThenKey);
+      // ⚠️ tokens=0 的序列**不进榜**(与下面供应商榜同一条规则):失败/中断、或者
+      // 上游压根不返回 usage 的调用(如 clawbrain)会占掉榜位,却一个 token 都没有。
+      // KPI 里的调用次数照旧包含它们 —— 那些调用确实发生过,只是不该出现在"用量"榜上。
+      const sortedSeries = [...seriesAgg.entries()]
+        .filter(([, agg]) => agg.tokens > 0)
+        .sort(byTokensThenKey);
       // 前 10 名各自成条,尾部聚合成「其他」哨兵行(可展开成明细)——
       // 与 Nexus `_TOP_MODELS=10` 同值。以前是前 5 且尾部静默丢弃,
       // 于是「第 6 名以后的用量」从榜上、环上、图上一起消失,总量对不齐。

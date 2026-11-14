@@ -161,3 +161,30 @@ describe("getUsageHistory 按来源聚合", () => {
 		expect(out.totals.tokens).toBe(220);
 	});
 });
+
+describe("零 token 记录", () => {
+	it("不进模型榜/供应商榜,但调用次数仍计入 KPI", async () => {
+		const d = domainOf(
+			[gw({ provider: "clawbrain", model: "clawbrain-pro", requests: 63, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0 })],
+			[ext({ provider: "clawbrain", model: "clawbrain-pro", calls: 38, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0 })],
+		);
+		const out = await d.methods.getUsageHistory("all", "day", "model", "all");
+		expect(out.series).toEqual([]);
+		expect(out.providers).toEqual([]);
+		expect(out.totals.requests).toBe(101);
+		expect(out.totals.tokens).toBe(0);
+	});
+
+	it("零 token 行不影响正常榜位(不会把有量的挤下去)", async () => {
+		const d = domainOf(
+			[
+				gw({ provider: "a", model: "m1", requests: 5, prompt_tokens: 1000, completion_tokens: 100 }),
+				gw({ provider: "b", model: "m2", requests: 500, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0 }),
+			],
+			[],
+		);
+		const out = await d.methods.getUsageHistory("all", "day", "model", "all");
+		expect(out.series.map((s) => s.key)).toEqual(["a/m1"]);
+		expect(out.totals.requests).toBe(505);
+	});
+});
