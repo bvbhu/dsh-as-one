@@ -35,6 +35,14 @@ const RANGES: Array<{ key: UsageRange; label: string }> = [
   { key: "365", label: "最近 365 天" },
 ];
 
+/** 数据来源:网关(stats_daily)/ 网关外(stats_external_daily)/ 两者都看。 */
+type UsageSource = "all" | "gateway" | "external";
+const SOURCES: Array<{ key: UsageSource; label: string }> = [
+  { key: "all", label: "所有" },
+  { key: "gateway", label: "仅网关" },
+  { key: "external", label: "仅网关外" },
+];
+
 /** 参考插件的调色板:名次序即色序;「其他」永远是那格灰。 */
 const MODEL_COLORS = [
   "#0576ff",
@@ -140,6 +148,13 @@ export default function UsageStatsPage(): React.JSX.Element {
   const [range, setRange] = React.useState<UsageRange>("all");
   const [granularity, setGranularity] = React.useState<UsageGranularity>("day");
   const [group, setGroup] = React.useState<UsageGroup>("model");
+  /**
+   * 数据来源过滤(2026-11-14 用户定案):所有 / 仅网关 / 仅网关外。
+   *
+   * 两张表口径不同(`requests` 是客户端请求、`calls` 是上游调用),所以这里
+   * **只做选择、不做相加** —— "所有" = 网关那套视图 + 末尾网关外一节。
+   */
+  const [source, setSource] = React.useState<UsageSource>("all");
   const [data, setData] = React.useState<UsageHistory | null>(null);
   /** 网关外用量:与 data **完全独立**的另一份统计(见页面末尾那一节)。 */
   const [ext, setExt] = React.useState<ExternalUsage | null>(null);
@@ -362,6 +377,85 @@ export default function UsageStatsPage(): React.JSX.Element {
     [data],
   );
 
+  /**
+   * 网关外那一节(「所有」模式挂在页尾,「仅网关外」模式就是整页内容)。
+   *
+   * 两种模式共用同一段 JSX:数字口径必须一模一样,否则同一个指标在两种
+   * 过滤下会显示成两个数 —— 那比没有这个过滤更糟。
+   */
+  const externalSection = (mode: "only" | "append"): React.JSX.Element | null => {
+    const hasExt = ext !== null && (ext.totals.tokens > 0 || ext.totals.calls > 0);
+    if (!hasExt) {
+      if (mode === "append") return null;
+      return (
+        <p className="hint">
+          {ext
+            ? `这个区间内没有网关外用量(${ext.from ?? "—"} → ${ext.to ?? "—"} 无记录)。网关外 = DSH 直连别的 provider 的调用,只有切到非 as-one 模型时才会产生。`
+            : "还没有采集到网关外用量(切到非 as-one 模型并发出一次请求后就会出现)。"}
+        </p>
+      );
+    }
+    const e = ext as ExternalUsage;
+    return (
+      <section className="usage-sec">
+        <h2>网关外用量</h2>
+        <p className="hint">
+          只统计<strong>没经过网关</strong>的调用(DSH 直连其它 provider),来自会话事件实时采集;
+          与网关那套数字<strong>不可相加</strong>:这里是上游调用次数,网关那侧是客户端请求数。
+        </p>
+        {/* 4 张卡:不复用上面那排写死的 5 列网格,否则右边永远空一格 */}
+        <div className="usage-cards usage-cards-4">
+          <div className="usage-card">
+            <div className="usage-card-k">Tokens 用量</div>
+            <div className="usage-card-v">{full(e.totals.tokens)}</div>
+            <div className="usage-card-s">
+              输入 {full(e.totals.prompt_tokens)} · 输出 {full(e.totals.completion_tokens)}
+            </div>
+          </div>
+          <div className="usage-card">
+            <div className="usage-card-k">上游调用</div>
+            <div className="usage-card-v">{full(e.totals.calls)}</div>
+            <div className="usage-card-s">含重试,不含网关已处理的部分</div>
+          </div>
+          <div className="usage-card">
+            <div className="usage-card-k">平均缓存命中</div>
+            <div className="usage-card-v">{rateText(e.totals.cache_hit_rate)}</div>
+            <div className="usage-card-s">{fmtCount(e.totals.cached_tokens)} 缓存命中</div>
+          </div>
+          <div className="usage-card">
+            <div className="usage-card-k">活跃天数</div>
+            <div className="usage-card-v">{e.totals.active_days}</div>
+            <div className="usage-card-s">{e.from ?? "—"} → {e.to ?? "—"}</div>
+          </div>
+        </div>
+
+        <ol className="usage-rank">
+          {e.series.map((row, i) => (
+            <li key={row.key}>
+              <div className="usage-row">
+                <span className="usage-rank-i">{i + 1}</span>
+                <i className="usage-dot" style={{ background: MODEL_COLORS[i % MODEL_COLORS.length] }} />
+                <span className="usage-name">
+                  <span className="usage-name-m">{row.model}</span>
+                  <span className="usage-name-s">
+                    {row.provider} · {fmtCount(row.calls)} 次调用
+                  </span>
+                </span>
+                <span className="usage-val">{full(row.tokens)}</span>
+                <span className="usage-pct">{fmtPct(row.percent)}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
+
+        <p className="hint usage-foot">
+          统计截至 {e.last_day ?? "—"} · 区间 {e.from ?? "—"} → {e.to ?? "—"} ·
+          数据源 stats_external_daily(实时采集,无历史回填) · 供应商名已归并(网关历史名归到「网关」)
+        </p>
+      </section>
+    );
+  };
+
   return (
     <React.Fragment>
       <h1 className="page-title">用量统计</h1>
@@ -380,7 +474,23 @@ export default function UsageStatsPage(): React.JSX.Element {
             </button>
           ))}
         </div>
-        <div className="usage-seg" role="group" aria-label="聚合">
+        <div className="usage-seg" role="group" aria-label="数据来源">
+          {SOURCES.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              className={source === s.key ? "on" : ""}
+              aria-pressed={source === s.key}
+              onClick={() => setSource(s.key)}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+        {/* 粒度 / 维度只对网关那套统计有意义(网关外只有按天 + 真实模型两维) */}
+        {source !== "external" ? (
+          <>
+          <div className="usage-seg" role="group" aria-label="聚合">
           <button
             type="button"
             className={granularity === "day" ? "on" : ""}
@@ -416,10 +526,16 @@ export default function UsageStatsPage(): React.JSX.Element {
             按逻辑模型
           </button>
         </div>
+          </>
+        ) : null}
         <button type="button" className="usage-refresh" disabled={loading} onClick={() => void load()}>
           {loading ? "加载中…" : "刷新"}
         </button>
-        {data ? (
+        {source === "external" ? (
+          <span className="hint usage-ctl-info">
+            {ext ? `${ext.from ?? "—"} → ${ext.to ?? "—"}` : "—"} · 上游调用口径
+          </span>
+        ) : data ? (
           <span className="hint usage-ctl-info">
             {rangeText} · {data.axis.length} 个{granularity === "month" ? "月" : "天"}
           </span>
@@ -428,7 +544,11 @@ export default function UsageStatsPage(): React.JSX.Element {
 
       {error ? <p className="err">{error}</p> : null}
 
-      {data && hasData ? (
+      {/* 仅网关外:这一支只画外部统计,KPI/趋势/环形图/排名一概不出现 ——
+          两张表量纲不同,混在一个页面上「合并展示」只会得到谁也解释不了的数。 */}
+      {source === "external" ? externalSection("only") : null}
+
+      {data && hasData && source !== "external" ? (
         <>
           <div className="usage-cards">
             <div className="usage-card">
@@ -764,77 +884,20 @@ export default function UsageStatsPage(): React.JSX.Element {
       ) : null}
 
       {/* ── 网关外用量(独立统计)─────────────────────────────────────────
-          与上面整页 **完全独立**:另一张表、另一套量纲。刻意不并进上面的
+          「所有」模式挂在页尾;「仅网关外」模式由 externalSection("only") 单独画。
+          与网关那套 **完全独立**:另一张表、另一套量纲。刻意不并进上面的
           KPI/趋势/环形图 —— `calls`(上游调用)与 `requests`(客户端请求)
           不是一回事,相加只会得到一个谁也解释不了的数。 */}
-      {ext && (ext.totals.tokens > 0 || ext.totals.calls > 0) ? (
-        <section className="usage-sec">
-          <h2>网关外用量</h2>
-          <p className="hint">
-            只统计**没经过网关**的调用(DSH 直连其它 provider),来自会话事件实时采集;
-            与上面的数字**不可相加**:这里是上游调用次数,上面是客户端请求数。
-          </p>
-          <div className="usage-cards">
-            <div className="usage-card">
-              <div className="usage-card-k">Tokens 用量</div>
-              <div className="usage-card-v">{full(ext.totals.tokens)}</div>
-              <div className="usage-card-s">
-                输入 {full(ext.totals.prompt_tokens)} · 输出 {full(ext.totals.completion_tokens)}
-              </div>
-            </div>
-            <div className="usage-card">
-              <div className="usage-card-k">上游调用</div>
-              <div className="usage-card-v">{full(ext.totals.calls)}</div>
-              <div className="usage-card-s">含重试,不含网关已处理的部分</div>
-            </div>
-            <div className="usage-card">
-              <div className="usage-card-k">平均缓存命中</div>
-              <div className="usage-card-v">{rateText(ext.totals.cache_hit_rate)}</div>
-              <div className="usage-card-s">{fmtCount(ext.totals.cached_tokens)} 缓存命中</div>
-            </div>
-            <div className="usage-card">
-              <div className="usage-card-k">活跃天数</div>
-              <div className="usage-card-v">{ext.totals.active_days}</div>
-              <div className="usage-card-s">{ext.from ?? "—"} → {ext.to ?? "—"}</div>
-            </div>
-          </div>
+      {source === "all" ? externalSection("append") : null}
 
-          <ol className="usage-rank">
-            {ext.series.map((row, i) => (
-              <li key={row.key}>
-                <div className="usage-row">
-                  <span className="usage-rank-i">{i + 1}</span>
-                  <i
-                    className="usage-dot"
-                    style={{ background: MODEL_COLORS[i % MODEL_COLORS.length] }}
-                  />
-                  <span className="usage-name">
-                    <span className="usage-name-m">{row.model}</span>
-                    <span className="usage-name-s">
-                      {row.provider} · {fmtCount(row.calls)} 次调用
-                    </span>
-                  </span>
-                  <span className="usage-val">{full(row.tokens)}</span>
-                  <span className="usage-pct">{fmtPct(row.percent)}</span>
-                </div>
-              </li>
-            ))}
-          </ol>
-
-          <p className="hint usage-foot">
-            统计截至 {ext.last_day ?? "—"} · 区间 {ext.from ?? "—"} → {ext.to ?? "—"} ·
-            数据源 stats_external_daily(实时采集,无历史回填)
-          </p>
-        </section>
-      ) : null}
-
-      {data && !hasData ? (
+      {source === "gateway" && data && !hasData ? (
         <p className="hint">
-          这个区间内没有用量数据(库里有数据的范围是 {data.from} → {data.last_day ?? data.to},换一个时间范围看看)。
+          这个区间内没有网关用量(库里有数据的范围是 {data.from} → {data.last_day ?? data.to},换一个时间范围看看)。
         </p>
       ) : null}
-
-      {!data && !loading ? <p className="hint">暂无留存数据(网关处理请求后自动按天落盘)。</p> : null}
+      {source === "gateway" && !data && !loading ? (
+        <p className="hint">暂无留存数据(网关处理请求后自动按天落盘)。</p>
+      ) : null}
     </React.Fragment>
   );
 }

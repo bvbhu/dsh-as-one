@@ -1477,6 +1477,11 @@ body {
   gap: 10px;
   margin-top: 14px;
 }
+/* 4 张卡的场景(网关外用量):上面那排写死 5 列,直接复用会在右侧空一格、
+   卡片也被压窄。这里单独给 4 列,宽度与上方 5 列卡视觉一致。 */
+.usage-cards-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .usage-card {
   background: var(--surface);
   border: 1px solid var(--border);

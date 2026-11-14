@@ -44,6 +44,7 @@ import {
 import type { CooldownRule, RuleGroups, TierRule } from "./settings-rules";
 import type {
   DeploymentItem,
+  LogicalModelGroup,
   RequestLogContentMode,
   RequestLogStatus,
   SettingSpec,
@@ -220,6 +221,9 @@ export default function SettingsPage(): React.JSX.Element {
   // 部署数据(调度规则编辑器的 provider / 模型候选)
   const [deployments, setDeployments] = React.useState<DeploymentItem[]>([]);
 
+  // 逻辑模型(「辅助请求路由」的候选:重路由只认 as-one 的抽象模型名)
+  const [logicalModels, setLogicalModels] = React.useState<LogicalModelGroup[]>([]);
+
   // 请求日志(独立端点,不在 settings 字段契约里)
   const [reqLog, setReqLog] = React.useState<RequestLogStatus | null>(null);
   const [logMsg, setLogMsg] = React.useState("");
@@ -263,10 +267,19 @@ export default function SettingsPage(): React.JSX.Element {
     }
   }
 
+  async function loadLogicalModels(): Promise<void> {
+    try {
+      setLogicalModels(await rendererApi.getLogicalModels());
+    } catch {
+      // 同上:候选拉不到时路由卡退化成自由输入的当前值,不影响保存。
+    }
+  }
+
   React.useEffect(() => {
     void load();
     void loadReqLog();
     void loadDeployments();
+    void loadLogicalModels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -719,6 +732,67 @@ export default function SettingsPage(): React.JSX.Element {
     return out;
   }
 
+  /* ── 辅助请求路由(route.*)─────────────────────────────────────── */
+
+  /**
+   * 三张「车道」的字段键 —— 与 `src/reroute.ts` 的 `REROUTE_SETTING_KEYS` 逐字对应。
+   *
+   * 为什么单独开一张卡:这三个键 2026-11-14 之前只在 `SETTING_FIELDS` 里登记过、
+   * 页面上**从来没有渲染入口**(`sectionCard` 只认 external_refresh / retry / ui),
+   * 于是一个能改行为的功能变成了只能改库的死开关。
+   */
+  const ROUTE_KEYS = ["route.compact", "route.vision", "route.session_title"] as const;
+
+  function routingCard(): React.JSX.Element | null {
+    const specs = ROUTE_KEYS.map((k) => specOf(k)).filter((s): s is SettingSpec => s !== undefined);
+    if (specs.length === 0) return null;
+    const names = logicalModels.map((m) => m.model).filter((m) => m !== "").sort();
+    const labelOf = (name: string): string => {
+      const hit = logicalModels.find((m) => m.model === name);
+      return hit?.display_name && hit.display_name !== name ? `${hit.display_name}(${name})` : name;
+    };
+    return (
+      <section key="route" id="route" className="ui-card">
+        <div className="ui-card-head">
+          <h2 className="ui-card-title">辅助请求路由</h2>
+          <span className="ui-card-sub">压缩摘要 / 图片解析 / 会话标题走哪个模型</span>
+        </div>
+        <p className="ui-field-hint">
+          宿主除了你这一轮对话,还会自己发三种辅助请求。这里给每种请求单独指定 as-one 里的
+          <b>逻辑模型</b>;留空 = <b>不重路由</b>,按客户端给的模型原样走。配了库里没有的模型会回落原模型并告警。
+        </p>
+        <div className="ui-fields">
+          {specs.map((spec) => {
+            const value = draft.route?.[spec.key] ?? "";
+            // 历史值(库里配的、但当前逻辑模型列表里没有)也要留在选项里,
+            // 否则下拉框会显示成第一项「不重路由」,用户一保存就把配置抹了。
+            const options = value === "" || names.includes(value) ? names : [value, ...names];
+            return (
+              <div key={spec.key} className="ui-field">
+                <div className="ui-field-head">
+                  <span className="ui-field-label">{spec.label}</span>
+                </div>
+                <select
+                  className="ui-select"
+                  value={value}
+                  disabled={busy}
+                  onChange={(ev) => setValue("route", spec, ev.target.value)}
+                >
+                  <option value="">不重路由(跟随客户端)</option>
+                  {options.map((n) => (
+                    <option key={n} value={n}>
+                      {labelOf(n)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
   /** 单张设置卡(外部数据刷新 / 重试策略 / 界面)。 */
   function sectionCard(section: "external_refresh" | "retry" | "ui"): React.JSX.Element | null {
     const specs = specsOf(section);
@@ -827,6 +901,7 @@ export default function SettingsPage(): React.JSX.Element {
             {/* 设置卡:外部数据刷新 → 调度规则(每档一张平级面板)→ 重试策略 → 界面 */}
             {sectionCard("external_refresh")}
             {schedulerPanels()}
+            {routingCard()}
             {sectionCard("retry")}
             {sectionCard("ui")}
 

@@ -270,18 +270,18 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     key: "route.compact",
     def: "",
     kind: "str",
-    label: "压缩摘要走的模型(空 = 不重路由)",
+    label: "压缩摘要",
   },
   {
     key: "route.vision",
     def: "",
     kind: "str",
-    label: "图片解析走的模型(空 = 不做图像桥,必须能看图)",
+    label: "图片解析(必须能看图)",
   },
   {
     key: "route.session_title",
     def: "",
     kind: "str",
-    label: "会话标题走的模型(空 = 不重路由)",
+    label: "会话标题",
   },
 ];
