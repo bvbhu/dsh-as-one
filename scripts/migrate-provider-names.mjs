@@ -11,7 +11,7 @@
  * | workbuddy | workbuddy | 保持(独立渠道,与 hyperai 是两套凭据/额度) |
  * | tokenrhythm | tokenrhythm | 保持(独立中转:tr-alpha-channel / mimo / qwen) |
  * | longcat | longcat | 保持(LongCat-2.5-Preview) |
- * | deepseek-official | deepseek-official | 保持(DeepSeek 官方,模型名也是官方口径) |
+ * | deepseek-official | deepseek-account | **改写**(同一把官方 key,统一取 DSH 侧的名字) |
  * | stepfun | stepfun | 保持(step-5-preview) |
  * | clawbrain | clawbrain | 保持(clawbrain-pro) |
  * | sensenova / trae / qoder / minimax / maas / opencsg / openrouter / hyperai | 自己 | 保持 |
@@ -43,6 +43,9 @@ import { DatabaseSync } from "node:sqlite";
 /** 逐条改写表:键是原样字符串,值是目标名。只放**已核对**的条目。 */
 const RENAMES = {
   workbuddy_yn: "hyperai",
+  // 2026-11-14 用户定案:同一把 DeepSeek 官方 key 统一叫 deepseek-account
+  // (最初那版写的是反方向,已按用户要求翻转)。
+  "deepseek-official": "deepseek-account",
 };
 
 /** 已核对、确认不改的历史名(留档,脚本不会碰它们)。 */
@@ -50,7 +53,6 @@ const KEEP = [
   "workbuddy",
   "tokenrhythm",
   "longcat",
-  "deepseek-official",
   "stepfun",
   "clawbrain",
   "sensenova",

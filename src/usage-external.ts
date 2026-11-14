@@ -68,7 +68,9 @@ export function sessionIdOf(value: unknown): string {
  *   `deepseek-v4-flash` / `sensenova-6.8-flash-lite` / `glm-5.2` 这一套;
  * - `minmax` 是建 provider 时的笔误,与 `minimax2` 跑同一个 `minimax-m3.1-flash`;
  * - `yn` / `yn-deepseek` / `hyperai-deepseek` 的 baseURL 都是 `ai.hyperai.icu`,
- *   与已核对的 `hyperai` 同一个上游(见 `stats_daily` 里历史行的证据)。
+ *   与已核对的 `hyperai` 同一个上游(见 `stats_daily` 里历史行的证据);
+ * - `deepseek-official` 与 `deepseek-account` 是同一把 DeepSeek 官方 key 的两个叫法,
+ *   统一取 `deepseek-account`(2026-11-14 用户定案,方向与最初那版相反)。
  */
 export const EXTERNAL_PROVIDER_RENAMES: Readonly<Record<string, string>> = {
 	"sensenova-1": "sensenova",
@@ -83,7 +85,7 @@ export const EXTERNAL_PROVIDER_RENAMES: Readonly<Record<string, string>> = {
 	yn: "hyperai",
 	"yn-deepseek": "hyperai",
 	"hyperai-deepseek": "hyperai",
-	"deepseek-account": "deepseek-official",
+	"deepseek-official": "deepseek-account",
 };
 
 /**
