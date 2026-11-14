@@ -1013,23 +1013,32 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
   /**
    * 分块摘要 →（必要时）单级归并 → 合成宿主认得的块流(只借用压缩算法)。
    *
-   * 2026-11-14 提速重做,四件事:
+   * 2026-11-14 提速重做,五件事:
    * 1. **块预算按目标模型窗口算**(`compactInputBudget`),不再写死 24k;
    * 2. **块并行**(`COMPACT_CONCURRENCY` 路),每块独立会话号,免得同一条亲和
    *    pin 把并发挤成串行(`concurrency=1` 的端点会直接 `all_busy`);
    * 3. **能省归并就省**(`needsMerge`):归并要再读写一遍全部 digest,实测占整次
    *    压缩 15%~25% 墙钟;
    * 4. **单块失败不拖垮整次**:重试一次(限流退避),仍失败就跳过 —— 只要还有
-   *    一块成功,就还能交出一份能用的检查点。
+   *    一块成功,就还能交出一份能用的检查点;
+   * 5. **会话模型兜底**(`fallbackModel`,2026-11-14 用户定案):压缩车道重试
+   *    无门时,块最后落到会话正在用的模型上再试一次 —— 换档前后的真实模型
+   *    都在会话逻辑模型的池子里,回落逻辑模型即全覆盖;窗口由会话模型自己的
+   *    真实成员把关(块体量照传 `minInputTokens`,装不下的成员路由不选)。
    */
   private async *compactStream(
     upstream: Upstream,
     request: UpstreamRequest,
     model: string,
+    fallbackModel?: string,
   ): AsyncGenerator<DshStreamChunk> {
     const started = Date.now();
-    const window = await this.contextWindowOf(model);
-    const budget = compactInputBudget(window);
+    const windows = await this.windowsOf(model);
+    // 预算按**成员里最大的窗口**算(真实模型就是它自己):块越大往返越少。
+    // 不再是「最小成员」—— 那个值会把 1M 成员的块压到 32k,块数翻几倍。
+    // 安全由两件事保证:请求上带 `minInputTokens`(选路避开装不下的成员),
+    // 以及失败时的减半重试(真落到小窗口成员也不丢内容)。
+    const budget = compactInputBudget(windows.max ?? windows.min);
     const plan = planCompactChunks(request.messages, { inputBudgetTokens: budget });
     const baseSession = String(request.extra?.session_id ?? request.prompt_cache_key ?? "anon");
     // 块多的时候把并发抬到上限:大区域(几十块)才是并发真正省时间的地方,
@@ -1039,25 +1048,39 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
 
     const digests: string[] = new Array<string>(plan.chunks.length).fill("");
     let failed = 0;
+    /** 走了会话模型兜底才救回来的块数(日志口径,也是兜底机制是否生效的证据)。 */
+    let fallbackUses = 0;
     /** 每块一个唯一后缀:并发的两条请求不能共用同一条亲和键。 */
     let slotSeq = 0;
 
     /** 一块(或切小后的半块)出一次 digest。 */
-    const runChunk = async (lines: string[], capTokens: number, depth: number): Promise<string> => {
+    const runChunk = async (
+      lines: string[],
+      capTokens: number,
+      depth: number,
+      constrain: boolean,
+    ): Promise<string> => {
       const slot = slotSeq;
       slotSeq += 1;
-      const body: UpstreamRequest = {
-        ...request,
-        stream: false,
-        messages: [{ role: "user", content: COMPACT_CHUNK_PROMPT + lines.join("\n") }],
-        max_tokens: Math.max(48, Math.floor(capTokens / (depth + 1))),
-        tools: undefined,
-        // 每块一条独立的亲和键:同一条键会把并发请求排到同一个凭据上,
-        // 那个凭据 `concurrency=1` 时后续请求直接 `all_busy`。
-        prompt_cache_key: `${baseSession}#${slot}`,
-        extra: { ...(request.extra ?? {}), session_id: `${baseSession}#${slot}` },
-      };
+      const promptChars = COMPACT_CHUNK_PROMPT.length + lines.join("\n").length;
+      let constrainThis = constrain;
+      /** 兜底每块只试一次:会话模型也救不回来就该走减半,不能无限叠车道。 */
+      let fallbackTried = false;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const body: UpstreamRequest = {
+          ...request,
+          stream: false,
+          messages: [{ role: "user", content: COMPACT_CHUNK_PROMPT + lines.join("\n") }],
+          max_tokens: Math.max(48, Math.floor(capTokens / (depth + 1))),
+          tools: undefined,
+          // 选路门槛:这块报文体量多少,就只让装得下它的真实模型参与。
+          // 按「字符数 / 3」高估一点(中文 1 token ≈ 1 字),宁可多排除一台。
+          minInputTokens: constrainThis ? Math.max(1024, Math.ceil(promptChars / 3)) : undefined,
+          // 每块一条独立的亲和键:同一条键会把并发请求排到同一个凭据上,
+          // 那个凭据 `concurrency=1` 时后续请求直接 `all_busy`。
+          prompt_cache_key: `${baseSession}#${slot}`,
+          extra: { ...(request.extra ?? {}), session_id: `${baseSession}#${slot}` },
+        };
         if (abortedNow(request.clientSignal)) return "";
         try {
           const result = await upstream.complete(body);
@@ -1073,14 +1096,31 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
             continue;
           }
           if (attempt === 1) {
-            // 其它错误先短暂让一下再原样重试一次。
+            // ① 先**放宽窗口约束**重试一次:有可能是「装得下的大窗口成员都忙/冷却」,
+            //    这时候让路由自由选一台反而更划算(选到小窗口会 400,下一步再减半)。
             await sleepMs(300);
+            constrainThis = false;
             continue;
           }
-          // 还是失败 → 按错误性质分流,别一律重试:
+          // 还是失败 → 先试**会话模型兜底**(2026-11-14 用户定案),再按错误性质分流:
+          // · 兜底:压缩车道(如 `free` 池)全忙/全冷却/限流时,会话正在用的模型
+          //   有**独立配额**,块的体量照传 `minInputTokens`,由会话模型的池子按
+          //   真实成员窗口把关 —— 换档前后的成员都在池子里,不需要单独记历史;
           // · 报文被拒(400/422):多半就是「这一块太长」,减半再试,内容一点不丢;
           // · 限流(429,已退避两次)与其它 5xx/连接/鉴权:切小只会把同一个错误
           //   复制两份,如实放弃这一块并记日志。
+          if (!fallbackTried) {
+            fallbackTried = true;
+            const rescued = await this.completeOnFallback(
+              fallbackModel,
+              body,
+              Math.max(1024, Math.ceil(promptChars / 3)),
+            );
+            if (rescued !== undefined) {
+              fallbackUses += 1;
+              return rescued;
+            }
+          }
           const worthSplitting = kind === "bad_request";
           if (!worthSplitting || depth >= 2) {
             failed += 1;
@@ -1103,8 +1143,8 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
           }
           const halfCap = Math.max(48, Math.floor(capTokens / 2));
           const [a, b] = await Promise.all([
-            runChunk(halves[0], halfCap, depth + 1),
-            runChunk(halves[1], halfCap, depth + 1),
+            runChunk(halves[0], halfCap, depth + 1, true),
+            runChunk(halves[1], halfCap, depth + 1, true),
           ]);
           return [a, b].filter((part) => part.trim() !== "").join("\n\n");
         }
@@ -1113,7 +1153,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     };
 
     await eachLimit(plan.chunks, concurrency, async (chunk, index) => {
-      digests[index] = await runChunk(chunk.lines, chunk.capTokens, 0);
+      digests[index] = await runChunk(chunk.lines, chunk.capTokens, 0, true);
     });
 
     const kept = digests.filter((d) => d.trim() !== "");
@@ -1147,10 +1187,10 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     if (!summary.trim()) throw new AsOneLlmError("compact 摘要为空", "SERVER");
 
     console.info(
-      `[as-one] compact model=${model} budget=${budget} 块=${plan.chunks.length}` +
-        `(并发 ${concurrency},失败 ${failed}) 区域≈${plan.regionTokens}tok` +
-        ` 截断=${plan.trimmedChars}字符 归并=${merged ? "是" : "否"}` +
-        ` 耗时=${Date.now() - started}ms`,
+      `[as-one] compact model=${model} 窗口=${windows.min ?? "?"}/${windows.max ?? "?"}` +
+        ` 预算=${budget} 块=${plan.chunks.length}(并发 ${concurrency},失败 ${failed},兜底 ${fallbackUses})` +
+        ` 区域≈${plan.regionTokens}tok 截断=${plan.trimmedChars}字符` +
+        ` 归并=${merged ? "是" : "否"} 耗时=${Date.now() - started}ms`,
     );
 
     yield { type: "block-start", index: 0, blockType: "text" };
@@ -1159,13 +1199,63 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     yield { type: "finish", reason: { kind: "stop" } };
   }
 
-  /** 目标模型的窗口(拿不到 → undefined,预算走保守兜底)。 */
-  private async contextWindowOf(model: string): Promise<number | undefined> {
-    try {
-      const info = await this.resolveModel(this.provider, model);
-      return positiveInt(info.context?.contextWindow);
-    } catch {
+  /**
+   * 会话模型兜底:压缩车道救不回来的块,拿到会话正在用的模型上试最后一次。
+   *
+   * 「按真实模型分配窗口」在这里落地 —— 兜底不是无脑转发:
+   * - 会话模型装不下这块(估算体量超过池子里**最大**成员的窗口)→ 直接不试,
+   *   省一次注定 400 的往返,交给减半重试;
+   * - 装得下 → `minInputTokens` 照传,池子里装不下的真实成员路由不会选,
+   *   选中的那台就是「窗口装得下这块的真实模型」。
+   *
+   * 失败一律返回 `undefined`(调用方继续走减半/放弃),兜底绝不放大故障。
+   */
+  private async completeOnFallback(
+    model: string | undefined,
+    body: UpstreamRequest,
+    minInputTokens: number,
+  ): Promise<string | undefined> {
+    if (model === undefined) return undefined;
+    const windows = await this.windowsOf(model);
+    if (windows.max !== undefined && minInputTokens > windows.max) return undefined;
+    const fbUpstream = this.rt.resolveUpstream(model);
+    if (!fbUpstream) {
+      console.warn(`[as-one] compact 会话模型兜底不可用(库里没有 ${model})`);
       return undefined;
+    }
+    try {
+      const result = await fbUpstream.complete({ ...body, model, minInputTokens });
+      const text = result.choices?.[0]?.message?.content;
+      return typeof text === "string" && text.trim() !== "" ? text : undefined;
+    } catch (err) {
+      console.warn(
+        `[as-one] compact 会话模型兜底失败(${model}):${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * 目标模型的窗口,两个口径一起给:
+   *
+   * - `min` —— 逻辑模型**成员里最小**的那个窗口(保证任何一次选路都装得下);
+   * - `max` —— **成员里最大**的那个(压缩分块用它切块,再由请求上的
+   *   `minInputTokens` 让选路避开装不下的成员)。
+   *
+   * 真实模型两者同值。两个都拿不到 → `undefined`,预算走保守兜底。
+   */
+  private async windowsOf(model: string): Promise<{ min?: number; max?: number }> {
+    try {
+      const entries = await this.rt.listModels();
+      const entry = entries.find((e) => e.id === model);
+      if (!entry) return {};
+      const min = positiveInt(entry.max_input_tokens);
+      const max = positiveInt(entry.max_member_input_tokens) ?? min;
+      return { min, max };
+    } catch {
+      return {};
     }
   }
 
@@ -1211,7 +1301,17 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     // 报文体,多一个未知字段就可能被上游 400(见 types.ts 的 extra 说明)。
     if (options.purpose === "compaction") {
       if (rerouted) {
-        yield* this.compactStream(upstream, request, model);
+        // 会话模型兜底(2026-11-14 用户定案):route.compact 车道的块失败时,
+        // 最后落到**会话正在用的模型**上再试一次。换档(网关内部换真实端点)
+        // 前后的模型同属会话逻辑模型的池子,回落逻辑模型 = 两台都能接 ——
+        // 不需要单独记「切换前用的是哪台」。没重路由时会话模型就是主车道,
+        // 没有第二个车道可兜,不传。
+        yield* this.compactStream(
+          upstream,
+          request,
+          model,
+          options.model === model ? undefined : options.model,
+        );
         return;
       }
       // 🧯 安全网:没配 `route.compact` 时,宿主的原生摘要请求是**整段历史一条
@@ -1219,7 +1319,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
       //    实测失败长这样:7,390 条消息 / 12.0M 字符 → 3,429,735 token → 400
       //    `context_length_exceeded`,用户看到「Compaction could not produce a
       //    useful summary」。窗口未知时不接管(判不了就别动)。
-      const window = await this.contextWindowOf(model);
+      const window = (await this.windowsOf(model)).min;
       if (window !== undefined && estimateMessagesTokens(request.messages) > window - 1024) {
         console.warn(
           `[as-one] compact 请求装不下目标窗口(窗口 ${window}),改走分块摘要`,
