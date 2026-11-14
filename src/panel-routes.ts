@@ -30,10 +30,8 @@ export const PANEL_METHODS = [
   "getStatus",
   "getRuntime",
   "restartGateway",
-  // 用量
+  // 用量(网关 + 网关外,由 getUsageHistory 的 source 参数切换)
   "getUsageHistory",
-  // 网关外用量(独立表,实时采集)
-  "getExternalUsage",
   // 逻辑模型
   "getLogicalModels",
   "writeLogicalModel",

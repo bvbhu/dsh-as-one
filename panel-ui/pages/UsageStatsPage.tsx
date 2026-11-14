@@ -16,7 +16,6 @@
 import React from "react";
 import { rendererApi } from "../api";
 import type {
-  ExternalUsage,
   UsageGranularity,
   UsageGroup,
   UsageHistory,
