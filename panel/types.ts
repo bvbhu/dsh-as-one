@@ -160,6 +160,17 @@ export type UsageRange = "all" | "7" | "30" | "90" | "365";
 export type UsageGranularity = "day" | "month";
 export type UsageGroup = "model" | "logical";
 
+/**
+ * 用量数据来源。
+ *
+ * - `gateway`  —— 只统计 `stats_daily`(经过网关的请求);
+ * - `external` —— 只统计 `stats_external_daily`(DSH 直连其它 provider);
+ * - `all`      —— 两张表**直接相加**(2026-11-14 用户定案):tokens 同口径相加,
+ *                 调用次数取「一次调用」语义相加(网关侧是客户端请求数、
+ *                 外部侧是上游调用数,重试会让后者略大,页面会标注)。
+ */
+export type UsageSource = "all" | "gateway" | "external";
+
 export interface UsageTotals {
   tokens: number;
   requests: number;
@@ -242,6 +253,8 @@ export interface UsageProvider {
 export interface UsageHistory {
   generated_at: string;
   source: string;
+  /** 这份数据是哪一档来源(与 `source` 的字面量表不同,这里是枚举)。 */
+  scope: UsageSource;
   range: UsageRange;
   granularity: UsageGranularity;
   group: UsageGroup;
@@ -1194,15 +1207,8 @@ export interface RendererApi {
     range: UsageRange,
     granularity: UsageGranularity,
     group: UsageGroup,
+    source?: UsageSource,
   ): Promise<UsageHistory>;
-  /**
-   * 网关外用量(DSH 直连其它 provider)。
-   *
-   * 与 {@link getUsageHistory} 分开取:两者量纲不同(`calls` vs `requests`)、
-   * 时间窗口也可能不同(外部表从插件安装当天开始有数据),混在一个响应里会让
-   * 「总量」变成两套口径的和。
-   */
-  getExternalUsage(range: UsageRange): Promise<ExternalUsage>;
   // 逻辑模型
   getLogicalModels(): Promise<LogicalModelGroup[]>;
   writeLogicalModel(input: LogicalModelsWriteInput): Promise<ApiResult>;

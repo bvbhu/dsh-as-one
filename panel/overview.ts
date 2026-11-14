@@ -73,6 +73,7 @@ import type {
   UsageRange,
   UsageSeries,
   UsageSeriesModel,
+  UsageSource,
   UsageTotals,
 } from "./types.js";
 import type { PanelContext } from "./context.js";
@@ -89,9 +90,12 @@ export interface OverviewDomain {
     getStatus(): Promise<GatewayStatus>;
     restartGateway(): Promise<ApiResult>;
     getRuntime(): Promise<RuntimeSnapshot>;
-    getUsageHistory(range: UsageRange, granularity: UsageGranularity, group: UsageGroup): Promise<UsageHistory>;
-    /** 网关外用量(独立口径,不与 getUsageHistory 相加)。 */
-    getExternalUsage(range: UsageRange): Promise<ExternalUsage>;
+    getUsageHistory(
+      range: UsageRange,
+      granularity: UsageGranularity,
+      group: UsageGroup,
+      source?: UsageSource,
+    ): Promise<UsageHistory>;
     getMetrics(days?: number): Promise<MetricsSnapshot>;
     getRecentRequests(limit?: number): Promise<RecentRequest[]>;
     /**
@@ -126,6 +130,28 @@ export function createOverviewDomain(ctx: PanelContext, deps: OverviewDomainDeps
     prompt: number;
     completion: number;
     cached: number;
+  }
+
+  /**
+   * `stats_daily` 与 `stats_external_daily` 归一后的同一行形状。
+   *
+   * 两张表的列名不同(requests vs calls、logical_model 有无),但**统计语义可以对齐**:
+   * 一行就是一个 (day, provider, model) 的用量。归一之后聚合只写一遍,
+   * 「所有」自然就是在同一个循环里相加,不再有两套 KPI/趋势/排名。
+   */
+  interface UsageStatRow {
+    day: string;
+    provider: string;
+    model: string;
+    logical_model: string | null;
+    /** 该行代表多少次调用:网关侧取 requests,外部侧取 calls。 */
+    count: number;
+    fails: number;
+    prompt: number;
+    completion: number;
+    cached: number;
+    /** 是否来自 `stats_daily`(逻辑模型视图的跳过规则只对网关行生效)。 */
+    gateway: boolean;
   }
 
   const gatewayReady = (): boolean => ctx.gatewayState.error === null && ctx.gatewayState.gateway !== null;
@@ -482,33 +508,79 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       range: UsageRange,
       granularity: UsageGranularity,
       group: UsageGroup,
+      source: UsageSource = "all",
     ): Promise<UsageHistory> {
       const rng: UsageRange = (["all", "7", "30", "90", "365"] as UsageRange[]).includes(range)
         ? range
         : "all";
       const gran: UsageGranularity = granularity === "month" ? "month" : "day";
       const grp: UsageGroup = group === "logical" ? "logical" : "model";
+      const src: UsageSource =
+        source === "gateway" || source === "external" ? source : "all";
 
-      const allRows = ctx.db.statsDaily.range("0000-01-01", "9999-12-31");
+      // 两张表先归一成同一种行,再走同一套聚合 —— 这就是「所有 = 直接相加」的实现:
+      // 没有第二套口径,也没有"选择不相加"的特殊分支。
+      const statRow = (
+        row: {
+          day: string;
+          provider: string;
+          model: string;
+          logical_model?: string | null;
+          prompt_tokens: number;
+          cached_tokens: number;
+          completion_tokens: number;
+        },
+        count: number,
+        fails: number,
+        gateway: boolean,
+      ): UsageStatRow => ({
+        day: row.day,
+        provider: row.provider,
+        model: row.model,
+        logical_model: row.logical_model ?? null,
+        count,
+        fails,
+        prompt: row.prompt_tokens,
+        completion: row.completion_tokens,
+        cached: row.cached_tokens,
+        gateway,
+      });
+
+      const gatewayRows: UsageStatRow[] =
+        src === "external"
+          ? []
+          : ctx.db.statsDaily
+              .range("0000-01-01", "9999-12-31")
+              .map((r) => statRow(r, r.requests, r.fails, true));
+      const externalRows: UsageStatRow[] =
+        src === "gateway"
+          ? []
+          : ctx.db.statsExternalDaily
+              .range("0000-01-01", "9999-12-31")
+              .map((r) => statRow(r, r.calls, 0, false));
+      const allRows: UsageStatRow[] = [...gatewayRows, ...externalRows];
+
       const sortedDays = [...new Set(allRows.map((r) => r.day))].sort();
       const { from, to } = usageWindow(rng, sortedDays);
-      const rows = from !== null && to !== null ? ctx.db.statsDaily.range(from, to) : [];
+      const rows =
+        from !== null && to !== null ? allRows.filter((r) => r.day >= from && r.day <= to) : [];
 
       // ⚠️ **tokens 合计 = prompt + completion**,cached 是 prompt 的**子集**、
       // 单独一列(Nexus `_RAW_KEYS` 口径)。以前这里写成
       // `prompt + completion + cached`,于是 cached 被双计,全页数值虚高,而且与
       // 同一行里的 `cache_miss = prompt - cached` 自相矛盾。
-      const tokensOf = (row: typeof allRows[number]): number =>
-        row.prompt_tokens + row.completion_tokens;
+      const tokensOf = (row: UsageStatRow): number => row.prompt + row.completion;
 
       // ⚠️ **group=logical 时 `logical_model` 为空的行整行跳过**(S9 定案,
       // 2026-10-14):直连真实模型的用量没有逻辑名,落进「按逻辑模型」视图会把
       // 一个 `provider/model` 伪键塞进榜/趋势/供应商环/KPI。Nexus 的口径是
       // **没有「其他」桶、直接跳过**(直连 ≠ 逻辑模型)。
-      const skipRow = (row: typeof allRows[number]): boolean =>
-        grp === "logical" && !(row.logical_model ?? "").trim();
+      // 只对**网关行**跳过没有逻辑名的行(S9 定案)。外部表本来就没有逻辑模型,
+      // 对它们也跳过的话,「仅网关外 + 按逻辑模型」会整页空白。
+      const skipRow = (row: UsageStatRow): boolean =>
+        grp === "logical" && row.gateway && !(row.logical_model ?? "").trim();
 
-      const seriesKeyOf = (row: typeof allRows[number]): string =>
+      const seriesKeyOf = (row: UsageStatRow): string =>
         grp === "model"
           ? `${row.provider}/${row.model}`
           : String(row.logical_model ?? "").trim() || `${row.provider}/${row.model}`;
@@ -536,20 +608,20 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       const activeDays = new Set<string>();
       const totals: RowAgg = { tokens: 0, requests: 0, fails: 0, prompt: 0, completion: 0, cached: 0 };
 
-      const addTo = (agg: RowAgg, row: typeof allRows[number], tokens: number): void => {
+      const addTo = (agg: RowAgg, row: UsageStatRow, tokens: number): void => {
         agg.tokens += tokens;
-        agg.requests += row.requests;
+        agg.requests += row.count;
         agg.fails += row.fails;
-        agg.prompt += row.prompt_tokens;
-        agg.completion += row.completion_tokens;
-        agg.cached += row.cached_tokens;
+        agg.prompt += row.prompt;
+        agg.completion += row.completion;
+        agg.cached += row.cached;
       };
 
       for (const row of rows) {
         if (skipRow(row)) continue; // S9:直连行不进逻辑模型视图
         const bucketKey = gran === "month" ? row.day.slice(0, 7) : row.day;
         const tokens = tokensOf(row);
-        if (tokens > 0 || row.requests > 0) activeDays.add(row.day);
+        if (tokens > 0 || row.count > 0) activeDays.add(row.day);
         addTo(totals, row, tokens);
 
         const skey = seriesKeyOf(row);
@@ -766,7 +838,13 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
 
       return {
         generated_at: new Date().toISOString(),
-        source: "stats_daily",
+        source:
+          src === "gateway"
+            ? "stats_daily"
+            : src === "external"
+              ? "stats_external_daily"
+              : "stats_daily + stats_external_daily",
+        scope: src,
         range: rng,
         granularity: gran,
         group: grp,

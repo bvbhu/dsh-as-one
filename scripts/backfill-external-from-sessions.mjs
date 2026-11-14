@@ -30,11 +30,11 @@
 
 import { build } from "esbuild";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { zstdDecompressSync } from "node:zlib";
+import { listSessionFiles, sessionEvents } from "./lib/session-events.mjs";
 
 const APPLY = process.argv.includes("--apply");
 const dbArgIdx = process.argv.indexOf("--db");
@@ -57,89 +57,35 @@ await build({
 const { ExternalUsageFold, GATEWAY_PROVIDER_HISTORY, renameExternalProvider } =
 	await import(pathToFileURL(bundlePath).href);
 
-// ── 2. 读会话文件(zstd 多帧:每次追加会新开一帧)────────────────────
-const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
-
-/** 一个 .zstd 文件可能是多帧拼接,逐帧解压后拼回文本。 */
-function readZstdFrames(file) {
-	const buf = readFileSync(file);
-	const cuts = [];
-	let i = 0;
-	while ((i = buf.indexOf(ZSTD_MAGIC, i)) !== -1) {
-		cuts.push(i);
-		i += 4;
-	}
-	if (cuts.length === 0) throw new Error("没有 zstd 帧头: " + file);
-	const parts = [];
-	let start = 0;
-	for (let k = 1; k <= cuts.length; k++) {
-		const end = k < cuts.length ? cuts[k] : buf.length;
-		try {
-			parts.push(zstdDecompressSync(buf.subarray(start, end)));
-			start = end;
-		} catch {
-			// 压缩流内部恰好出现 magic → 把这一段并到下一帧再试
-		}
-	}
-	if (start < buf.length) parts.push(zstdDecompressSync(buf.subarray(start)));
-	return Buffer.concat(parts).toString("utf8");
-}
-
-function walk(dir, out = []) {
-	let entries;
-	try {
-		entries = readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return out;
-	}
-	for (const e of entries) {
-		const p = join(dir, e.name);
-		if (e.isDirectory()) walk(p, out);
-		else if (e.name.endsWith(".jsonl.zstd")) out.push(p);
-	}
-	return out;
-}
-
+// ── 2. 会话文件(读取 + 跨会话去重都在 scripts/lib/session-events.mjs)──
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? ".";
-const roots = [join(HOME, ".dsh", "sessions"), join(HOME, ".dsh", "sessions-archive")];
-
-// 同一会话可能在 sessions 与 sessions-archive 各留一份:按会话目录名去重,留文件大的那个。
-const bySessionId = new Map();
-for (const file of roots.flatMap((r) => walk(r))) {
-	const sessionId = file.split(/[\\/]/).at(-2) ?? file;
-	const size = readFileSync(file).length;
-	const prev = bySessionId.get(sessionId);
-	if (!prev || size > prev.size) bySessionId.set(sessionId, { file, size });
-}
+const sessionFiles = listSessionFiles(HOME);
 
 // ── 3. 回放事件 ────────────────────────────────────────────────────
 const GATEWAY = new Set(GATEWAY_PROVIDER_HISTORY);
 /** `day|provider|model` → 累计增量 */
 const agg = new Map();
 let fileCount = 0;
-let badFiles = 0;
 let eventCount = 0;
 let sampleCount = 0;
 
-for (const { file } of bySessionId.values()) {
-	let text;
-	try {
-		text = readZstdFrames(file);
-	} catch {
-		badFiles += 1;
-		continue;
-	}
+/**
+ * 跨会话事件去重。
+ *
+ * DSH 的 fork / 换目录打开会把**同一份历史复制成多个会话**(不同 session id、
+ * 内容一模一样):实测 9-10 有 755 条消息的会话存在 5 份副本,`message.id` 完全相同。
+ * 不按事件去重就会把同一次调用算 5 遍 —— 那天会话侧 712M tokens,面板只记 127M。
+ *
+ * 键取 `message.id`(同一次模型响应唯一);缺 id 时退回 `time|turn|step`。
+ * `step/start` 与 `llm/retry-started` 用同样的 `time|turn|step` —— 复制品里
+ * 它们的时间戳也一字不差。
+ */
+const seenEvents = new Set();
+
+for (const { file } of sessionFiles) {
 	fileCount += 1;
 	const fold = new ExternalUsageFold();
-	for (const line of text.split("\n")) {
-		if (line === "") continue;
-		let event;
-		try {
-			event = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		if (typeof event?.type !== "string" || typeof event?.time !== "number") continue;
+	for (const event of sessionEvents(file, seenEvents)) {
 		eventCount += 1;
 		let samples;
 		try {
@@ -203,10 +149,17 @@ const keep = [];
 for (const day of days) {
 	const s = sessionDays.get(day);
 	const e = existingDays.get(day);
-	if (!s) keep.push({ day, reason: "会话没有这天" });
-	else if (!e) replace.push({ day, reason: "库里没有这天" });
-	else if (s.calls >= e.calls) replace.push({ day, reason: `会话 ${s.calls} ≥ 库里 ${e.calls}` });
-	else keep.push({ day, reason: `会话 ${s.calls} < 库里 ${e.calls}(会话被清理过)` });
+	if (!s) {
+		// 会话文件已不在(8-16~8-28),库里那份是面板导出,只能保留
+		keep.push({ day, reason: "会话没有这天(保留面板数据)" });
+	} else if (!e) {
+		replace.push({ day, reason: "库里没有这天" });
+	} else {
+		// ⚠️ **有会话就一律替换,不再比较大小**。
+		// 上一轮回填没做跨会话去重,把 fork 出来的 5 份副本各算了一遍,
+		// 库里的数字本身就是膨胀的;拿它当"更全"的依据只会把错误留下。
+		replace.push({ day, reason: `会话 ${s.calls} 次 / 覆盖库里 ${e.calls} 次` });
+	}
 }
 
 const sum = (rows, f) => rows.reduce((a, r) => a + f(r), 0);
@@ -246,7 +199,7 @@ const pct = (a, b) => (b === 0 ? "—" : `${((a / b) * 100).toFixed(1)}%`);
 
 console.log(`库:${DB_PATH}`);
 console.log(`模式:${APPLY ? "真写(会先备份)" : "预演(只读)"}\n`);
-console.log(`会话文件 ${bySessionId.size} 个(解析成功 ${fileCount},失败 ${badFiles}),事件 ${fmt(eventCount)},样本 ${fmt(sampleCount)}`);
+console.log(`会话文件 ${sessionFiles.length} 个,去重后事件 ${fmt(eventCount)},样本 ${fmt(sampleCount)}`);
 console.log(`会话侧(排除网关名 + 归并账号名):${fmt(sessionTotal.calls)} 次调用 / ${fmt(sessionTotal.tokens)} tokens`);
 console.log(`库里现状:${fmt(existingTotal.calls)} 次调用 / ${fmt(existingTotal.tokens)} tokens,${existing.length} 行`);
 if (delegationRows > 0) console.log(`  另有 ${delegationRows} 行 subagent 委派标记(provider=model=agent),将清除`);
