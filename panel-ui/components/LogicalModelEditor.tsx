@@ -7,8 +7,7 @@
  * - **拖动排序**:行首 ⠿ 手柄承担排序,拖到目标缝隙松手即重排,顺序原样提交;
  * - **拖出范围即删除**:把行拖出「档链」列表范围松手就删掉该档,拖动过程中
  *   列表描红并把提示改成「松手即删除该档」,避免误操作;
- * - 不再摆 ↑↓✕ 三个按钮;手柄聚焦时 ↑/↓ 调序、Delete/Backspace 删除,
- *   保留键盘可达性(纯拖拽对键盘用户不可用)。
+ * - 不再摆 ↑↓✕ 三个按钮;按用户定案**不保留键盘调序/删除**,档链只走拖拽。
  *
  * 受控组件:name/strategy/members 由页面持有,变更经回调回写;保存/取消由页面代理。
  * 档链 members 的**数组顺序就是优先级**(Nexus 同款:前端原样提交,后端不排序)。
@@ -161,15 +160,6 @@ export function LogicalModelEditor({
     onChangeMembers?.([...members, { provider: first?.provider ?? "", model: first?.model ?? "" }]);
   }
 
-  /** 键盘补偿:手柄聚焦时的上移/下移,结果**原样提交**。 */
-  function moveMember(i: number, delta: -1 | 1): void {
-    const j = i + delta;
-    if (j < 0 || j >= members.length) return;
-    const next = [...members];
-    [next[i], next[j]] = [next[j], next[i]];
-    onChangeMembers?.(next);
-  }
-
   function removeMember(i: number): void {
     onChangeMembers?.(members.filter((_, idx) => idx !== i));
   }
@@ -215,20 +205,6 @@ export function LogicalModelEditor({
         ? { x: e.clientX, y: e.clientY }
         : (lastPointRef.current ?? { x: e.clientX, y: e.clientY });
     if (outsideRect(rect, p.x, p.y, DROP_MARGIN)) removeMember(d.from);
-  }
-
-  /** ↑↓ 调序 / Delete 删除 —— 手柄的键盘等价操作。 */
-  function onHandleKeyDown(i: number, e: React.KeyboardEvent<HTMLSpanElement>): void {
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      moveMember(i, -1);
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      moveMember(i, 1);
-    } else if (e.key === "Delete" || e.key === "Backspace") {
-      e.preventDefault();
-      removeMember(i);
-    }
   }
 
   return (
@@ -310,13 +286,10 @@ export function LogicalModelEditor({
               <span
                 className="dragHandle"
                 draggable
-                role="button"
-                tabIndex={0}
-                title="拖动排序 · 拖出档链区域即删除(键盘:↑↓ 调序 / Delete 删除)"
-                aria-label={`拖动第 ${i + 1} 档排序,或按上下键调序、Delete 删除`}
+                title="拖动排序 · 拖出档链区域即删除"
+                aria-label={`第 ${i + 1} 档的拖动手柄`}
                 onDragStart={(e) => onHandleDragStart(i, e)}
                 onDragEnd={onHandleDragEnd}
-                onKeyDown={(e) => onHandleKeyDown(i, e)}
               >
                 ⠿
               </span>

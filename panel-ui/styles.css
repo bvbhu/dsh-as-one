@@ -890,11 +890,6 @@ body {
   cursor: grabbing;
 }
 
-.dragHandle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 /* 插入位置指示线 */
 .dropMarker {
   height: 2px;
