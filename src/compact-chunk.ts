@@ -236,31 +236,65 @@ export function planCompactChunks(
 }
 
 /**
- * 要不要再花一次往返做单级归并。
+ * 要不要再花一次往返,把逐块 digest 交给模型**整理归并**成一份。
  *
- * 归并**不是免费**的:它把全部 digest 再读一遍、再写一遍(4k 输入 / 4k 输出
- * ≈ 一次完整往返),而它的产物在句子上并不比「带标题直接拼」短多少。实测
- * 3M token 的区域里,归并这一步占整次压缩 15%~25% 的墙钟时间。所以只在
- * 「块确实多到拼起来读不下去」时才归并。
+ * 2026-11-15 用户定案:只要压出了多个片段,就必须由模型整理归并一次;
+ * 分块拼接只作为归并失败时的降级。理由不是长度而是**质量** —— 实测一次
+ * 压缩拿到的是「## 片段 1/2 / ## 片段 2/2」直接拼接:片段里同一行注释被
+ * 复制几百遍(生成退化)、工具输出原文和摘要模型自己的自言自语混在一起,
+ * 两块风格互相脱节。让模型重读全部片段、按主题重组并去噪,是稳定产出
+ * 一份连贯检查点的办法。
+ *
+ * 单块时 digest 本身已是一份摘要,默认不归并;但确定性清理发现它明显退化
+ * (`degenerate`) 时仍归并一次,把重复循环压掉。
  */
-export function needsMerge(chunkCount: number): boolean {
-  return chunkCount > 5;
+export function needsMerge(chunkCount: number, degenerate = false): boolean {
+  return chunkCount > 1 || degenerate;
 }
 
-/** 把逐块 digest 拼成一份直接可用的摘要(不归并时走这条)。 */
+/** 把逐块 digest 拼成一份直接可用的摘要(归并失败时的降级路径)。 */
 export function joinDigests(digests: readonly string[]): string {
   if (digests.length === 1) return digests[0] ?? "";
   return digests.map((digest, i) => `## 片段 ${i + 1}/${digests.length}\n${digest}`).join("\n\n");
 }
 
-/** 把逐块 digest 拼成一次归并请求的 user 文本。 */
+/**
+ * 确定性清理单块 digest —— 出块模型可能陷入**重复退化**:同一句话连着复制
+ * 几百行(实测片段 1/2 里一行注释重复 240+ 次),或夹带 ANSI/连续空行噪音。
+ * 归并前先压掉:既省归并输入,也避免归并模型照着重复内容继续抄。
+ *
+ * 只丢「长度 ≥ 40 且第 3 次以后出现」的整行:短结构行(`---`、标题、括号)
+ * 合法重复,不动它们。返回清理后文本与丢掉的字符数(供调用方判断是否退化)。
+ */
+export function cleanDigest(text: string): { text: string; removedChars: number } {
+  const lines = stage0Clean(text.split("\n"));
+  const seen = new Map<string, number>();
+  const out: string[] = [];
+  for (const line of lines) {
+    const key = line.trim();
+    if (key.length >= 40) {
+      const n = (seen.get(key) ?? 0) + 1;
+      seen.set(key, n);
+      if (n > 2) continue;
+    }
+    out.push(line);
+  }
+  const cleaned = out.join("\n").trim();
+  return { text: cleaned, removedChars: Math.max(0, text.length - cleaned.length) };
+}
+
+/** 把逐块 digest 拼成一次「整理归并」请求的 user 文本。 */
 export function buildMergePrompt(digests: readonly string[]): string {
   const parts = digests.map(
     (digest, i) => `## 分块 ${i + 1}/${digests.length}\n${digest}`,
   );
   return [
-    "把下列分块摘要合并成一份完整、不重复的会话检查点。保留精确文件路径、命令、",
-    "错误原文、标识符与数值；不要复述本指令，不要输出额外解释。",
+    "把下列分块摘要**整理归并成一份**连贯的会话检查点。要求:",
+    "1. 按主题重组,去掉跨块重复、同一句话的反复复制和任何机械重复的行;",
+    "2. 删掉工具输出原文、逐行代码/日志罗列,以及摘要模型自己的分析过程与自言自语",
+    "   (例如「Okay, I can see...」「让我查看...」),只保留结论;",
+    "3. 保留精确文件路径、命令、错误原文、标识符、数值、提交号与未完成任务;",
+    "4. 输出必须明显短于输入;不要复述本指令,不要输出额外解释、标题前缀或总结语。",
     "",
     ...parts,
   ].join("\n");

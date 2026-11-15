@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@as-one/core/src/gateway/types.js";
 import {
   buildMergePrompt,
+  cleanDigest,
   digestBudgetFor,
   flattenMessages,
   joinDigests,
@@ -80,12 +81,48 @@ describe("planCompactChunks", () => {
 });
 
 describe("buildMergePrompt", () => {
-  it("单级归并包含全部分块并保留精确信息要求", () => {
+  it("整理归并包含全部分块,并明确要求去重复/去自言自语", () => {
     const prompt = buildMergePrompt(["第一块", "第二块"]);
     expect(prompt).toContain("分块 1/2");
     expect(prompt).toContain("分块 2/2");
     expect(prompt).toContain("第一块");
     expect(prompt).toContain("精确文件路径");
+    expect(prompt).toContain("整理归并成一份");
+    expect(prompt).toContain("自言自语");
+    expect(prompt).toContain("工具输出原文");
+    expect(prompt).toContain("明显短于输入");
+  });
+});
+
+describe("cleanDigest", () => {
+  const line =
+    "// 这里的判断逻辑是:display_name 有值 → 只显示模型名;display_name 空 → 显示供应商 + 模型名";
+
+  it("连续几百行重复退化压成一行", () => {
+    const raw = ["- 第一条结论", ...Array(240).fill(line), "- 最后一条结论"].join("\n");
+    const { text: cleaned, removedChars } = cleanDigest(raw);
+    expect(cleaned.split("\n").filter((l) => l === line)).toHaveLength(1);
+    expect(cleaned).toContain("第一条结论");
+    expect(cleaned).toContain("最后一条结论");
+    expect(removedChars).toBeGreaterThan(raw.length * 0.9);
+  });
+
+  it("交错出现的重复长行也只留前两次", () => {
+    const raw = Array.from({ length: 20 }, (_, i) => [line, `- 第 ${i} 条不同内容`])
+      .flat()
+      .join("\n");
+    expect(cleanDigest(raw).text.split("\n").filter((l) => l === line)).toHaveLength(2);
+  });
+
+  it("短结构行的合法重复不动", () => {
+    const raw = ["---", "## 标题", "---", "## 标题", "---"].join("\n");
+    expect(cleanDigest(raw).text).toBe(raw);
+  });
+
+  it("干净文本原样返回(不计退化)", () => {
+    const raw = "- 路径 D:\\projects\\as-one\\src\\llm-adapter.ts\n- 提交 c87eccd";
+    expect(cleanDigest(raw).removedChars).toBe(0);
+    expect(cleanDigest(raw).text).toBe(raw);
   });
 });
 
@@ -144,13 +181,18 @@ describe("摘要预算按区域大小现算", () => {
 });
 
 describe("归并决策", () => {
-  it("块少时直接拼(归并要再读写一遍全部摘要,实测占 15%~25% 墙钟)", () => {
+  it("压出多个片段就必须由模型整理归并(2026-11-15 定案)", () => {
     expect(needsMerge(1)).toBe(false);
-    expect(needsMerge(5)).toBe(false);
+    expect(needsMerge(2)).toBe(true);
+    expect(needsMerge(5)).toBe(true);
     expect(needsMerge(6)).toBe(true);
   });
 
-  it("拼接保留分片标题,单块不加标题", () => {
+  it("单块本身退化时也要归并一次", () => {
+    expect(needsMerge(1, true)).toBe(true);
+  });
+
+  it("拼接只是归并失败的降级路径,仍保留分片标题", () => {
     expect(joinDigests(["a"])).toBe("a");
     expect(joinDigests(["a", "b"])).toContain("片段 1/2");
     expect(joinDigests(["a", "b"])).toContain("片段 2/2");

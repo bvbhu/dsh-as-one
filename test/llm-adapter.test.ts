@@ -996,7 +996,7 @@ describe("AsOneLlmAdapter", () => {
 });
 
 // ---------------------------------------------------------------------------
-// compact:分块 / 并行 / 省归并 / 失败降级
+// compact:分块 / 并行 / 片段整理归并 / 失败降级
 // ---------------------------------------------------------------------------
 
 interface CompactCall {
@@ -1015,7 +1015,7 @@ function compactRuntime(opts: {
   calls: CompactCall[];
   fail?: (index: number, attempt: number) => boolean;
   failKind?: "rate_limit" | "connection" | "bad_request";
-  digest?: (index: number) => string;
+  digest?: (index: number, prompt: string) => string;
 }): AsOneRuntime {
   let counter = 0;
   const upstream: Upstream = {
@@ -1037,7 +1037,7 @@ function compactRuntime(opts: {
         throw new UpstreamError(opts.failKind ?? "connection", "模拟失败");
       }
       return {
-        choices: [{ message: { content: opts.digest?.(index) ?? `摘要${index}` } }],
+        choices: [{ message: { content: opts.digest?.(index, prompt) ?? `摘要${index}` } }],
       } as never;
     },
   };
@@ -1096,7 +1096,7 @@ describe("compactStream", () => {
     expect(sessions.every((s) => s.startsWith("s-1:compaction#"))).toBe(true);
   });
 
-  it("块数不超过归并阈值时不发归并请求(省一次完整往返)", async () => {
+  it("压出多个片段必由模型整理归并一次,不再原样拼接(2026-11-15 定案)", async () => {
     const calls: CompactCall[] = [];
     const adapter = new AsOneLlmAdapter(
       compactRuntime({ windowTokens: 40_000, calls }),
@@ -1108,10 +1108,14 @@ describe("compactStream", () => {
       sessionId: "s-1",
       messages: [bigMessage(120_000)],
     } as DshGenerateOptions);
-    expect(calls.length).toBeLessThanOrEqual(5);
-    expect(calls.every((c) => !c.prompt.includes("合并成一份完整"))).toBe(true);
-    const text = chunks.find((c) => c.type === "text-delta");
-    expect(String((text as { text?: string }).text)).toContain("片段 1/");
+    const merge = calls.filter((c) => c.prompt.includes("整理归并成一份"));
+    expect(merge).toHaveLength(1);
+    expect(String(merge[0]!.session)).toBe("s-1:compaction#merge");
+    expect(merge[0]!.prompt).toContain("分块 1/");
+    // 归并成功 → 交出去的是一份整理后的摘要,不再是「## 片段 1/N」拼接
+    const text = String((chunks.find((c) => c.type === "text-delta") as { text?: string }).text);
+    expect(text).not.toContain("片段 1/");
+    expect(text).toContain("摘要");
   });
 
   it("单块区域:一次调用就够,不归并", async () => {
@@ -1129,7 +1133,7 @@ describe("compactStream", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("块多到拼不动时才归并(>5 块),归并也算一次调用", async () => {
+  it("大区域归并仍只做一次,输出预算按摘要总预算现算", async () => {
     const calls: CompactCall[] = [];
     const adapter = new AsOneLlmAdapter(
       compactRuntime({ windowTokens: 40_000, calls }),
@@ -1141,9 +1145,54 @@ describe("compactStream", () => {
       sessionId: "s-1",
       messages: [bigMessage(400_000)],
     } as DshGenerateOptions);
-    const merge = calls.filter((c) => c.prompt.includes("合并成一份完整"));
+    const merge = calls.filter((c) => c.prompt.includes("整理归并成一份"));
     expect(merge).toHaveLength(1);
     expect(String(merge[0]!.session)).toBe("s-1:compaction#merge");
+    expect(merge[0]!.maxTokens).toBeGreaterThan(0);
+    expect(merge[0]!.maxTokens).toBeLessThanOrEqual(4_096);
+  });
+
+  it("单块 digest 退化(重复循环)时也补一次整理归并", async () => {
+    const line =
+      "// 这里的判断逻辑是:display_name 有值 → 只显示模型名;display_name 空 → 显示供应商 + 模型名";
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({
+        windowTokens: 40_000,
+        calls,
+        digest: () => Array(60).fill(line).join("\n"),
+      }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    await drain(adapter, {
+      ...emptyOptions,
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(3_000)],
+    } as DshGenerateOptions);
+    expect(calls.filter((c) => c.prompt.includes("整理归并成一份"))).toHaveLength(1);
+  });
+
+  it("归并结果反而明显变长 → 降级到清理后的拼接版", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({
+        windowTokens: 40_000,
+        calls,
+        digest: (index, prompt) =>
+          prompt.includes("整理归并成一份") ? "X".repeat(5_000) : `摘要${index}`,
+      }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    const chunks = await drain(adapter, {
+      ...emptyOptions,
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(120_000)],
+    } as DshGenerateOptions);
+    const text = String((chunks.find((c) => c.type === "text-delta") as { text?: string }).text);
+    expect(text).toContain("片段 1/");
+    expect(text).not.toContain("XXXX");
   });
 
   it("某块第一次失败会重试,不把整次压缩打死", async () => {

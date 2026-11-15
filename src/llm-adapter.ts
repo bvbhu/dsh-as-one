@@ -35,7 +35,7 @@ import type {
 } from "@as-one/core/src/gateway/types.js";
 import { UpstreamError } from "@as-one/core/src/gateway/types.js";
 import type { AsOneRuntime } from "./setup.js";
-import { buildMergePrompt, joinDigests, needsMerge, planCompactChunks } from "./compact-chunk.js";
+import { buildMergePrompt, cleanDigest, joinDigests, needsMerge, planCompactChunks } from "./compact-chunk.js";
 import { estimateMessagesTokens } from "./gateway-upstream-context.js";
 import { rerouteModel, type RerouteSettings } from "./reroute.js";
 import type {
@@ -820,7 +820,9 @@ const COMPACT_CONCURRENCY_MAX = 6;
  */
 const COMPACT_MERGE_TOKENS = 4_096;
 const COMPACT_CHUNK_PROMPT =
-  "把下列会话片段压缩成简洁要点。保留精确文件路径、命令、错误原文、标识符与数值;不要输出额外解释。\n\n";
+  "把下列会话片段压缩成简洁要点。只输出要点本身:保留精确文件路径、命令、错误原文、" +
+  "标识符与数值;不要输出你的分析过程、推理或自言自语,不要复述工具输出原文或逐行代码," +
+  "不要重复同一句话,不要输出额外解释。\n\n";
 
 /** 模型窗口 → 分块输入预算。 */
 export function compactInputBudget(windowTokens: number | undefined): number {
@@ -1041,8 +1043,10 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
    * 1. **块预算按目标模型窗口算**(`compactInputBudget`),不再写死 24k;
    * 2. **块并行**(`COMPACT_CONCURRENCY` 路),每块独立会话号,免得同一条亲和
    *    pin 把并发挤成串行(`concurrency=1` 的端点会直接 `all_busy`);
-   * 3. **能省归并就省**(`needsMerge`):归并要再读写一遍全部 digest,实测占整次
-   *    压缩 15%~25% 墙钟;
+ * 3. **片段必由模型整理归并**(`needsMerge`,2026-11-15 用户定案):压出多个
+ *    片段就再让模型重读全部片段、按主题重组去噪,交出一份连贯检查点;
+ *    生成退化的长重复行先用 `cleanDigest` 确定性压掉,拼块只作为归并失败
+ *    时的降级。归并输出预算按摘要总预算现算,避免小区域写出超长摘要;
    * 4. **单块失败不拖垮整次**:重试一次(限流退避),仍失败就跳过 —— 只要还有
    *    一块成功,就还能交出一份能用的检查点;
    * 5. **会话模型兜底**(`fallbackModel`,2026-11-14 用户定案):压缩车道重试
@@ -1180,27 +1184,60 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
       digests[index] = await runChunk(chunk.lines, chunk.capTokens, 0, true);
     });
 
-    const kept = digests.filter((d) => d.trim() !== "");
+    // ── 片段整理 ──
+    // 出块模型可能陷入重复退化(同一行复制几百次)。先确定性清理,再交给模型
+    // 归并:既压掉噪音,也省归并输入。清理量本身是「这块是否退化」的信号 ——
+    // 单块退化时也值得再花一次往返整理。
+    const rawKept = digests.filter((d) => d.trim() !== "");
+    let removedChars = 0;
+    const kept = rawKept
+      .map((d) => {
+        const cleaned = cleanDigest(d);
+        removedChars += cleaned.removedChars;
+        return cleaned.text;
+      })
+      .filter((d) => d.trim() !== "");
+    const rawChars = rawKept.reduce((a, d) => a + d.length, 0) || 1;
+    const degenerate = removedChars > rawChars * 0.2;
     let summary = joinDigests(kept);
     let merged = false;
-    if (needsMerge(kept.length) && !abortedNow(request.clientSignal)) {
+    let mergeNeeded = false;
+    if (needsMerge(kept.length, degenerate) && !abortedNow(request.clientSignal)) {
+      mergeNeeded = true;
+      // 归并输出按**摘要总预算**现算,不写死 4096:小块区域(区域本身才几百
+      // token)若给它 4096 的输出额度,模型会写出比被替换内容更长的摘要,
+      // 直接撞宿主 `summary is not smaller than the shadowed content`。
+      const digestCapTotal = plan.chunks.reduce((a, c) => a + c.capTokens, 0);
+      const mergeOut = Math.max(
+        256,
+        Math.min(COMPACT_MERGE_TOKENS, Math.floor(digestCapTotal * 0.9)),
+      );
+      const mergePrompt = buildMergePrompt(kept);
       try {
         const result = await upstream.complete({
           ...request,
           stream: false,
-          messages: [{ role: "user", content: buildMergePrompt(kept) }],
-          max_tokens: COMPACT_MERGE_TOKENS,
+          messages: [{ role: "user", content: mergePrompt }],
+          max_tokens: mergeOut,
           tools: undefined,
+          // 归并也按真实模型窗口选路:装不下整理后全部片段的成员不参与。
+          minInputTokens: Math.max(1024, Math.ceil(mergePrompt.length / 3)),
           prompt_cache_key: `${baseSession}#merge`,
           extra: { ...(request.extra ?? {}), session_id: `${baseSession}#merge` },
         });
         const text = result.choices?.[0]?.message?.content;
-        if (typeof text === "string" && text.trim()) {
+        // 只接受「确实更紧凑」的归并结果:整理后反而明显比拼接还长,说明模型
+        // 在扩写/复述,留着清理过的拼接版更可信(也避开宿主的长度校验)。
+        if (
+          typeof text === "string" &&
+          text.trim() &&
+          text.length < kept.join("\n").length * 1.2
+        ) {
           summary = text;
           merged = true;
         }
       } catch (err) {
-        // 归并失败不算失败:手里已经有一份按块组织、可直接用的摘要。
+        // 归并失败不算失败:手里已经有一份清理过、按块组织的可用摘要。
         console.warn(
           `[as-one] compact 归并失败,改用分块拼接:${
             err instanceof Error ? err.message : String(err)
@@ -1213,8 +1250,8 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     console.info(
       `[as-one] compact model=${model} 窗口=${windows.min ?? "?"}/${windows.max ?? "?"}` +
         ` 预算=${budget} 块=${plan.chunks.length}(并发 ${concurrency},失败 ${failed},兜底 ${fallbackUses})` +
-        ` 区域≈${plan.regionTokens}tok 截断=${plan.trimmedChars}字符` +
-        ` 归并=${merged ? "是" : "否"} 耗时=${Date.now() - started}ms`,
+        ` 区域≈${plan.regionTokens}tok 截断=${plan.trimmedChars}字符 去重=${removedChars}字符` +
+        ` 归并=${merged ? "是" : mergeNeeded ? "失败降级" : "否"} 耗时=${Date.now() - started}ms`,
     );
 
     yield { type: "block-start", index: 0, blockType: "text" };
