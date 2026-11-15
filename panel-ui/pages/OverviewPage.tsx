@@ -28,6 +28,8 @@ import type {
 } from "../api";
 import { fmtCount, fmtDuration } from "../format";
 import {
+  checkinDone,
+  checkinProgress,
   checkinSignedText,
   formatCheckinCreditInline,
 } from "@as-one/panel/src/checkin-chip-format.js";
@@ -155,7 +157,7 @@ function CheckinRow({ c }: { c: CheckinChannelStatus }): React.JSX.Element {
     // 「2/3 已签」/「0/3 未签」。以前这里 `checkedIn === 0` 也拼「已签」,
     // 于是出现「0/2 已签」这种自相矛盾的状态(2026-11-14 用户截图)。
     state = checkinSignedText(c);
-    cls = c.checkedIn > 0 ? "ok" : "warn";
+    cls = checkinDone(c) ? "ok" : "warn";
   }
 
   const meta: string[] = [];
@@ -351,6 +353,13 @@ export default function OverviewPage(): React.JSX.Element {
     [checkin],
   );
 
+  /**
+   * 头部 N/M 与行状态共用 `checkinDone`(只看 checkedIn > 0)。
+   * 2026-11-15:旧分子要求 `pending === 0`,trae 按设备放行时 1 签 N-1 被挡,
+   * 行显示「已签」却被计数排除 → 四个渠道都签了却显示 3/4。
+   */
+  const checkinCount = React.useMemo(() => checkinProgress(shownCheckin), [shownCheckin]);
+
   /** 实时日志按对话分组(conv 为 null 的按 real_model_id 归类),组间按时间排序。 */
   const recentConvGroups = React.useMemo<RecentConvGroup[]>(() => {
     const list = inflight?.recent ?? [];
@@ -439,10 +448,7 @@ export default function OverviewPage(): React.JSX.Element {
             每日签到
             {checkin?.channels?.length ? (
               <span className="count">
-                {shownCheckin.filter(
-                  (c) => c.supported && c.pending === 0 && c.checkedIn !== null,
-                ).length}
-                /{shownCheckin.filter((c) => c.supported).length}
+                {checkinCount.done}/{checkinCount.total}
               </span>
             ) : null}
           </h2>

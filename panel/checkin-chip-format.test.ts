@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkinChipText,
+  checkinDone,
+  checkinProgress,
   checkinSignedText,
   formatCheckinCredit,
   formatCheckinCreditInline,
@@ -114,5 +116,50 @@ describe("formatCheckinCreditInline(总览卡)", () => {
     const c = status({ checkedIn: 0, pending: 2 });
     expect(checkinSignedText(c)).toBe("0/2 未签");
     expect(formatCheckinCreditInline(c)).toBe("+400×2");
+  });
+});
+
+/**
+ * 2026-11-15 用户截图「每日签到 3/4」:四行 WorkBuddy / Trae / MiniMax /
+ * Qoder 全显示「已签」,下方还写着「签到完成 4 个渠道」。根因是头部分子要求
+ * `pending === 0`,而 trae 按设备放行时同机只有第一个账号签得上,其余仍 pending,
+ * 行状态却按 `checkedIn > 0` 判「已签」。计数必须与行同一口径。
+ */
+describe("checkinProgress:头部 N/M 与行状态同口径", () => {
+  const screenshot = [
+    status({ provider: "workbuddy", label: "WorkBuddy", accounts: 1, checkedIn: 1, pending: 0 }),
+    // trae:2 账号、1 个签上、1 个被 9095「本设备今日已签」挡住,分母不可信
+    status({
+      provider: "trae", label: "Trae", accounts: 2, countExact: false, checkedIn: 1, pending: 1,
+    }),
+    status({ accounts: 2, checkedIn: 2, pending: 0 }),
+    status({ provider: "qoder", label: "Qoder", accounts: 3, checkedIn: 3, pending: 0 }),
+    // 不支持签到的渠道不进分母
+    status({ provider: "sensenova", label: "SenseNova", supported: false, checkedIn: 0 }),
+  ];
+
+  it("四行都领到 → 4/4(trae 的 pending 不再把它排除)", () => {
+    expect(checkinProgress(screenshot)).toEqual({ done: 4, total: 4 });
+  });
+
+  it("真有一个渠道没签 → 3/4", () => {
+    const rows = screenshot.map((c) =>
+      c.provider === "qoder" ? { ...c, checkedIn: 0, pending: 3 } : c,
+    );
+    expect(checkinProgress(rows)).toEqual({ done: 3, total: 4 });
+  });
+
+  it("checkinDone 只看 checkedIn,与状态词一致", () => {
+    expect(checkinDone({ checkedIn: 1 })).toBe(true);
+    expect(checkinDone({ checkedIn: 0 })).toBe(false);
+    expect(checkinDone({ checkedIn: null })).toBe(false);
+    expect(checkinSignedText({ accounts: 2, countExact: false, checkedIn: 1 })).toBe("已签");
+  });
+
+  it("空列表 → 0/0,不支持签到的渠道不计入分母", () => {
+    expect(checkinProgress([])).toEqual({ done: 0, total: 0 });
+    expect(checkinProgress([status({ supported: false, checkedIn: 1 })])).toEqual({
+      done: 0, total: 0,
+    });
   });
 });

@@ -58,6 +58,30 @@ export function checkinChipText(c: CheckinChannelStatus): string {
  * 出现「0/2 已签」「0/3 已签」这种自己打自己的状态。判断只看 `checkedIn > 0`
  * 这一条,别再按「有没有 pending」分叉。
  */
+/**
+ * 渠道「今天领到了」的**唯一判据**:只看 `checkedIn > 0`。
+ *
+ * 2026-11-15 修「每日签到 3/4」:trae 按**设备**放行每日签到,同机多账号
+ * 一天只有第一个能签上,其余被 9095 挡住 → `checkedIn = 1` 但 `pending > 0`。
+ * 行状态按 `checkedIn > 0` 显示绿色「已签」,总览头部计数却要求 `pending === 0`,
+ * 于是四个渠道明明都显示已签、计数只有 3/4,还和「签到完成 4 个渠道」的
+ * 摘要自相矛盾。头部计数 / 行状态 / chip 一律走这里,**别再按 pending 分叉**。
+ */
+export function checkinDone(c: { checkedIn: number | null }): boolean {
+  return c.checkedIn !== null && c.checkedIn > 0;
+}
+
+/**
+ * 总览「每日签到 N/M」:分母 = 展示出来且支持签到的渠道数,分子 = 其中今天
+ * 领到过的渠道数。调用方已过滤隐藏渠道与 0 账号渠道,分母永远等于可见行数。
+ */
+export function checkinProgress(
+  channels: readonly { supported: boolean; checkedIn: number | null }[],
+): { done: number; total: number } {
+  const eligible = channels.filter((c) => c.supported);
+  return { done: eligible.filter(checkinDone).length, total: eligible.length };
+}
+
 export function checkinSignedText(c: {
   accounts: number;
   countExact: boolean;
@@ -65,8 +89,7 @@ export function checkinSignedText(c: {
 }): string {
   // 上限未知时不能编状态:调用方通常已前置判空,这里兜底成「未知」而不是「未签」。
   if (c.checkedIn === null) return "签到未知";
-  const signed = c.checkedIn > 0;
-  const word = signed ? "已签" : "未签";
+  const word = checkinDone(c) ? "已签" : "未签";
   if (c.countExact && c.accounts > 1) return `${c.checkedIn}/${c.accounts} ${word}`;
   return word;
 }
