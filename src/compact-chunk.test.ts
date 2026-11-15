@@ -92,6 +92,20 @@ describe("buildMergePrompt", () => {
     expect(prompt).toContain("工具输出原文");
     expect(prompt).toContain("明显短于输入");
   });
+
+  it("2026-11-15 检查点契约:语言一致/否定约束/状态顺序/省略边界", () => {
+    const prompt = buildMergePrompt(["用户说「不真正推送 PR」", "第二块"]);
+    // 压缩车道可能落在英文模型上,中文专名与错误原文不能被翻译掉
+    expect(prompt).toContain("输出语言与会话主体一致");
+    // 决定「下一轮不能做什么」的否定约束最容易丢,必须专门点名
+    expect(prompt).toContain("禁止/暂缓");
+    expect(prompt).toContain("不要推送");
+    // 结构化而不模板化:给顺序,但禁止为每节凑内容(模板会诱导扩写撞宿主长度校验)
+    expect(prompt).toContain("已定案决策");
+    expect(prompt).toContain("不要为每一节凑内容");
+    expect(prompt).toContain("省略了哪些类别");
+    expect(prompt).toContain("**一行**");
+  });
 });
 
 describe("cleanDigest", () => {

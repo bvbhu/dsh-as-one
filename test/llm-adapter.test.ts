@@ -1063,6 +1063,24 @@ async function drain(adapter: AsOneLlmAdapter, options: DshGenerateOptions): Pro
 }
 
 describe("compactStream", () => {
+  it("出块 prompt 也带语言/否定约束要求(出块时丢了,归并再要求也补不回来)", async () => {
+    const calls: CompactCall[] = [];
+    const adapter = new AsOneLlmAdapter(
+      compactRuntime({ windowTokens: 40_000, calls }),
+      { reroutes: () => ({ compact: "big" }) },
+    );
+    await drain(adapter, {
+      ...emptyOptions,
+      purpose: "compaction",
+      sessionId: "s-1",
+      messages: [bigMessage(3_000)],
+    } as DshGenerateOptions);
+    const chunk = calls.find((c) => c.prompt.includes("把下列会话片段压缩成简洁要点"));
+    expect(chunk).toBeDefined();
+    expect(chunk!.prompt).toContain("输出语言与会话主体保持一致");
+    expect(chunk!.prompt).toContain("禁止/暂缓");
+  });
+
   it("块预算按目标模型窗口算:40k 窗口 → 20k/块,不再写死 19.2k 的 179 块", async () => {
     const calls: CompactCall[] = [];
     const adapter = new AsOneLlmAdapter(
