@@ -369,16 +369,27 @@ describe("modelInfoOf", () => {
     expect(modelInfoOf(entry(), "as-one").provider).toBe("as-one");
   });
 
-  it("窗口/输出上限:正整数才给,NULL、0、负数、非整数一律不给", () => {
+  it("窗口:正整数用实测值;NULL/0/负数/非整数给兜底 —— 宿主没 context 会直接拒绝切换模型", () => {
+    // 实测值优先
     expect(modelInfoOf(entry({ max_input_tokens: 1000000, max_output_tokens: 8192 })).context).toEqual({
       contextWindow: 1000000,
     });
+    // ⚠️ 2026-11-15 修复:窗口未知时**必须**声明 `context`。
+    //    宿主的 `compaction-basic` 在 `context === undefined` 时直接抛错并拒绝这次
+    //    模型切换(`no context capacity … configure contextWindow`)—— 比"窗口报小一点"
+    //    严重得多,后者只是压缩早一点,前者整条车道不可用。所以 0/负数/非整数/NULL
+    //    都走兜底,而不是"不给"。
     const none = modelInfoOf(entry({ max_input_tokens: 0, max_output_tokens: -1 }));
-    expect(none.context).toBeUndefined();
+    expect(none.context).toEqual({ contextWindow: 128_000 });
+    // 输出上限非法 → 不给 defaultMaxTokens(兜底仍要盖住它)
     expect(none.defaultMaxTokens).toBeUndefined();
     const weird = modelInfoOf(entry({ max_input_tokens: 1.5, max_output_tokens: undefined }));
-    expect(weird.context).toBeUndefined();
+    expect(weird.context).toEqual({ contextWindow: 128_000 });
     expect(weird.defaultMaxTokens).toBeUndefined();
+    // 兜底必须同时盖住输出预留(否则宿主会报「leaving no message budget」）
+    const bigOut = modelInfoOf(entry({ max_input_tokens: null, max_output_tokens: 200_000 }));
+    expect(bigOut.context).toEqual({ contextWindow: 400_000 });
+    expect(bigOut.defaultMaxTokens).toBe(200_000);
   });
 
   it("efforts 空数组 / null 时不声明 reasoning(声明空数组 = INVALID_MODEL_REASONING)", () => {

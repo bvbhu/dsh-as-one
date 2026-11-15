@@ -445,8 +445,11 @@ export default function SenseNovaPage(): React.JSX.Element {
         id: row.fullId ?? `sensenova/${row.id}`,
         name: String(row.name ?? "").trim(),
         vision: Boolean(row.vision),
-        context_window: numOf(row.context),
-        max_output: numOf(row.output),
+        // ⚠️ 只提交用户**刚改的那一格**:另一格传 `undefined`,后端保留库里原值。
+        //    空输入框经 `numOf()` 得到 `null`,而 `null` 在后端是「明确不声明」= 清空 ——
+        //    用户只是没填(或这一格没回填到值),保存一次就把已有的窗口/输出上限冲成 NULL。
+        context_window: e.field === "context" ? numOf(row.context) : undefined,
+        max_output: e.field === "output" ? numOf(row.output) : undefined,
         exposed: row.exposed,
       });
       if (!r.ok) {

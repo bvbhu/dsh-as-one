@@ -158,6 +158,27 @@ const EFFORT_LABELS: Record<string, string> = {
 };
 
 /**
+ * 窗口未知时的兜底值(真实模型的 `max_input_tokens` 常常是 NULL —— 上游清单
+ * 不给这个字段,库里就只能空着)。
+ *
+ * 为什么必须有兜底(2026-11-15 用户实测「Cannot switch to as-one/workbuddy/
+ * glm-5.3-flash」):宿主的 `compaction-basic` 在 `context === undefined` 时
+ * **直接抛错**并拒绝这次模型切换(`no context capacity … configure contextWindow`),
+ * 比"窗口报小一点"严重得多 —— 后者只是压缩早一点,前者整条车道不可用。
+ *
+ * 值怎么定:宿主还要求 `contextWindow > 输出预留 + headroom`(`resolveCompactSpec`
+ * 里 `messageBudget = window - reservedCompletion` 必须为正),所以兜底必须同时
+ * 盖住 `defaultMaxTokens`(= `max_output_tokens`),否则会撞另一条错
+ * 「leaving no message budget」。取 `max(128k, 2×输出上限)`:
+ * 真实探测值永远优先,兜底只保证宿主算得出容量、压缩能跑。
+ */
+const UNKNOWN_CONTEXT_WINDOW = 128_000;
+
+function fallbackContextWindow(maxOutputTokens: number | undefined): number {
+  return Math.max(UNKNOWN_CONTEXT_WINDOW, (maxOutputTokens ?? 0) * 2);
+}
+
+/**
  * `ModelEntry` → 宿主元数据。
  *
  * 思考强度:`reasoning_efforts` 为 `null`/`[]`/缺省 时**不声明** `reasoning` ——
@@ -197,9 +218,12 @@ export function modelInfoOf(entry: ModelEntry, provider = AS_ONE_PROVIDER): DshR
     systemPromptUpdate: "in-history",
     toolUpdate: "in-history",
   };
-  const ctx = positiveInt(entry.max_input_tokens);
-  if (ctx !== undefined) info.context = { contextWindow: ctx };
+  // 窗口**必须**声明:宿主的 compaction-basic 没有 `context` 就拒绝切换模型 /
+  // 拒绝压力压缩(`no context capacity … configure contextWindow`)。
+  // 库里有探测值就用它;NULL(上游清单不给)时给保守兜底 —— 见常量注释。
   const out = positiveInt(entry.max_output_tokens);
+  const ctx = positiveInt(entry.max_input_tokens) ?? fallbackContextWindow(out);
+  info.context = { contextWindow: ctx };
   if (out !== undefined) info.defaultMaxTokens = out;
   const efforts = Array.isArray(entry.reasoning_efforts) ? entry.reasoning_efforts : [];
   if (efforts.length > 0) {

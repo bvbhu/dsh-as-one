@@ -160,6 +160,17 @@ export default function ProvidersPage(): React.JSX.Element {
   /** 容量草稿(下标 → 输入框文本;空串 = 不声明)。 */
   const [ctxDraft, setCtxDraft] = React.useState<Record<number, string>>({});
   const [outDraft, setOutDraft] = React.useState<Record<number, string>>({});
+  /**
+   * 「上下文窗口 / 最大输出」这两格**是否被用户动过**。
+   *
+   * ⚠️ 保存时没动过的格子必须提交 `undefined`(后端语义 = 保留库里原值),
+   * 不能提交 `numOrNull("")` 得到的 `null` —— 那是「明确不声明」,
+   * 会把已经存在的上下文窗口 / 输出上限**冲成 NULL**。
+   * 2026-11-15 用户实测「保存了但库里没有相关数据」就是这条路:格子没回填到值
+   * (目录缓存为空时输入框是空的)、用户点保存,窗口被写成 NULL。
+   */
+  const [ctxTouched, setCtxTouched] = React.useState<Record<number, boolean>>({});
+  const [outTouched, setOutTouched] = React.useState<Record<number, boolean>>({});
   /** 输入类型草稿(下标 → 勾选态;至少一种)。 */
   const [inputChecked, setInputChecked] = React.useState<Record<number, { text: boolean; image: boolean }>>({});
 
@@ -234,6 +245,9 @@ export default function ProvidersPage(): React.JSX.Element {
     setCtxDraft(ctx);
     setOutDraft(out);
     setInputChecked(inp);
+    // 重新载入行 = 新的基线:之前哪格被碰过作废,否则一次没碰的保存会带上旧的「已碰过」标记。
+    setCtxTouched({});
+    setOutTouched({});
   }
 
   function startEdit(p: ModelProvider): void {
@@ -317,6 +331,8 @@ export default function ProvidersPage(): React.JSX.Element {
     setOverridden((v) => shift(v));
     setCtxDraft((v) => shift(v));
     setOutDraft((v) => shift(v));
+    setCtxTouched((v) => shift(v));
+    setOutTouched((v) => shift(v));
     setInputChecked((v) => shift(v));
   }
 
@@ -391,24 +407,6 @@ export default function ProvidersPage(): React.JSX.Element {
     validateRows();
   }
 
-  /** 草稿 → 提交用的模型目录条目(容量/输入类型回填)。 */
-  function buildModels(): ModelRow[] {
-    return form.models
-      .map((m, i): ModelRow => {
-        const kinds = inputChecked[i] ?? { text: true, image: false };
-        const ctx = numOrNull(ctxDraft[i] ?? "");
-        const out = numOrNull(outDraft[i] ?? "");
-        return {
-          id: m.id.trim(),
-          ...(m.name?.trim() ? { name: m.name.trim() } : {}),
-          ...(ctx != null ? { context_window: ctx } : {}),
-          ...(out != null ? { max_output: out } : {}),
-          input: kinds.image ? ["text", "image"] : ["text"],
-        };
-      })
-      .filter((m) => m.id);
-  }
-
   /* ---------------- 保存 ---------------- */
 
   async function saveCard(): Promise<void> {
@@ -426,7 +424,6 @@ export default function ProvidersPage(): React.JSX.Element {
     setNotice("");
     setError("");
     try {
-      const models = buildModels();
       const proto = form.protocol.trim() || "openai";
       // ① 写 provider 行 + **凭据池**。`keys` 数组即整池、按位置对齐座位;
       //    这里只有页面上的那一个输入框 → 传单元素数组,`""`(用户没填)由后端
@@ -448,15 +445,33 @@ export default function ProvidersPage(): React.JSX.Element {
       //    这一行,库里不留残留(409 时后端点名还被档链引用的模型)。
       //    ⚠️ 输入框里是**裸模型名**,这里补回 provider 前缀再提交 ——
       //    裸名里带斜杠时(`openrouter/free`)后端无法分辨它属于哪个供应商。
-      const exposure = models.map((m, i) => {
+      //
+      // ⚠️ **逐行按 form.models 的下标取草稿**(不是 buildModels 过滤后的下标):
+      //    buildModels 会丢掉 id 为空的行,用它的下标去索引 ctxDraft 会**串行**
+      //    —— 读到的是下一行的窗口值。
+      //
+      // ⚠️ **没被用户碰过的格子提交 `undefined`(= 后端保留库里原值)**:
+      //    空框经 numOrNull 得到 `null`,而 null 在后端是「明确不声明」= 清空。
+      //    目录缓存为空时输入框就是空的,用户点保存一次,已有的上下文窗口 /
+      //    输出上限就被冲成 NULL(2026-11-15 用户实测「保存了但库里没有相关数据」)。
+      const exposure: Array<{
+        id: string;
+        name?: string;
+        vision: boolean;
+        context_window?: number | null;
+        max_output?: number | null;
+      }> = [];
+      form.models.forEach((m, i) => {
+        const id = (m.id ?? "").trim();
+        if (!id) return; // 空行不提交(与 buildModels 同口径)
         const kinds = inputChecked[i] ?? { text: true, image: false };
-        return {
-          id: `${pid}/${m.id}`,
-          ...(m.name ? { name: m.name } : {}),
+        exposure.push({
+          id: `${pid}/${id}`,
+          ...(m.name?.trim() ? { name: m.name.trim() } : {}),
           vision: kinds.image,
-          context_window: numOrNull(ctxDraft[i] ?? ""),
-          max_output: numOrNull(outDraft[i] ?? ""),
-        };
+          context_window: ctxTouched[i] ? numOrNull(ctxDraft[i] ?? "") : undefined,
+          max_output: outTouched[i] ? numOrNull(outDraft[i] ?? "") : undefined,
+        });
       });
       const e2 = await rendererApi.setChannelModels(pid, exposure);
       if (!e2.ok) throw new FormError(e2.message ?? "设置模型暴露失败");
@@ -797,11 +812,12 @@ export default function ProvidersPage(): React.JSX.Element {
                                 className="pv-input"
                                 type="text"
                                 inputMode="numeric"
-                                placeholder="未填则用 256K(262144)兜底"
+                                placeholder="留空 = 沿用库里原值"
                                 value={ctxDraft[i] ?? ""}
-                                onChange={(ev) =>
-                                  setCtxDraft((v) => ({ ...v, [i]: ev.target.value }))
-                                }
+                                onChange={(ev) => {
+                                  setCtxDraft((v) => ({ ...v, [i]: ev.target.value }));
+                                  setCtxTouched((v) => ({ ...v, [i]: true }));
+                                }}
                               />
                             </label>
                             <label className="pv-modelField">
@@ -812,9 +828,10 @@ export default function ProvidersPage(): React.JSX.Element {
                                 inputMode="numeric"
                                 placeholder="使用提供商默认值"
                                 value={outDraft[i] ?? ""}
-                                onChange={(ev) =>
-                                  setOutDraft((v) => ({ ...v, [i]: ev.target.value }))
-                                }
+                                onChange={(ev) => {
+                                  setOutDraft((v) => ({ ...v, [i]: ev.target.value }));
+                                  setOutTouched((v) => ({ ...v, [i]: true }));
+                                }}
                               />
                             </label>
                             <fieldset className="pv-modelInputTypes">

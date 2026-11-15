@@ -285,8 +285,12 @@ export default function ChannelPage({ provider }: ChannelPageProps): React.JSX.E
         id: row.fullId,
         name: row.name.trim(),
         vision: row.vision,
-        context_window: num(row.context),
-        max_output: num(row.output),
+        // ⚠️ 只提交用户**刚改的那一格**:另一格传 `undefined`,后端保留库里原值。
+        //    空输入框经 `num()` 得到 `null`,而 `null` 在后端是「明确不声明」= 清空 ——
+        //    于是用户只是没填(或这一格没从目录回填到值),保存一次就把已有的上下文
+        //    窗口 / 输出上限冲成 NULL(2026-11-15 用户实测「保存了但库里没有相关数据」)。
+        context_window: e.field === "context" ? num(row.context) : undefined,
+        max_output: e.field === "output" ? num(row.output) : undefined,
         exposed: row.exposed,
       });
       if (!r.ok) {
