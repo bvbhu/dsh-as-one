@@ -923,4 +923,39 @@ describe("思考档位:从上游目录里读(2026-11-08)", () => {
     expect(e.reasoning_efforts).toEqual([]);
     expect(e.reasoning_allows_off).toBeNull();
   });
+
+  // 2026-11-15:统一页的「倍率」列读 CatalogEntry.rate。原独立 QoderPage 直接读
+  // QoderCatalogRow.priceFactor,qoder_entry_of 却把 rate 写死 null,迁移后全表「—」。
+  it("qoder 行:上游 price_factor 进 rate(渠道页倍率列)", () => {
+    const e = qoder_entry_of({
+      key: "qmodel_38max",
+      displayName: "Qmodel 38 Max",
+      enable: true,
+      isVl: false,
+      priceFactor: 0.79,
+      raw: { price_factor: 0.79 },
+    });
+    expect(e.rate).toBe(0.79);
+  });
+
+  it("qoder 行:price_factor=0 是「免费」真值,不能当缺失显示成「—」", () => {
+    const e = qoder_entry_of({
+      key: "free", displayName: "Free", enable: true, isVl: false, priceFactor: 0,
+    });
+    expect(e.rate).toBe(0);
+  });
+
+  it("qoder 行:只给 raw 时从 price_factor 兜底(字符串数值也认)", () => {
+    const e = qoder_entry_of({
+      key: "m", displayName: "M", enable: true, isVl: false, raw: { price_factor: "2" },
+    });
+    expect(e.rate).toBe(2);
+  });
+
+  it("qoder 行:倍率缺失/非法/负数一律 null", () => {
+    const base = { key: "m", displayName: "M", enable: true, isVl: false };
+    expect(qoder_entry_of({ ...base, raw: {} }).rate).toBeNull();
+    expect(qoder_entry_of({ ...base, priceFactor: -1, raw: { price_factor: "x" } }).rate).toBeNull();
+    expect(qoder_entry_of({ ...base, priceFactor: Number.NaN }).rate).toBeNull();
+  });
 });

@@ -959,6 +959,8 @@ export function qoder_entry_of(m: {
   maxInputTokens?: number | undefined;
   maxContextTokens?: number | undefined;
   maxOutputTokens?: number | undefined;
+  /** QoderClient 已从上游 `price_factor` 解析好的积分倍率(0 = 免费,是真值)。 */
+  priceFactor?: number | undefined;
   raw?: Record<string, unknown> | undefined;
 }): CatalogEntry {
   const tc = record(m.raw?.["thinking_config"]);
@@ -975,7 +977,12 @@ export function qoder_entry_of(m: {
     vision: m.isVl,
     context_window: m.maxContextTokens ?? m.maxInputTokens ?? null,
     max_output: m.maxOutputTokens ?? null,
-    rate: null,
+    // 2026-11-15 渠道页统一的回归:原独立 QoderPage 直接读 QoderCatalogRow.priceFactor
+    // 摆「倍率」列,迁到 ChannelPage 后这一列读的是 CatalogEntry.rate —— 这里原先
+    // 硬编码 null,于是 qoder 全表显示「—」。上游字段 `price_factor` 的 0 表示
+    // **免费**(不是缺失),所以 allowZero=true;优先连接器已解析的值,只给 raw 的
+    // 调用方(老测试 / 直接构造)从 raw 兜底。
+    rate: rate_of(m.priceFactor ?? m.raw?.["price_factor"], true),
     origin: "remote",
     callable: m.enable,
     reasoning_efforts: efforts,
