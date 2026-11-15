@@ -24,8 +24,8 @@
  * ⚠️ 页面内按钮不走 `models-action` 通道(那条通道是给内嵌页的子标题行用的);
  *   渠道页自己就是整页,按钮直接摆在签到带上更常显。
  *
- * ⚠️ 2026-11-08:WorkBuddy 的**风险提示**文案来自 `@as-one/panel` 的
- *   `channel-risk-note`(与总览页签到行共用一份,避免两处文案走偏)。
+ * ⚠️ 2026-11-15 用户定案:渠道卡**不再显示上游风控提示**(文案与徽章一并移除)。
+ *   风控仍由网关侧的执行逻辑处理(11140 → 删凭据 + 熔断),只是不在界面上常驻告知。
  */
 import React from "react";
 import { rendererApi } from "../../api";
@@ -35,7 +35,6 @@ import {
   checkinSignedText,
   formatCheckinCredit,
 } from "@as-one/panel/src/checkin-chip-format.js";
-import { providerRiskNote } from "@as-one/panel/src/channel-risk-note.js";
 import ChannelPage from "./ChannelPage";
 import QoderPage from "./QoderPage";
 import SenseNovaPage from "./SenseNovaPage";
@@ -386,39 +385,22 @@ export default function ChannelsPage(): React.JSX.Element {
       {visibleCards.map((spec) => {
         const open = openId === spec.provider;
         const card = cardById.get(spec.provider);
-        const risk = providerRiskNote(spec.provider);
         return (
-          <article
-            key={spec.provider}
-            className={`chx-card${open ? " open" : ""}${risk ? " has-risk" : ""}`}
-          >
+          <article key={spec.provider} className={`chx-card${open ? " open" : ""}`}>
             <header className="chx-head">
               <button
                 type="button"
                 className="chx-toggle"
                 onClick={() => toggle(spec.provider)}
                 aria-expanded={open}
-                // ⚠️ 风险提示挂在**可点元素**上:悬停名字就能看到,不必展开。
-                // 文案克制(见 `channel-risk-note`):说清 11140 与「删凭据 + 熔断」。
-                title={risk || undefined}
               >
                 <span className={`chx-caret${open ? " open" : ""}`} aria-hidden="true" />
                 <span className="chx-name">{spec.label}</span>
-                {risk ? (
-                  // 一个小徽标:光靠 title 等于「没人会看到」,而这是安全相关告知。
-                  <span className="chx-risk-badge" aria-label="上游风控较严">
-                    风控
-                  </span>
-                ) : null}
               </button>
               <BalanceSummary card={card} />
             </header>
             {open ? (
               <div className="chx-body">
-                {risk ? (
-                  // 展开处的**完整说明**:短提示 + 一句「出事后我们会怎么做」。
-                  <p className="chx-risk-note">{risk}</p>
-                ) : null}
                 {spec.provider === "qoder" ? (
                   // `key` 里带 `quotaTick`:点过「全部刷新」后重挂一次,
                   // 让内嵌页重新读本地库(它读的是落库后的积分,不重读就还是旧数)。

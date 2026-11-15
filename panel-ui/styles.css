@@ -2948,30 +2948,7 @@ body {
 .chx-acct .chx-none { color: var(--text-soft); font-style: italic; }
 .chx-expiry { font-style: normal; margin-left: 6px; opacity: 0.8; }
 .chx-balance.none, .chx-hint { opacity: 0.7; }
-/* ⚠️ 2026-11-08:WorkBuddy 风险提示(重新显性化时新增)。
-   - `.chx-risk-badge`:卡头的小徽标。光挂 title 等于没人会看到,而「11140 会删凭据」
-     是用户必须知道的;所以给一个**克制**的视觉标记(不红、不闪烁,避免恐吓)。
-   - `.chx-risk-note`:展开处的完整说明(与总览签到行共用同一份文案)。 */
-.chx-risk-badge {
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.6;
-  padding: 0 6px;
-  border: 1px solid #b35900;
-  border-radius: 999px;
-  color: #b35900;
-}
-.chx-risk-note {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-soft);
-  border-left: 3px solid #b35900;
-  background: rgba(179, 89, 0, 0.06);
-  border-radius: 4px;
-}
-.chx-card.has-risk .chx-head { align-items: flex-start; }
+/* 2026-11-15 用户定案:渠道卡的风控徽章/说明已移除(样式一并删掉,免得留下死规则)。 */
 .chx-body {
   padding: 4px 16px 16px;
   border-top: 1px solid var(--border);

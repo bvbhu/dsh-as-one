@@ -9,13 +9,13 @@
  *
  * 只放纯映射:`db` + 注册表 → 对外条目。不摸网络、不摸面板状态。
  *
- * ── 显示名(用户 m44638:「真实模型也显示到 dsh 模型选择器…需要优化显示名,
- *    如果有相同的显示名,则追加 provider 区分,为逻辑模型添加一个显示名字段」)──
+ * ── 显示名(用户 m44638 起,2026-11-15 定案)──
  * 每条条目给两个名字,分工明确:
  * - `name`:这个模型**自己**填的人话名(逻辑模型 = `logical_model.display_name`,
  *   没填则用 `name`;真实模型 = `real_model.name`,没填则用裸 model 名);
- * - `display_name`:**整张清单摆在一起**后保证互不相同的名字 —— 撞名时真实模型
- *   追加 ` (provider)`,逻辑模型追加 ` (逻辑名)`,还撞再追加序号。
+ * - `display_name`:**整张清单摆在一起**后保证互不相同的名字 ——
+ *   真实模型**无条件**追加 ` (provider)`(不再"重名才显示");逻辑模型**不追加**
+ *   (不带供应商 = 逻辑模型);还撞则追加 `·2` 序号。
  *   渲染选择器只该用这个字段。
  * `id` 永远不变(它是调用串),所以显示层怎么改都不影响请求路由。
  */
@@ -36,10 +36,18 @@ const labelKey = (s: string): string => s.trim().toLowerCase();
  * 给一批候选显示名做去重标注。
  *
  * @param bases  原始显示名(可能撞车)
- * @param tags   撞车时追加的区分串(真实模型 = provider;逻辑模型 = 逻辑名)
+ * @param tags   追加的区分串(真实模型 = provider;逻辑模型 = 逻辑名)
+ * @param always 与入参等长的标志:**true = 无条件追加 tag**,不掉进「撞名才加」的分支。
+ *               真实模型恒为 true(2026-11-15 用户定案:所有真实模型都要显示供应商,
+ *               不能只在重名时才显示 —— 选择器里同名与否本该一眼可见,而不是靠
+ *               "没写供应商说明恰好没重名"去猜)。
  * @returns 与入参等长的最终显示名数组,保证互不相同
  */
-export function dedupeLabels(bases: string[], tags: (string | null)[]): string[] {
+export function dedupeLabels(
+  bases: string[],
+  tags: (string | null)[],
+  always?: readonly boolean[],
+): string[] {
   const keyCount = new Map<string, number>();
   for (const b of bases) {
     const k = labelKey(b);
@@ -49,7 +57,9 @@ export function dedupeLabels(bases: string[], tags: (string | null)[]): string[]
   const used = new Set<string>();
   for (let i = 0; i < bases.length; i += 1) {
     const base = bases[i];
-    let label = (keyCount.get(labelKey(base)) ?? 0) > 1 && tags[i] ? `${base} (${tags[i]})` : base;
+    const tag = tags[i];
+    const shouldTag = tag !== null && tag !== undefined && (always?.[i] === true || (keyCount.get(labelKey(base)) ?? 0) > 1);
+    let label = shouldTag ? `${base} (${tag})` : base;
     // 追加 provider 后仍与别的条目撞车(例如有人把逻辑模型显示名填成 `x (y)`):
     // 用序号兜底,保证清单里显示名唯一 —— 选择器里两条同名是查不出来的。
     if (used.has(labelKey(label))) {
@@ -155,16 +165,17 @@ export function listModelEntries(
       return (raw ?? "").trim() || mv.model;
     }),
   ];
-  // 撞名时追加的区分串:
-  // - 真实模型 → provider(`deepseek-flash (sensenova)`),它本来就该说明是谁家的;
-  // - 逻辑模型 → 只在**填了显示名**时追加调用串。没填时 base 就是 row.name,
-  //   追加会写出 `deepseek-flash (deepseek-flash)` 这种废话,而且逻辑模型的裸名字
-  //   是用户自己敲的调用串,该保持干净 —— 撞它的真实模型让路。
-  const tags: (string | null)[] = [
-    ...logical.map((l) => (l.base === l.row.name ? null : l.row.name)),
-    ...realRows.map(({ mv }) => mv.provider),
-  ];
-  const labels = dedupeLabels(bases, tags);
+  // 追加的区分串:
+  // - 真实模型 → provider(`deepseek-flash (sensenova)`):**无条件追加** ——
+  //   2026-11-15 用户定案,所有真实模型都显示供应商,不再"重名才显示"。
+  //   选择器里"这家还是那家"应当一眼可见,而不是靠"没写供应商说明恰好没重名"去猜。
+  // - 逻辑模型 → **永不**追加(2026-11-15 用户定案):"不带供应商"本身就是「这是逻辑模型」
+  //   的标识 —— 带 `(provider)` 的是真实模型,不带的是逻辑模型。两条逻辑模型撞同名时
+  //   仍由 {@link dedupeLabels} 的 `·2` 序号兜底,保证清单里显示名唯一。
+  const tags: (string | null)[] = [...logical.map(() => null), ...realRows.map(({ mv }) => mv.provider)];
+  /** 真实模型恒为 true:只看"要不要加",不看"是否撞名"。逻辑模型没有 tag,恒不加。 */
+  const alwaysTagged: boolean[] = [...logical.map(() => false), ...realRows.map(() => true)];
+  const labels = dedupeLabels(bases, tags, alwaysTagged);
 
   const out: ModelEntry[] = [];
   logical.forEach((l, i) => {

@@ -387,7 +387,7 @@ describe("modelInfoOf", () => {
     expect(weird.context).toEqual({ contextWindow: 128_000 });
     expect(weird.defaultMaxTokens).toBeUndefined();
     // 兜底必须同时盖住输出预留(否则宿主会报「leaving no message budget」）
-    const bigOut = modelInfoOf(entry({ max_input_tokens: null, max_output_tokens: 200_000 }));
+    const bigOut = modelInfoOf(entry({ max_input_tokens: undefined, max_output_tokens: 200_000 }));
     expect(bigOut.context).toEqual({ contextWindow: 400_000 });
     expect(bigOut.defaultMaxTokens).toBe(200_000);
   });

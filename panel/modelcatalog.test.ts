@@ -123,15 +123,16 @@ describe("listModelEntries 显示名(用户 m44638)", () => {
     expect(byId("trae/deepseek-flash")).toBe("deepseek-flash (trae)");
   });
 
-  it("两条逻辑模型填了同一个显示名 ⇒ 后一条追加自己的调用串", () => {
+  it("两条逻辑模型填了同一个显示名 ⇒ 都不加调用串,只靠序号兜底(不带供应商 = 逻辑模型)", () => {
     seedReal("p1", "a", { name: null });
     seedLogical("auto", ["p1/a"], "快速档");
     seedLogical("free", ["p1/a"], "快速档");
 
     const entries = listModelEntries(registry(), db, new Set(["p1"]));
-    // 两条都填了同一个显示名 ⇒ 谁也不是「裸调用串」,一律追加调用串区分(与真实模型同规则)。
-    expect(entries.find((e) => e.id === "auto")?.display_name).toBe("快速档 (auto)");
-    expect(entries.find((e) => e.id === "free")?.display_name).toBe("快速档 (free)");
+    // 2026-11-15 用户定案:逻辑模型**永不**追加区分串 —— 「不带供应商」本身就是
+    // 「这是逻辑模型」的标识;只靠序号保证清单内唯一。
+    expect(entries.find((e) => e.id === "auto")?.display_name).toBe("快速档");
+    expect(entries.find((e) => e.id === "free")?.display_name).toBe("快速档 ·2");
   });
 
   it("逻辑模型填了显示名 ⇒ 用显示名;没填 ⇒ 回退调用串", () => {
@@ -151,21 +152,31 @@ describe("listModelEntries 显示名(用户 m44638)", () => {
     expect(entries.find((e) => e.id === "auto")?.name).toBe("auto");
   });
 
-  it("真实模型 name 为空白 ⇒ 回退裸模型名", () => {
+  it("真实模型 name 为空白 ⇒ name 回退裸模型名,显示名仍带供应商", () => {
     seedReal("maas", "spark-x2.6", { name: "  " });
     const entries = listModelEntries(registry(), db, new Set(["maas"]));
     const e = entries.find((x) => x.id === "maas/spark-x2.6");
     expect(e?.name).toBe("spark-x2.6");
-    expect(e?.display_name).toBe("spark-x2.6");
+    // 真实模型**无条件**带 provider(2026-11-15 用户定案)。
+    expect(e?.display_name).toBe("spark-x2.6 (maas)");
   });
 
-  it("不撞名时 display_name 与 name 相同(不为了区分而区分)", () => {
+  it("不撞名的真实模型也带供应商(取消「为了区分而区分」的旧口径)", () => {
     seedReal("maas", "spark-x2.6", { name: "Spark 星火" });
     const e = listModelEntries(registry(), db, new Set(["maas"])).find(
       (x) => x.id === "maas/spark-x2.6",
     );
     expect(e?.name).toBe("Spark 星火");
-    expect(e?.display_name).toBe("Spark 星火");
+    expect(e?.display_name).toBe("Spark 星火 (maas)");
+  });
+
+  it("同一 provider 下两条同名真实模型 ⇒ 追加 provider 后仍撞,用序号兜底", () => {
+    seedReal("p1", "m1", { name: "同名" });
+    seedReal("p1", "m2", { name: "同名" });
+    const entries = listModelEntries(registry(), db, new Set(["p1"]));
+    const byId = (id: string) => entries.find((e) => e.id === id)?.display_name;
+    expect(byId("p1/m1")).toBe("同名 (p1)");
+    expect(byId("p1/m2")).toBe("同名 (p1) ·2");
   });
 });
 

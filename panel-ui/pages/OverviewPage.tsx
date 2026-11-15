@@ -27,8 +27,6 @@ import type {
   RuntimeSnapshot,
 } from "../api";
 import { fmtCount, fmtDuration } from "../format";
-// 渠道风险提示文案(与「模型 → 渠道」页共用同一份,见 @as-one/panel 的同名模块)。
-import { providerRiskNote } from "@as-one/panel/src/channel-risk-note.js";
 import {
   checkinSignedText,
   formatCheckinCreditInline,
@@ -169,14 +167,8 @@ function CheckinRow({ c }: { c: CheckinChannelStatus }): React.JSX.Element {
 
   return (
     <div className="ov-checkinRow">
-      <span
-        className="ov-checkinName"
-        // ⚠️ 2026-11-08(WorkBuddy 重新显性化):这一行不再是「隐藏期间」的样子 ——
-        // 把上游风险挂在 title 上。语气克制:说清事实与我们的处置,不吓人也不隐瞒。
-        title={providerRiskNote(c.provider)}
-      >
-        {c.label}
-      </span>
+      {/* 2026-11-15 用户定案:签到行不再挂上游风控说明(title 文案已移除)。 */}
+      <span className="ov-checkinName">{c.label}</span>
       <span className={`ov-checkinState is-${cls}`} title={meta.join(" · ")}>
         {state}
       </span>
@@ -189,9 +181,8 @@ function CheckinRow({ c }: { c: CheckinChannelStatus }): React.JSX.Element {
  * 总览「每日签到」隐藏的渠道。
  *
  * ⚠️ 2026-11-08 **清空**:WorkBuddy 已重新在「模型 → 渠道」页显性化(用户定案),
- * 总览的签到行同时恢复显示。之前隐藏的理由是「上游风控期,避免误点触发」;
- * 现在风险由**代码级缓解**(账号节流 / 首用自检 / 11140 熔断)与**界面提示**
- * (`providerRiskNote` 挂在行名 title 上)承担,而不是靠「不显示」。
+ * 总览的签到行同时恢复显示。风险由**代码级缓解**(账号节流 / 首用自检 / 11140 熔断)
+ * 承担;界面上的风控提示已在 2026-11-15 按用户定案移除。
  * 保留这个集合(空集)是因为过滤逻辑本身还有用:将来若要临时隐藏某渠道,
  * 加一行即可,不必再改渲染流程。
  */
