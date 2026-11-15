@@ -448,16 +448,24 @@ describe("rewriteHostIdentityText:身份句式同族动词", () => {
   it("built by / created by / developed by 等搭配也被中性化", () => {
     for (const text of [
       "You are Example Agent, built by Example Corp.",
+      "You are an AI assistant built on DeepSeek.",
       "You are a coding assistant created by SomeVendor.",
       "You are an AI developed by AnotherLab.",
+      "You are the Example model made by Example Inc.",
       "You are the Example model trained by Example Inc.",
     ]) {
       const out = gate.rewriteHostIdentityText(text);
       expect(out.startsWith(WORKBUDDY_NEUTRAL_HEAD)).toBe(true);
-      expect(out.toLowerCase()).not.toContain("built by");
-      expect(out.toLowerCase()).not.toContain("created by");
-      expect(out.toLowerCase()).not.toContain("developed by");
-      expect(out.toLowerCase()).not.toContain("trained by");
+      for (const verb of [
+        "built on",
+        "built by",
+        "created by",
+        "developed by",
+        "made by",
+        "trained by",
+      ]) {
+        expect(out.toLowerCase()).not.toContain(verb);
+      }
     }
   });
 });
