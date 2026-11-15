@@ -847,23 +847,60 @@ body {
   gap: 6px;
 }
 
+/* 拖出列表范围时描红提示「松手即删除」;outline 不占布局,行不会跳动。 */
+.nodeList.nodeListOutside {
+  outline: 2px dashed var(--bad);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
 .nodeRow {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-.groupIdx {
+/* 拖拽源行半透明,让落点更好判断 */
+.nodeRow.nodeRowDragging {
+  opacity: 0.4;
+}
+
+/* 行首拖动手柄:只在手柄上 draggable,避免 <select> 吞掉 mousedown */
+.dragHandle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--dsw-alias-button-info-fill, #2f4d6b);
-  color: var(--on-accent);
-  font-size: 11px;
+  height: 28px;
   flex-shrink: 0;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;
+  border-radius: 4px;
+}
+
+.dragHandle:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+.dragHandle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 插入位置指示线 */
+.dropMarker {
+  height: 2px;
+  margin: 0 2px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 .nodeProvider {
@@ -896,32 +933,6 @@ body {
 
 .addModelButton:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.iconButton {
-  appearance: none;
-  background: none;
-  border: none;
-  font: inherit;
-  color: var(--dim);
-  padding: 2px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.iconButton:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--accent-soft);
-}
-
-.iconButtonDanger:hover:not(:disabled) {
-  color: var(--bad);
-}
-
-.iconButton:disabled {
-  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -3238,11 +3249,22 @@ body {
   font-weight: 500;
 }
 
-/* chainHead:档链小节头(页面此前未渲染该 class) */
+/* chainHead:档链小节头 + 右侧拖拽用法提示(同一行,别把提示顶成第二行) */
 .chainHead {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.chainHint {
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.chainHint.chainHintDanger {
+  color: var(--bad);
 }
 
 /* nodeRow 内:.input 的 width:100% 会让行溢出卡片,必须赢过它(Nexus 同值) */
@@ -3254,11 +3276,6 @@ body {
   width: auto;
   flex: 1 1 0;
   min-width: 0;
-}
-
-/* groupIdx 字色 var(--text-soft)(通用块是 --text) */
-.lm-section .editor .groupIdx {
-  color: var(--text);
 }
 
 /* addModelButton:方角 4px / 边框 var(--border) / 底透明 / hover 底色 var(--dsw-alias-interactive-bg-hover, #1f2732) */
@@ -3283,29 +3300,6 @@ body {
   border-color: var(--border);
 }
 .lm-section .editor .addModelButton:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* iconButton:字色 var(--dim) / hover 底色 var(--dsw-alias-interactive-bg-hover, #1f2732) + 字色 var(--text-soft);危险档hover 字var(--bad) */
-.lm-section .editor .iconButton {
-  color: var(--dim);
-  cursor: pointer;
-  border: none;
-  background: none;
-  border-radius: 4px;
-  padding: 2px 6px;
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.lm-section .editor .iconButton:hover:not(:disabled) {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-.lm-section .editor .iconButtonDanger:hover:not(:disabled) {
-  color: var(--bad);
-}
-.lm-section .editor .iconButton:disabled {
   opacity: 0.4;
   cursor: default;
 }

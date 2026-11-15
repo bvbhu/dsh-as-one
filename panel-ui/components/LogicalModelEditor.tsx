@@ -1,32 +1,21 @@
 /**
- * 逻辑模型编辑器 —— 新建与编辑**共用这一份**(严格 1:1 移植 Nexus
- * panel/web/src/components/LogicalModelEditor.vue 的模板、文案与交互)。
+ * 逻辑模型编辑器 —— 新建与编辑**共用这一份**(结构移植自 Nexus
+ * panel/web/src/components/LogicalModelEditor.vue 的模板与文案)。
  *
- * 与 Nexus 模板逐元素对应:
- *   div.editor                        → 同名同构
- *   编辑态 div.fieldRow                → fieldLabel「逻辑模型名」+ fieldValue
- *                                        (title = 改名要删了重建提示)
- *   新建态 label.fieldRow[for=lm-name] → fieldLabel + input#lm-name.input
- *                                        (placeholder「如 deepseek-v4-flash / glm-5.3-flashx」、
- *                                         title 规则说明;边打边校验:非空且不合法才标红
- *                                         inputBad,空着不算错 —— 拦截仍在保存前 validateForm)
- *   div.fieldRow「调度策略」           → select.input.selectInput(6 策略键,中文显示名)
- *   （新增,非 Nexus 移植）label.fieldRow[for=lm-display-name] → 显示名输入
- *                                         (用户 m44638:逻辑模型的调用串不能改,好看的名字
- *                                          另存 `logical_model.display_name`;留空回退用名字)
- *   div.chainHead「档链」             → fieldLabel
- *   div.nodeList > div.nodeRow        → span.groupIdx 序号 + 供应商/模型双下拉
- *                                        (aria-label「第 N 档的供应商/模型」,模型下拉在
- *                                         未选供应商时禁用)+ ↑ 上移一档 / ↓ 下移一档 /
- *                                        ✕ 移除该档 三个 iconButton(title 提示)
- *   button.addModelButton「＋ 添加档位」(目录为空时禁用)
- *   div.editorActions                 → primaryButton(保存中… / 创建 / 保存)+ secondaryButton「取消」
+ * ## 2026-11-15 档链交互重做(用户定案)
+ * - **不显示序号**:去掉蓝色圆圈 groupIdx,优先级由自上而下的排列表达;
+ * - **拖动排序**:行首 ⠿ 手柄承担排序,拖到目标缝隙松手即重排,顺序原样提交;
+ * - **拖出范围即删除**:把行拖出「档链」列表范围松手就删掉该档,拖动过程中
+ *   列表描红并把提示改成「松手即删除该档」,避免误操作;
+ * - 不再摆 ↑↓✕ 三个按钮;手柄聚焦时 ↑/↓ 调序、Delete/Backspace 删除,
+ *   保留键盘可达性(纯拖拽对键盘用户不可用)。
  *
  * 受控组件:name/strategy/members 由页面持有,变更经回调回写;保存/取消由页面代理。
  * 档链 members 的**数组顺序就是优先级**(Nexus 同款:前端原样提交,后端不排序)。
  * 名字输入对齐 Nexus 的 v-model.trim:输入即时去首尾空白。
  */
 import React from "react";
+import { insertIndexAt, moveItemTo, outsideRect } from "./logical-model-dnd.js";
 
 /** 逻辑模型名合法规则:小写字母开头,可含小写/数字/点/短横线/单下划线(斜杠不许)。 */
 export const NAME_RE = /^[a-z][a-z0-9._-]*$/;
@@ -82,6 +71,9 @@ function labelOf(key: string): string {
   return STRATEGY_LABELS[key as StrategyKey] ?? key;
 }
 
+/** 「拖出列表」的宽容差:蹭到边框几像素不算删除。 */
+const DROP_MARGIN = 8;
+
 export function LogicalModelEditor({
   creating,
   catalog,
@@ -106,6 +98,39 @@ export function LogicalModelEditor({
 
   /** 全部可登记的真实模型按 provider 去重后的清单。 */
   const providers = [...new Set(catalog.map((c) => c.provider))];
+
+  // ── 拖拽状态 ────────────────────────────────────────────────────────────
+  const listRef = React.useRef<HTMLDivElement | null>(null);
+  const rowRefs = React.useRef<Array<HTMLDivElement | null>>([]);
+  /** 源下标 + drop 是否已处理(已重排的档不能在 dragEnd 里再被当成「拖出删除」)。 */
+  const dragRef = React.useRef<{ from: number; handled: boolean } | null>(null);
+  /** 最后的指针位置:个别浏览器 dragend 的 clientX/Y 会归零,用它兜底。 */
+  const lastPointRef = React.useRef<{ x: number; y: number } | null>(null);
+  const [dragFrom, setDragFrom] = React.useState<number | null>(null);
+  const [dropAt, setDropAt] = React.useState<number | null>(null);
+  const [outside, setOutside] = React.useState(false);
+
+  /** document 级 dragover:指针出了 nodeList 后,列表自己的事件就不再触发了。 */
+  React.useEffect(() => {
+    if (dragFrom === null) return;
+    const onDocDragOver = (e: DragEvent): void => {
+      lastPointRef.current = { x: e.clientX, y: e.clientY };
+      const rect = listRef.current?.getBoundingClientRect();
+      setOutside(rect ? outsideRect(rect, e.clientX, e.clientY, DROP_MARGIN) : false);
+    };
+    document.addEventListener("dragover", onDocDragOver);
+    return () => document.removeEventListener("dragover", onDocDragOver);
+  }, [dragFrom]);
+
+  function rowBands(): Array<{ top: number; bottom: number }> {
+    return rowRefs.current
+      .slice(0, members.length)
+      .filter((el): el is HTMLDivElement => el !== null)
+      .map((el) => {
+        const r = el.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom };
+      });
+  }
 
   /**
    * 当前供应商下的可选模型名。
@@ -136,7 +161,7 @@ export function LogicalModelEditor({
     onChangeMembers?.([...members, { provider: first?.provider ?? "", model: first?.model ?? "" }]);
   }
 
-  /** 上移 / 下移 —— 「拖拽排序」的等价物,结果**原样提交**。 */
+  /** 键盘补偿:手柄聚焦时的上移/下移,结果**原样提交**。 */
   function moveMember(i: number, delta: -1 | 1): void {
     const j = i + delta;
     if (j < 0 || j >= members.length) return;
@@ -147,6 +172,63 @@ export function LogicalModelEditor({
 
   function removeMember(i: number): void {
     onChangeMembers?.(members.filter((_, idx) => idx !== i));
+  }
+
+  function onHandleDragStart(i: number, e: React.DragEvent<HTMLSpanElement>): void {
+    dragRef.current = { from: i, handled: false };
+    lastPointRef.current = { x: e.clientX, y: e.clientY };
+    setDragFrom(i);
+    setDropAt(null);
+    setOutside(false);
+    e.dataTransfer.effectAllowed = "move";
+    // Firefox 要求 dragstart 里必须 setData,否则后续 dragover/drop 不派发。
+    e.dataTransfer.setData("text/plain", String(i));
+  }
+
+  function onListDragOver(e: React.DragEvent<HTMLDivElement>): void {
+    if (dragRef.current === null) return;
+    e.preventDefault(); // 不 preventDefault 浏览器就不会派发 drop
+    e.dataTransfer.dropEffect = "move";
+    setDropAt(insertIndexAt(rowBands(), e.clientY));
+  }
+
+  function onListDrop(e: React.DragEvent<HTMLDivElement>): void {
+    e.preventDefault();
+    const d = dragRef.current;
+    if (d === null) return;
+    d.handled = true;
+    onChangeMembers?.(moveItemTo(members, d.from, insertIndexAt(rowBands(), e.clientY)));
+  }
+
+  function onHandleDragEnd(e: React.DragEvent<HTMLSpanElement>): void {
+    const d = dragRef.current;
+    dragRef.current = null;
+    setDragFrom(null);
+    setDropAt(null);
+    setOutside(false);
+    if (d === null || d.handled) return;
+    // 没在列表内落点 → 只有确实越界才删;拖回原处松手什么都不做。
+    const rect = listRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const p =
+      e.clientX !== 0 || e.clientY !== 0
+        ? { x: e.clientX, y: e.clientY }
+        : (lastPointRef.current ?? { x: e.clientX, y: e.clientY });
+    if (outsideRect(rect, p.x, p.y, DROP_MARGIN)) removeMember(d.from);
+  }
+
+  /** ↑↓ 调序 / Delete 删除 —— 手柄的键盘等价操作。 */
+  function onHandleKeyDown(i: number, e: React.KeyboardEvent<HTMLSpanElement>): void {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveMember(i, -1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveMember(i, 1);
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      removeMember(i);
+    }
   }
 
   return (
@@ -205,67 +287,70 @@ export function LogicalModelEditor({
 
       <div className="chainHead">
         <span className="fieldLabel">档链</span>
+        <span className={`chainHint${outside ? " chainHintDanger" : ""}`}>
+          {outside ? "松手即删除该档" : "拖动 ⠿ 调整优先级 · 拖出列表即删除"}
+        </span>
       </div>
 
-      <div className="nodeList">
+      <div
+        ref={listRef}
+        className={`nodeList${outside ? " nodeListOutside" : ""}`}
+        onDragOver={onListDragOver}
+        onDrop={onListDrop}
+      >
         {members.map((m, i) => (
-          <div key={i} className="nodeRow">
-            <span className="groupIdx">{i + 1}</span>
-            <select
-              className="input nodeProvider"
-              value={m.provider}
-              aria-label={`第 ${i + 1} 档的供应商`}
-              onChange={(e) => onProviderChange(i, e.target.value)}
+          <React.Fragment key={i}>
+            {dropAt === i ? <div className="dropMarker" aria-hidden="true" /> : null}
+            <div
+              ref={(el) => {
+                rowRefs.current[i] = el;
+              }}
+              className={`nodeRow${dragFrom === i ? " nodeRowDragging" : ""}`}
             >
-              <option value="">— 选供应商 —</option>
-              {providers.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-            <select
-              className="input nodeSelect"
-              value={m.model}
-              disabled={!m.provider}
-              aria-label={`第 ${i + 1} 档的模型`}
-              onChange={(e) => setMember(i, { model: e.target.value })}
-            >
-              <option value="">— 选模型 —</option>
-              {modelsOf(m.provider, m.model).map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="iconButton"
-              title="上移一档"
-              disabled={i === 0}
-              onClick={() => moveMember(i, -1)}
-            >
-              ↑
-            </button>
-            <button
-              type="button"
-              className="iconButton"
-              title="下移一档"
-              disabled={i === members.length - 1}
-              onClick={() => moveMember(i, 1)}
-            >
-              ↓
-            </button>
-            <button
-              type="button"
-              className="iconButton iconButtonDanger"
-              title="移除该档"
-              onClick={() => removeMember(i)}
-            >
-              ✕
-            </button>
-          </div>
+              <span
+                className="dragHandle"
+                draggable
+                role="button"
+                tabIndex={0}
+                title="拖动排序 · 拖出档链区域即删除(键盘:↑↓ 调序 / Delete 删除)"
+                aria-label={`拖动第 ${i + 1} 档排序,或按上下键调序、Delete 删除`}
+                onDragStart={(e) => onHandleDragStart(i, e)}
+                onDragEnd={onHandleDragEnd}
+                onKeyDown={(e) => onHandleKeyDown(i, e)}
+              >
+                ⠿
+              </span>
+              <select
+                className="input nodeProvider"
+                value={m.provider}
+                aria-label={`第 ${i + 1} 档的供应商`}
+                onChange={(e) => onProviderChange(i, e.target.value)}
+              >
+                <option value="">— 选供应商 —</option>
+                {providers.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="input nodeSelect"
+                value={m.model}
+                disabled={!m.provider}
+                aria-label={`第 ${i + 1} 档的模型`}
+                onChange={(e) => setMember(i, { model: e.target.value })}
+              >
+                <option value="">— 选模型 —</option>
+                {modelsOf(m.provider, m.model).map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </React.Fragment>
         ))}
+        {dropAt === members.length ? <div className="dropMarker" aria-hidden="true" /> : null}
         <button
           type="button"
           className="addModelButton"
