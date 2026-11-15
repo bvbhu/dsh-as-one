@@ -702,11 +702,34 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         return { ok: true, provider: pid, count: 0, changed: [], message: "" };
       }
 
+      /**
+       * qoder 历史偏好 `qoder.models` 与统一页真源对齐。
+       *
+       * 2026-11-15 Qoder 独立页移除后,勾选真源与其它渠道一样是 `real_model`
+       * 表;但旧 RPC `qoderSetModelEnabled` 仍按 `qoder.models` 重建行(供 Agent
+       * 侧脚本使用)。每次通用保存后把偏好写成表里的事实,两套真源就不会互相
+       * 回滚。失败只记日志 —— 偏好是兼容层,不能反过来让主写入失败。
+       */
+      const done = (result: ApiResult): ApiResult => {
+        if (pid === "qoder") {
+          try {
+            const keys = ctx.db.realModel.listByProvider(pid).map((r) => r.model);
+            ctx.db.setting.set(
+              "qoder.models",
+              JSON.stringify({ version: 1, selected: { qoder: keys } }),
+            );
+          } catch (err) {
+            console.error("[as-one] qoder 勾选偏好同步失败:", err);
+          }
+        }
+        return result;
+      };
+
       // ── 取消登记 = 删这一行(先摘逻辑模型档链,再删) ──────────────────────
       if (patch.exposed === false) {
         const existed = ctx.db.realModel.get(pid, bare) !== null;
         if (!existed) {
-          return { ok: true, provider: pid, count: 0, changed: [], message: "" };
+          return done({ ok: true, provider: pid, count: 0, changed: [], message: "" });
         }
         const stripped = deps.stripMemberFromLogicalModels(`${pid}/${bare}`);
         ctx.db.realModel.delete(pid, bare);
@@ -717,13 +740,13 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         }
         ctx.syncRegistry();
         const tail = stripped > 0 ? `,从逻辑模型档链连锁摘除 ${stripped} 处` : "";
-        return {
+        return done({
           ok: true,
           provider: pid,
           count: 0,
           changed: [`${pid}/${bare}`],
           message: `已取消登记 ${pid}/${bare}${tail}`,
-        };
+        });
       }
 
       // ── 登记 / 改声明字段 = 单行 upsert ────────────────────────────────
@@ -734,13 +757,13 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         /* 同上 */
       }
       ctx.syncRegistry();
-      return {
+      return done({
         ok: true,
         provider: pid,
         count: 1,
         changed: [`${pid}/${bare}`],
         message: added ? `已登记 ${pid}/${bare}` : `已更新 ${pid}/${bare}`,
-      };
+      });
     },
     /**
      * 单模型检测(对齐 Nexus `POST /providers/{id}/check-model`)。

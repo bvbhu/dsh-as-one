@@ -54,8 +54,13 @@ import type { AccountRow } from "../../components/AccountRows";
 
 export interface ChannelPageProps {
   /** minimax(2026-11-07 渠道合并页):走同一套三段式,但目录是内置名单、
-   *  无本机客户端段、凭据走 bridge 导入脚本(见 fetch_minimax_catalog)。 */
-  provider: "trae" | "workbuddy" | "minimax";
+   *  无本机客户端段、凭据走 bridge 导入脚本(见 fetch_minimax_catalog)。
+   *
+   * qoder(2026-11-15 用户定案「直接移除独立页面,重写为统一页面」):原本有
+   * 独立的 QoderPage + `qoder.models` 偏好勾选,现在与其它渠道共用本页 ——
+   * 勾选真源统一为 `real_model` 表,目录走 `CH_CATALOG_PROVIDERS` 里的 qoder
+   * 通路,保存走同一条 `setChannelModel` 单行 upsert。 */
+  provider: "trae" | "workbuddy" | "minimax" | "qoder";
 }
 
 /** 完整 id(`provider/模型`)→ 裸模型名(表格行键 + 提交用)。 */

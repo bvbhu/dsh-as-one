@@ -28,5 +28,5 @@ export { default as LogicalModelsPage } from "./pages/models/LogicalModelsPage";
 export { default as DeploymentsPage } from "./pages/models/DeploymentsPage";
 export { default as ChannelPage } from "./pages/models/ChannelPage";
 export { default as SenseNovaPage } from "./pages/models/SenseNovaPage";
-export { default as QoderPage } from "./pages/models/QoderPage";
+/* QoderPage 已移除(2026-11-15):Qoder 与其它渠道共用 ChannelPage。 */
 export { default as ProvidersPage } from "./pages/models/ProvidersPage";

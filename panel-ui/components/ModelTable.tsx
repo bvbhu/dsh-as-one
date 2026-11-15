@@ -53,10 +53,11 @@ export interface ModelTableProps {
   /**
    * 名称/上下文/最大输出/视觉四列只显示、不落库(默认 false)。
    *
-   * 给「目录即上游、勾选才登记 real_model」的页面用:未勾选的行在库里根本没有
-   * 对应记录,摆一个能改的输入框等于骗人 —— 改完没地方存。启用列仍可点。
-   * ※ 现在的 Qoder 页已改成「勾上就建行 + 实时保存」,所以它**不再**用这个开关。
-   */
+ * 给「目录即上游、勾选才登记 real_model」的页面用:未勾选的行在库里根本没有
+ * 对应记录,摆一个能改的输入框等于骗人 —— 改完没地方存。启用列仍可点。
+ * ※ Qoder 页用它:能力值由上游目录自愈(见 healQoderWindows),没有逐字段保存
+ *   接口;但**勾选保存走与其它渠道相同的 onEdit / onCommit 实时保存契约**。
+ */
   plainColumns?: boolean;
   /** 左上工具栏(来源标签/勾选计数/刷新说明)。 */
   toolbar?: React.ReactNode;
@@ -135,11 +136,13 @@ export function ModelTable({
             return (
               <tr key={row.id ?? i} className={cls}>
                 <td>
+                  {/* 上游不可用但**已勾选**的行仍要允许取消 —— 否则上游一翻脸,
+                      用户就永远摘不掉它(Qoder 的 available 来自上游 enable)。 */}
                   <input
                     type="checkbox"
                     aria-label={`启用:${row.id}`}
                     checked={row.exposed}
-                    disabled={disabled || row.available === false}
+                    disabled={disabled || (row.available === false && !row.exposed)}
                     onChange={(ev) => {
                       const e: ModelTableEdit = { id: row.id, field: "exposed", value: ev.target.checked };
                       editOnChange(e);

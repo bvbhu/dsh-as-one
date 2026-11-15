@@ -11,7 +11,7 @@
  * 版式:
  *   - 卡头**常显余额**(读 channelOverview 的运行期缓存,绝不为卡头打上游);
  *     没采集过显示「未采集」。
- *   - 展开 = 复用现有页面组件原样渲染(QoderPage / SenseNovaPage / ChannelPage),
+ *   - 展开 = 复用现有页面组件原样渲染(SenseNovaPage / ChannelPage),
  *     模型目录与配置区随之折叠。
  *   - ⚠️ 2026-11-08 刷新语义**彻底拆开**(用户定案),三个入口各管一件事:
  *       ① 「全部刷新」(页面顶部**常显**,也由进入页面自动触发)= **只刷积分余额**
@@ -36,7 +36,7 @@ import {
   formatCheckinCredit,
 } from "@as-one/panel/src/checkin-chip-format.js";
 import ChannelPage from "./ChannelPage";
-import QoderPage from "./QoderPage";
+/* Qoder 独立页已移除(2026-11-15):五个渠道统一走 ChannelPage。 */
 import SenseNovaPage from "./SenseNovaPage";
 
 /** 卡序(2026-11-08 恢复):Trae → WorkBuddy → MiniMax → Qoder → SenseNova。 */
@@ -59,7 +59,7 @@ const CARDS = [
  */
 const CHECKIN_PROVIDERS = new Set(["trae", "workbuddy", "minimax", "qoder"]);
 
-/** Qoder 的区域键(与 QoderPage 的 `REGION` 同值;积分接口按区域取账号池)。 */
+/** Qoder 的区域键(只接国内版;积分接口按区域取账号池)。 */
 const QODER_REGION = "qoder";
 
 /**
@@ -401,13 +401,12 @@ export default function ChannelsPage(): React.JSX.Element {
             </header>
             {open ? (
               <div className="chx-body">
-                {spec.provider === "qoder" ? (
-                  // `key` 里带 `quotaTick`:点过「全部刷新」后重挂一次,
-                  // 让内嵌页重新读本地库(它读的是落库后的积分,不重读就还是旧数)。
-                  <QoderPage key={`qoder:${quotaTick}`} />
-                ) : spec.provider === "sensenova" ? (
+                {spec.provider === "sensenova" ? (
                   <SenseNovaPage key={`sensenova:${quotaTick}`} />
                 ) : (
+                  // `key` 里带 `quotaTick`:点过「全部刷新」后重挂一次,
+                  // 让内嵌页重新读本地库(它读的是落库后的积分,不重读就还是旧数)。
+                  // 2026-11-15:Qoder 独立页已移除,与其它渠道一样走 ChannelPage。
                   <ChannelPage key={`${spec.provider}:${quotaTick}`} provider={spec.provider} />
                 )}
               </div>

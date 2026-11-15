@@ -22,13 +22,25 @@ import type { PanelContext } from "./context.js";
 /** 内存版 real_model(与 `core/db/database.ts` 的 facade 同接口)。 */
 function makeRealModelDb(
   initial: Array<[string, string, Record<string, unknown>]> = [],
-): { db: PanelContext["db"]; rows: Map<string, Record<string, unknown>> } {
+): {
+  db: PanelContext["db"];
+  rows: Map<string, Record<string, unknown>>;
+  /** setting.set 的写入记录(验 qoder 勾选偏好兼容层用)。 */
+  writes: Map<string, string>;
+} {
   const rows = new Map<string, Record<string, unknown>>();
+  const writes = new Map<string, string>();
   const key = (p: string, m: string) => `${p}/${m}`;
   for (const [provider, model, fields] of initial) {
     rows.set(key(provider, model), { provider, model, ...fields });
   }
   const db = {
+    setting: {
+      get: (k: string) => (writes.has(k) ? { v: writes.get(k) } : undefined),
+      set: (k: string, v: string) => {
+        writes.set(k, v);
+      },
+    },
     realModel: {
       get: (p: string, m: string) => rows.get(key(p, m)),
       set: (row: Record<string, unknown>) => {
@@ -42,7 +54,7 @@ function makeRealModelDb(
       listByProvider: (p: string) => [...rows.values()].filter((r) => r.provider === p),
     },
   };
-  return { db: db as unknown as PanelContext["db"], rows };
+  return { db: db as unknown as PanelContext["db"], rows, writes };
 }
 
 /** 只给 setChannelModel 用到的三个依赖点。 */
@@ -100,7 +112,7 @@ function seeded(rows: Map<string, Record<string, unknown>>): void {
 }
 
 function setup(initial: Array<[string, string, Record<string, unknown>]> = []) {
-  const { db, rows } = makeRealModelDb(initial);
+  const { db, rows, writes } = makeRealModelDb(initial);
   seeded(rows);
   const syncRegistry = vi.fn();
   const ctx = {
@@ -110,10 +122,49 @@ function setup(initial: Array<[string, string, Record<string, unknown>]> = []) {
     syncRegistry,
   } as unknown as PanelContext;
   const methods = createChannelsMethods(ctx, makeDeps());
-  return { methods, rows, syncRegistry };
+  return { methods, rows, writes, syncRegistry };
 }
 
 const MODEL = "workbuddy/glm-5.3-flash";
+
+/**
+ * Qoder 独立页移除后(2026-11-15),勾选真源统一为 `real_model` 表;但旧 RPC
+ * `qoderSetModelEnabled` 仍按 `qoder.models` 偏好重建行(供 Agent 脚本用)。
+ * 这里钉住「通用保存必须把偏好对齐成表里的事实」,否则两套真源会互相回滚。
+ */
+describe("setChannelModel:qoder 勾选偏好兼容层", () => {
+  it("勾选 / 取消都把 qoder.models 对齐成 real_model 的事实", async () => {
+    const { methods, rows, writes } = setup();
+    const patch = {
+      id: "qoder/qfmodel",
+      name: "Qwen3.8-Flash",
+      vision: false,
+      context_window: undefined,
+      max_output: undefined,
+      exposed: true,
+    };
+    expect((await methods.setChannelModel("qoder", patch)).ok).toBe(true);
+    expect(rows.has("qoder/qfmodel")).toBe(true);
+    expect(JSON.parse(writes.get("qoder.models")!).selected.qoder).toContain("qfmodel");
+
+    await methods.setChannelModel("qoder", { ...patch, exposed: false });
+    expect(rows.has("qoder/qfmodel")).toBe(false);
+    expect(JSON.parse(writes.get("qoder.models")!).selected.qoder).not.toContain("qfmodel");
+  });
+
+  it("非 qoder 渠道不碰 qoder.models", async () => {
+    const { methods, writes } = setup();
+    await methods.setChannelModel("workbuddy", {
+      id: MODEL,
+      name: "GLM-5.3-Flash",
+      vision: false,
+      context_window: undefined,
+      max_output: undefined,
+      exposed: true,
+    });
+    expect(writes.has("qoder.models")).toBe(false);
+  });
+});
 
 describe("setChannelModel:上下文窗口/输出上限的提交契约", () => {
   it("`undefined` = 保留库里原值(UI 靠这个做「没动过的格子不提交」)", async () => {
