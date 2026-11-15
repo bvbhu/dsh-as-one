@@ -360,6 +360,7 @@ import {
   classifyResponse,
   postWorkbuddyWithGate,
   preparePeer,
+  codeartsSignedHeaders,
   runQoder,
   runSensenova,
   type PoolRuntime,
@@ -382,7 +383,7 @@ import {
  * SSE),所以流解析要按 openai 口径走;其它协议一一对应。
  */
 function wireProtocolOf(protocol: string): string {
-  return protocol === "qoder" ? "openai" : protocol;
+  return protocol === "qoder" || protocol === "codearts" ? "openai" : protocol;
 }
 
 /** 工厂:gateway 每次调用(每个请求)都会调 resolveUpstream(model)。 */
@@ -866,6 +867,10 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
                 res = q.res;
                 snRuntime = q.runtime;
               } else {
+                const sendHeaders =
+                  item.endpoint.protocol === "codearts"
+                    ? codeartsSignedHeaders(peer, url, body, headers)
+                    : headers;
                 res = isWorkbuddyWire(item.endpoint.protocol)
                   ? // 渠道校验闸门必须在流式路径上也生效 —— DSH 的对话请求
                     // 全是流式的,只在 complete() 挂闸门等于没挂(用户实测拿到的
@@ -876,7 +881,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
                     await postWorkbuddyWithGate(url, headers, body, abort.signal, connector)
                   : await fetch(url, {
                       method: "POST",
-                      headers: upstreamHeaders(headers),
+                      headers: upstreamHeaders(sendHeaders),
                       body: JSON.stringify(body),
                       signal: abort.signal,
                     });
@@ -1339,11 +1344,13 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
                 res = q.res;
                 snRuntime = q.runtime;
               } else {
+                const sendHeaders =
+                  protocol === "codearts" ? codeartsSignedHeaders(peer, url, body, headers) : headers;
                 res = isWorkbuddyWire(protocol)
                   ? await postWorkbuddyWithGate(url, headers, body, abort.signal, connector)
                   : await fetch(url, {
                       method: "POST",
-                      headers: upstreamHeaders(headers),
+                      headers: upstreamHeaders(sendHeaders),
                       body: JSON.stringify(body),
                       signal: abort.signal,
                     });
@@ -1357,7 +1364,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
             }
 
             let data: ChatCompletion;
-            if (protocol === "openai" && !req.stream) {
+            if ((protocol === "openai" || protocol === "codearts") && !req.stream) {
               // OpenAI 兼容:非流式直接读 JSON。
               // ⚠️ 能走到这里的 workbuddy 只有 `protocol === "workbuddy"`,
               // 它在请求体构造阶段就被置了 `stream: true`(buildWorkbuddyBody),

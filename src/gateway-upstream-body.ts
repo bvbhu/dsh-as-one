@@ -12,6 +12,7 @@ import { chainItemFrom } from "@as-one/core/src/router/types.js";
 import type { ChainItem as RouterChainItem } from "@as-one/core/src/router/types.js";
 import { identityFromExtra, prepareTraeRequest } from "@as-one/core/src/connectors/trae-wire.js";
 import { buildWorkbuddyBody } from "@as-one/core/src/connectors/workbuddy-wire.js";
+import { buildCodeartsBody } from "@as-one/core/src/connectors/codearts-wire.js";
 import { imagePartIndices } from "@as-one/core/src/gateway/image-bridge.js";
 import type { BridgeMessage } from "@as-one/core/src/gateway/image-bridge.js";
 import { isWorkbuddyWire, rewriteHostIdentity } from "@as-one/core/src/connectors/workbuddy-gate.js";
@@ -154,6 +155,26 @@ export function bodyForProtocol(
       req as unknown as Record<string, unknown>,
       minimaxUpstreamModelOf(String(req.model ?? "")),
       typeof req.reasoning_effort === "string" ? req.reasoning_effort : undefined,
+    );
+  }
+  if (protocol === "codearts") {
+    // CodeArts B 族是 OpenAI 兼容体，但有两个硬约束：
+    //   1. `body.model` 必须与请求头 `model-id` / `model-name` **逐字一致**
+    //      （尾随空格都报 406），所以模型名从 `req.model` 原样取、不 trim；
+    //   2. 不发 `maas_type`（benefit 通道已下线，带它会被判成不存在的通道）。
+    return buildCodeartsBody(
+      {
+        model: String(req.model ?? ""),
+        messages: req.messages as unknown,
+        stream: req.stream === true,
+        ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+        ...(req.max_tokens !== undefined ? { max_tokens: req.max_tokens } : {}),
+        ...(req.top_p !== undefined ? { top_p: req.top_p } : {}),
+        ...(req.stop !== undefined ? { stop: req.stop } : {}),
+        ...(req.tools !== undefined ? { tools: req.tools } : {}),
+        ...(req.tool_choice !== undefined ? { tool_choice: req.tool_choice } : {}),
+      },
+      String(req.model ?? ""),
     );
   }
   if (protocol === "trae") {

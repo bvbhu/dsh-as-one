@@ -29,6 +29,14 @@ import {
 } from "@as-one/core/src/connectors/qoder-wire.js";
 import { regionOfCreds } from "@as-one/core/src/connectors/qoder.js";
 import {
+  CODEARTS_BASE_CN,
+  CODEARTS_CHAT_PATH,
+  codeartsIdentityHeaders,
+  requireCodeartsKeys,
+  type CodeartsCredentials,
+} from "@as-one/core/src/connectors/codearts.js";
+import { signCodeartsRequest } from "@as-one/core/src/connectors/codearts-sign.js";
+import {
   channelRejectMessage,
   isChannelRejectDetail,
   isWorkbuddyWire,
@@ -165,6 +173,46 @@ export async function runQoder(
 }
 
 /**
+ * CodeArts 出站头：identity 头 + **按 body 现算的签名**（`SDK-HMAC-SHA256`）。
+ *
+ * 为什么要在这里现算，而不是在 `preparePeer` 的 `decorateRequest` 里：
+ * 签名覆盖「`CanonicalURI` + 请求体哈希」，而 `preparePeer` 时 body 还没定稿。
+ * 与 qoder 同一套路 —— 连接器不签名，网关在真正发请求前签。
+ *
+ * ⚠️ identity 头**不参与签名**（只签 `host` + `x-sdk-date` [+ `x-security-token`]）：
+ * `Agent-Type` / `X-Language` 进 SignedHeaders 会 `401 APIG.0301`。
+ */
+export function codeartsSignedHeaders(
+  peer: Peer,
+  url: string,
+  body: Record<string, unknown>,
+  base: Record<string, string> = {},
+): Record<string, string> {
+  const creds = (peer.creds ?? {}) as CodeartsCredentials;
+  const { accessKey, secretKey } = requireCodeartsKeys(creds);
+  const model = typeof body["model"] === "string" ? body["model"] : "";
+  const headers: Record<string, string> = {
+    ...base,
+    ...codeartsIdentityHeaders({
+      accessKey,
+      ...(model !== "" ? { model } : {}),
+      ...(typeof creds.domainId === "string" ? { domainId: creds.domainId } : {}),
+    }),
+  };
+  return signCodeartsRequest({
+    accessKey,
+    secretKey,
+    ...(typeof creds.securityToken === "string" && creds.securityToken !== ""
+      ? { securityToken: creds.securityToken }
+      : {}),
+    method: "POST",
+    url,
+    headers,
+    body: JSON.stringify(body),
+  }).headers;
+}
+
+/**
  * WorkBuddy **首用自检**的注入形状(装配层实现,见
  * `@as-one/core/connectors/workbuddy-selfcheck` 的 `createWorkbuddySelfCheck`)。
  *
@@ -230,6 +278,11 @@ export async function preparePeer(
     const cfg = QODER_REGION_CONFIGS[qRegion];
     const base = (baseUrl || cfg.gateway).replace(/\/+$/, "");
     url = `${base}${cfg.chatPath}`;
+  } else if (protocol === "codearts") {
+    // CodeArts(B 族):签名网关。base_url 只写到 host(自建反代时可覆盖),
+    // 路径固定 `/api/v2/chat/completions`。
+    const base = (baseUrl || CODEARTS_BASE_CN).replace(/\/+$/, "");
+    url = `${base}${CODEARTS_CHAT_PATH}`;
   } else {
     // openai 兼容与未知协议:base_url 已含 /v1,直接拼 /chat/completions。
     url = `${baseUrl || ""}/chat/completions`;
@@ -266,6 +319,12 @@ export async function preparePeer(
     // 多一次网络往返),而真正的签名头由连接器在 runWithAccount 里按 body 生成。
     headers = { ...QODER_DEFAULT_HEADERS };
     return { url, headers, connector: connectorRef, creds };
+  }
+  if (protocol === "codearts") {
+    // ⚠️ 同理:CodeArts 的签名覆盖 URL + body 哈希,只有 body 定稿后才知道签谁。
+    // 这里**只回空头**(避免错误地发一个没有 Authorization 的请求造成 401 噪音);
+    // 真正出站的头由 {@link codeartsSignedHeaders} 在 fetch 前生成。
+    return { url, headers: {}, connector: connectorRef, creds };
   }
   if (connector) {
     try {

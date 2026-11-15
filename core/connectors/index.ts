@@ -11,6 +11,7 @@ import { WorkbuddyAdapter } from "./workbuddy.js";
 import { SensenovaAdapter } from "./sensenova.js";
 import { MinimaxAdapter } from "./minimax.js";
 import { QODER_ADAPTERS } from "./qoder.js";
+import { CODEARTS_ADAPTER } from "./codearts.js";
 
 /** 默认连接器实例 */
 const defaultConnectors: AuthConnector[] = [
@@ -20,6 +21,7 @@ const defaultConnectors: AuthConnector[] = [
   new SensenovaAdapter(),
   new MinimaxAdapter(),
   ...QODER_ADAPTERS,
+  CODEARTS_ADAPTER as unknown as AuthConnector,
 ];
 
 /** 按 vendor id 查找连接器 */
@@ -57,4 +59,35 @@ export {
 export type { MinimaxModelSpec, MinimaxReasoningMode } from "./minimax-models.js";
 export type { MinimaxChunkMeta } from "./minimax-llm.js";
 export { QoderAdapter, QODER_ADAPTERS, QoderClient, getQoderClient, QoderUpstreamError } from "./qoder.js";
+export {
+  CodeartsAdapter,
+  CODEARTS_ADAPTER,
+  CODEARTS_BASE_CN,
+  CODEARTS_CHAT_PATH,
+  CODEARTS_MODELS_PATH,
+  CODEARTS_DELIVERY_PATH,
+  CODEARTS_CLAIM_PATH,
+  CODEARTS_CONFIRM_PATH,
+  CODEARTS_CREDITS_PATH,
+  codeartsIdentityHeaders,
+  codeartsSessionId,
+  codeartsErrorOf,
+  statusFromCode,
+} from "./codearts.js";
+export { signCodeartsRequest, buildCanonicalRequest, sdkDateOf } from "./codearts-sign.js";
+export {
+  parseCodeartsModels,
+  isCodeartsStreamOnlyModel,
+  buildCodeartsBody,
+  createCodeartsTranslator,
+  codeartsBusinessError,
+} from "./codearts-wire.js";
+export {
+  codeartsWebHeaders,
+  codeartsCredits,
+  codeartsCampaigns,
+  pickCheckinCampaign,
+  codeartsClaimCheckin,
+  codeartsCheckinOne,
+} from "./codearts-signin.js";
 export type { AuthConnector, ConnectorCredentials, RequestDecoration, TokenState, UpstreamError, UpstreamErrorKind } from "./types.js";

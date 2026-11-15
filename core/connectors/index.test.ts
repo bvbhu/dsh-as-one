@@ -35,17 +35,24 @@ describe("getConnector", () => {
     expect(c?.vendorId).toBe("sensenova");
   });
 
+  it("codearts", () => {
+    const c = getConnector("codearts");
+    expect(c).toBeDefined();
+    expect(c?.vendorId).toBe("codearts");
+  });
+
   it("未知 vendor → undefined", () => {
     expect(getConnector("unknown")).toBeUndefined();
   });
 });
 
 describe("getAllConnectors", () => {
-  it("返回 6 个连接器", () => {
+  it("返回 7 个连接器", () => {
     const connectors = getAllConnectors();
     // 4 个原有（openai_compat / trae / workbuddy / sensenova）+ Qoder（只接国内版）
-    // + MiniMax（2026-11-08 接通聊天转发：Anthropic Messages 直连端点）。
-    expect(connectors.length).toBe(6);
+    // + MiniMax（2026-11-08 接通聊天转发：Anthropic Messages 直连端点）
+    // + CodeArts（2026-11-16 接通 B 族签名网关：SDK-HMAC-SHA256）。
+    expect(connectors.length).toBe(7);
   });
 
   it("包含所有 vendor", () => {
@@ -56,6 +63,7 @@ describe("getAllConnectors", () => {
     expect(vendors).toContain("sensenova");
     expect(vendors).toContain("minimax");
     expect(vendors).toContain("qoder");
+    expect(vendors).toContain("codearts");
     expect(vendors).not.toContain("qoder-global");
   });
 });
