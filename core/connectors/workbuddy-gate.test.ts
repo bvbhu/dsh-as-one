@@ -368,3 +368,96 @@ describe("rewriteHostIdentityText / rewriteHostIdentity(出站重写)", () => {
     expect(gate.rewriteHostIdentity(undefined)).toBeUndefined();
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * 2026-11-15 补:`@` 文件引用说明段(第四处 DSH 指纹)
+ *
+ * 实测边界来自参考实现 `workbuddy2api-hub`(2026-10-28,CN 号池):
+ * 只发 A+B 两句 → 200;整段五句连排 → 400(稳定);整段里 A 句补一个 `that` → 200。
+ * 所以指纹单位是**整段连续文本**,修法只能动这段里的一个词。
+ * ------------------------------------------------------------------ */
+describe("rewriteHostIdentityText:FILE_REFERENCE_PROMPT 段", () => {
+  const A = "Tokens prefixed with @ are paths the user explicitly referenced.";
+  const A_FIXED = "Tokens prefixed with @ are paths that the user explicitly referenced.";
+  const B =
+    "Relative paths resolve from the workspace root; absolute paths identify files or directories on the host.";
+  const TAIL =
+    ' A trailing slash marks a directory: list it when its contents matter. Anything else is a file: use the read tool when its contents are needed, and do not claim to have inspected it before reading. @"..." quotes a path containing spaces.';
+  const PARA = `${A} ${B}${TAIL}`;
+  const PARA_FIXED = `${A_FIXED} ${B}${TAIL}`;
+
+  it("整段里只补一个 that,其余逐字保留", () => {
+    expect(gate.rewriteHostIdentityText(PARA)).toBe(PARA_FIXED);
+    const out = gate.rewriteHostIdentityText(PARA);
+    // 决定性断言:旧的连续子串不再出现(这才是上游匹配的单位)
+    expect(out).not.toContain("are paths the user ");
+    expect(out).toContain(`${B}${TAIL}`);
+  });
+
+  it("A 句单独出现也改写(DSH 换掉后半段措辞时规则仍有效)", () => {
+    expect(gate.rewriteHostIdentityText(A)).toBe(A_FIXED);
+  });
+
+  it("大小写变体同样命中", () => {
+    expect(gate.rewriteHostIdentityText(PARA.toLowerCase())).toBe(PARA_FIXED.toLowerCase());
+  });
+
+  it("幂等:第二次不再变化", () => {
+    const once = gate.rewriteHostIdentityText(PARA);
+    expect(gate.rewriteHostIdentityText(once)).toBe(once);
+    expect(once).not.toContain("are paths the user ");
+  });
+
+  it("夹在 system 长文里也能改(整段前后还有别的规则)", () => {
+    const text = `You are a coding agent.\n\n${PARA}\n\nMore rules follow.`;
+    const out = gate.rewriteHostIdentityText(text);
+    expect(out).toContain(PARA_FIXED);
+    expect(out).toContain("More rules follow.");
+  });
+
+  it("user / tool 里的同一句是用户数据,不改写", () => {
+    const messages = [
+      { role: "system", content: PARA },
+      { role: "developer", content: PARA },
+      { role: "user", content: PARA },
+      { role: "tool", content: PARA },
+    ];
+    const out = gate.rewriteHostIdentity(messages)! as Array<{ role: string; content: unknown }>;
+    expect(out[0]!.content).toBe(PARA_FIXED);
+    // developer 与 system 同扫描面
+    expect(out[1]!.content).toBe(PARA_FIXED);
+    expect(out[2]!.content).toBe(PARA);
+    expect(out[3]!.content).toBe(PARA);
+  });
+
+  it("无关的 @ 文本不误伤", () => {
+    for (const text of [
+      "mail me at foo@bar.com",
+      "npm i @deepseek-ai/dsh",
+      "see C:\\work\\@cache for details",
+    ]) {
+      expect(gate.rewriteHostIdentityText(text)).toBe(text);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 2026-11-15 补:「自我介绍句式 + 品牌」的其余动词搭配(同族变体)
+ * ------------------------------------------------------------------ */
+describe("rewriteHostIdentityText:身份句式同族动词", () => {
+  it("built by / created by / developed by 等搭配也被中性化", () => {
+    for (const text of [
+      "You are Example Agent, built by Example Corp.",
+      "You are a coding assistant created by SomeVendor.",
+      "You are an AI developed by AnotherLab.",
+      "You are the Example model trained by Example Inc.",
+    ]) {
+      const out = gate.rewriteHostIdentityText(text);
+      expect(out.startsWith(WORKBUDDY_NEUTRAL_HEAD)).toBe(true);
+      expect(out.toLowerCase()).not.toContain("built by");
+      expect(out.toLowerCase()).not.toContain("created by");
+      expect(out.toLowerCase()).not.toContain("developed by");
+      expect(out.toLowerCase()).not.toContain("trained by");
+    }
+  });
+});

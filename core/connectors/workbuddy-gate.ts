@@ -108,9 +108,15 @@ function withTexts(content: AnyContent, next: (text: string, i: number) => strin
   return content;
 }
 
-/** 消息本身是否会被扫描:system / assistant 恒扫,user / tool 不扫。 */
+/**
+ * 消息本身是否会被扫描:system / developer / assistant 恒扫,user / tool 不扫。
+ *
+ * `developer` 是 OpenAI 新角色,参考实现把它先折叠成 `system` 再走同一套清洗
+ * (`wb_proxy.sanitize_messages`);这里直接按同一个扫描面处理,语义一致。
+ * user / tool 是用户数据 —— 改写会让模型看到与磁盘不一致的内容。
+ */
 function isScannedRole(role: unknown): boolean {
-  return role === "system" || role === "assistant";
+  return role === "system" || role === "developer" || role === "assistant";
 }
 
 /* ------------------------------------------------------------------ *
@@ -126,7 +132,7 @@ function isScannedRole(role: unknown): boolean {
  * 1. 上游(2026-10 起)对被扫消息做的是**大小写不敏感的精确子串匹配**,
  *    命中的位置是**正文任意处**,不再只是开头。所以「给开头加中性头」
  *    打不败它 —— 被禁的那一段仍完整地待在文本里,只是下移了一行。
- * 2. 活的 DSH 提示里有**三处**身份从句,实测「只改任意一两处不够,三处全改才 200」:
+ * 2. 活的 DSH 提示里有**三处身份从句**,实测「只改任意一两处不够,三处全改才 200」:
  *
  *      ① You are an AI agent powered by DeepSeek Harness.
  *      ② You are a coding agent powered by the <model> model.
@@ -134,6 +140,17 @@ function isScannedRole(role: unknown): boolean {
  *
  *    ②是**随模型插值**的(`<model>` 会变成 `deepseek-v4.1-flash` 之类),
  *    所以按 `powered by` 之前的部分定锚、尾部放开。
+ *
+ *    ⚠️ 2026-11-15 补:上面三处**改完仍会 11128** —— 上游的匹配面不止身份句。
+ *    参考实现 `workbuddy2api-hub` 的 `docs/CHANGELOG.md` + `wb_proxy.sanitize_*`
+ *    记了两条**同样由 DSH 自身注入**、且**整段连续**才算指纹的段落:
+ *
+ *      ④ `Tokens prefixed with @ are paths the user explicitly referenced. …`
+ *         (官方插件 `@deepseek-ai/dsh-file-reference` 的 FILE_REFERENCE_PROMPT)
+ *
+ *    ④的实测边界很反直觉:只发前两句 → 200,整段五句连排 → 400;整段里 A 句
+ *    补一个 `that` → 200。所以修法必须是「改这段连续文本里的一个词」,
+ *    删句子/换措辞都会改掉提示词语义却没有必要的收益。
  *
  * 参考实现的处置是**在从句内部每个词界插 U+200B**(`breakIdentityClauses`)——
  * 词不变、只 +0.26% 字节,但指纹仍在字节流里,只是被打断。
@@ -158,6 +175,31 @@ const HOST_IDENTITY_REWRITES: readonly (readonly [RegExp, string])[] = [
   // ①② agent 身份从句(含 `a coding agent powered by <model> model` 这种
   // 模型插值形态)。匹配到句号之前,句号留在原文里,重写后仍是完整句子。
   [/\byou\s+are\s+(?:an?\s+)?[\w-]*\s*agent\s+powered\s+by\s+[^.\n]{1,160}/giu, WORKBUDDY_NEUTRAL_HEAD],
+  // ②的**同族变体**:上游对「自我介绍句式 + 品牌」只要求「句式在前、品牌在后」,
+  // 动词搭配每加一条就能再造一次 11128。参考实现 `workbuddy2api-hub`
+  // (`SANITIZE_IDENTITY_VERBS`,#533/#537/#539)已实测出的其余搭配都收在这里:
+  // `built on` / `built by` / `created by` / `developed by` / `made by` /
+  // `trained by`(如 `You are Example Agent, built by Example Corp.`)。
+  // `powered by` 已由上面那条覆盖,这里不重复,免得两条抢同一段文本。
+  [
+    /\byou\s+are\s+(?:an?\s+|the\s+)?(?:[\w.-]+\s+){0,3}?(?:agent|assistant|model|ai|llm)?[\s,]{0,2}(?:built\s+on|built\s+by|created\s+by|developed\s+by|made\s+by|trained\s+by)[^.\n]{0,160}/giu,
+    WORKBUDDY_NEUTRAL_HEAD,
+  ],
+  // ④ `@` 文件引用说明段 —— 官方插件 `@deepseek-ai/dsh-file-reference`
+  // (packages/context/file-reference)注入的 `FILE_REFERENCE_PROMPT`。
+  //
+  // 2026-10-28 参考实现在 CN 号池实测的边界(见其 #684 / #677 / #675):
+  // **整段连续文本**才是指纹 —— 只发 A+B 两句 → 200;整段五句连排 → 400(稳定);
+  // 整段里 A 句补一个 `that` → 200。也就是说匹配单位是整段,不是某个单词。
+  //
+  // 修法取最小改动:只在 A 句 `paths the user` 中间补 `that`,
+  // B 句及其后所有句子逐字保留,语义不变;`(?!that )` 保证幂等。
+  // 不改成别的措辞:这段话在提示词里有实际语义(告诉模型 `@` 前缀是路径),
+  // 删掉或换句会改变模型对 `@` 的理解。
+  [
+    /(tokens\s+prefixed\s+with\s+@\s+are\s+paths\s+)(?!that\s)(the\s+user\s+explicitly\s+referenced\.)/giu,
+    "$1that $2",
+  ],
   // 兜底:品牌短语的其它出现(门 B 的精确子串)。放在最后,不抢上面那条的活。
   [/deepseek\s+harness/giu, "the deployment assistant"],
 ];
