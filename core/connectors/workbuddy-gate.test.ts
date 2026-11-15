@@ -256,3 +256,115 @@ describe("isWorkbuddyWire(唯一判据:protocol === 'workbuddy')", () => {
     expect(gate.isWorkbuddyFamily).toBeUndefined();
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * 2026-11-15:出站**整段重写**(取代「先发原文再补救」的门 A / 门 B)
+ * ------------------------------------------------------------------ */
+describe("rewriteHostIdentityText / rewriteHostIdentity(出站重写)", () => {
+  it("身份句被整句替换:原句**不残留**,不是前缀中性头", () => {
+    const out = gate.rewriteHostIdentityText(`${DSH_OPENING}\n\n后面的正常指令。`);
+    // 决定性断言:重写后文本里不存在那一句(门 A 会把原句留着)
+    expect(out).not.toContain("DeepSeek Harness");
+    expect(out).not.toContain(DSH_OPENING);
+    expect(out.startsWith(WORKBUDDY_NEUTRAL_HEAD)).toBe(true);
+    expect(out).toContain("后面的正常指令。");
+    // 与门 A 的差别就在这里:门 A 的输出里原句仍在
+    expect(neutralizeText(`${DSH_OPENING}\n\n后面的正常指令。`)).toContain(DSH_OPENING);
+  });
+
+  it("句中出现的品牌短语也被换掉,不只是开头", () => {
+    const out = gate.rewriteHostIdentityText("这一轮由 DeepSeek Harness 调度完成。");
+    expect(out).not.toContain("DeepSeek Harness");
+    expect(out).toContain("the deployment assistant");
+  });
+
+  // ── 参考实现实测的「三处 span」:三处全改才 200
+  //    (dsh-connect-workbuddy docs/CHANNEL-FINGERPRINT-RESEARCH.md §6.2) ──
+  it("② 模型插值的 coding persona 从句也被重写(<model> 会变,所以按 powered by 定锚)", () => {
+    for (const model of ["deepseek-v4.1-flash", "qmodel_38max", "glm-5.3"]) {
+      const text = `You are a coding agent powered by the ${model} model.\n\n请按规范改代码。`;
+      const out = gate.rewriteHostIdentityText(text);
+      expect(out.toLowerCase()).not.toContain("agent powered by");
+      expect(out).not.toContain(model);
+      expect(out).toContain("请按规范改代码。");
+      expect(out.startsWith(WORKBUDDY_NEUTRAL_HEAD)).toBe(true);
+    }
+  });
+
+  it("③ Web GUI 自述句被重写,且不会出现 the the 病句", () => {
+    const text =
+      "You are interacting with the user through the DeepSeek Harness Web GUI whose URL the runtime context names.";
+    const out = gate.rewriteHostIdentityText(text);
+    expect(out.toLowerCase()).not.toContain("deepseek harness");
+    expect(out).toContain("through the web interface");
+    expect(out).not.toContain("the the");
+    // 句子其余部分保留(URL 说明对模型仍有意义)
+    expect(out).toContain("whose URL the runtime context names");
+  });
+
+  it("① 大小写变体也命中(上游是大小写不敏感的子串匹配)", () => {
+    const out = gate.rewriteHostIdentityText("you are an ai agent powered by deepseek harness.");
+    expect(out.toLowerCase()).not.toContain("deepseek harness");
+    // 小写原文被重写成规范形态的中性句
+    expect(out).toContain("helpful assistant");
+  });
+
+  it("三处 span 同时出现时一次全清(参考实现:三处全改才 200)", () => {
+    const text = [
+      "You are an AI agent powered by DeepSeek Harness.",
+      "You are a coding agent powered by the deepseek-v4.1-flash model.",
+      "You are interacting with the user through the DeepSeek Harness Web GUI.",
+    ].join("\n");
+    const out = gate.rewriteHostIdentityText(text);
+    const lower = out.toLowerCase();
+    expect(lower).not.toContain("deepseek harness");
+    expect(lower).not.toContain("agent powered by");
+    expect(lower).not.toContain("coding agent");
+  });
+
+  it("幂等:重复重写不再变化", () => {
+    const once = gate.rewriteHostIdentityText(`${DSH_OPENING}\n正文`);
+    expect(gate.rewriteHostIdentityText(once)).toBe(once);
+  });
+
+  it("ACP 标记整条剥掉(含自闭合形态)", () => {
+    const out = gate.rewriteHostIdentityText(
+      '<acp tokens="1.7K" type="text">m35968</acp>\n真正的内容\n<acp tokens="12" />',
+    );
+    expect(out).not.toContain("<acp");
+    expect(out).not.toContain("m35968");
+    expect(out).toContain("真正的内容");
+  });
+
+  it("只动 system / assistant,user / tool 保持原样", () => {
+    const messages = [
+      { role: "system", content: DSH_OPENING },
+      { role: "user", content: DSH_OPENING },
+      { role: "assistant", content: [{ type: "text", text: `前缀 ${DSH_OPENING}` }] },
+      { role: "tool", content: DSH_OPENING },
+    ];
+    const out = gate.rewriteHostIdentity(messages)! as Array<{ role: string; content: unknown }>;
+    expect(String(out[0]!.content)).not.toContain("DeepSeek Harness");
+    expect(out[1]!.content).toBe(DSH_OPENING); // user 不扫
+    expect(JSON.stringify(out[2]!.content)).not.toContain("DeepSeek Harness");
+    expect(out[3]!.content).toBe(DSH_OPENING); // tool 不扫
+  });
+
+  it("没有命中时返回同一个数组引用(调用方据此不动 body)", () => {
+    const messages = [{ role: "system", content: "You are a helpful assistant." }];
+    expect(gate.rewriteHostIdentity(messages)).toBe(messages);
+    expect(gate.rewriteHostIdentityText("You are a helpful assistant.")).toBe("You are a helpful assistant.");
+  });
+
+  it("普通散文里的同名子串不误伤(正文语义保持)", () => {
+    const text = "请把这行代码重构成纯函数。";
+    expect(gate.rewriteHostIdentityText(text)).toBe(text);
+    const messages = [{ role: "system", content: text }];
+    expect(gate.rewriteHostIdentity(messages)).toBe(messages);
+  });
+
+  it("非数组输入原样返回(null / undefined / 字符串)", () => {
+    expect(gate.rewriteHostIdentity(null)).toBeNull();
+    expect(gate.rewriteHostIdentity(undefined)).toBeUndefined();
+  });
+});

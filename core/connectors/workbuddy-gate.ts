@@ -114,7 +114,120 @@ function isScannedRole(role: unknown): boolean {
 }
 
 /* ------------------------------------------------------------------ *
+ * 出站重写(2026-11-15,用户定案):宿主身份文本在转接时**整段重写**
+ * ------------------------------------------------------------------ */
+
+/**
+ * 上游渠道校验的门型 —— 决定了「怎么改才有效」。
+ *
+ * 参考实现 `dsh-connect-workbuddy` 的 `docs/CHANNEL-FINGERPRINT-RESEARCH.md`
+ * §6.2 + `src/upstream.ts:IDENTITY_CLAUSE` 给出了两条实测结论:
+ *
+ * 1. 上游(2026-10 起)对被扫消息做的是**大小写不敏感的精确子串匹配**,
+ *    命中的位置是**正文任意处**,不再只是开头。所以「给开头加中性头」
+ *    打不败它 —— 被禁的那一段仍完整地待在文本里,只是下移了一行。
+ * 2. 活的 DSH 提示里有**三处**身份从句,实测「只改任意一两处不够,三处全改才 200」:
+ *
+ *      ① You are an AI agent powered by DeepSeek Harness.
+ *      ② You are a coding agent powered by the <model> model.
+ *      ③ You are interacting with the user through the DeepSeek Harness Web GUI …
+ *
+ *    ②是**随模型插值**的(`<model>` 会变成 `deepseek-v4.1-flash` 之类),
+ *    所以按 `powered by` 之前的部分定锚、尾部放开。
+ *
+ * 参考实现的处置是**在从句内部每个词界插 U+200B**(`breakIdentityClauses`)——
+ * 词不变、只 +0.26% 字节,但指纹仍在字节流里,只是被打断。
+ *
+ * 本仓库 2026-11-15 用户定案改成**整段重写**:把从句换成中性陈述,
+ * 指纹连同原文**一起不发出**。代价是模型读到的措辞变了(这正是改写本意),
+ * 收益是不依赖「零宽不被网关归一化」这个假设。
+ *
+ * 规则**有序**(先特殊后一般),每条都锚在完整从句上,普通散文不会被误伤。
+ */
+const HOST_IDENTITY_REWRITES: readonly (readonly [RegExp, string])[] = [
+  // 宿主自述的 ACP/记账标记(`<acp tokens="1.7K" type="text">m35968</acp>`):
+  // 它既不是散文也不在身份句里,整条剥掉。先做,免得下面的空行压缩被它干扰。
+  [/<acp\b[^>]*>[\s\S]*?<\/acp>/giu, ""],
+  [/<acp\b[^>]*\/>/giu, ""],
+  // ③ Web GUI 自述。**先于**通用品牌替换:那条会把句子改成
+  // 「the the deployment assistant Web GUI」的病句。
+  [
+    /\byou\s+are\s+interacting\s+with\s+the\s+user\s+through\s+the\s+deepseek\s+harness\b/giu,
+    "You are interacting with the user through the web interface",
+  ],
+  // ①② agent 身份从句(含 `a coding agent powered by <model> model` 这种
+  // 模型插值形态)。匹配到句号之前,句号留在原文里,重写后仍是完整句子。
+  [/\byou\s+are\s+(?:an?\s+)?[\w-]*\s*agent\s+powered\s+by\s+[^.\n]{1,160}/giu, WORKBUDDY_NEUTRAL_HEAD],
+  // 兜底:品牌短语的其它出现(门 B 的精确子串)。放在最后,不抢上面那条的活。
+  [/deepseek\s+harness/giu, "the deployment assistant"],
+];
+
+/**
+ * 单条文本的完整重写:整段替换三处身份从句、剥掉 ACP 标记、压掉多余空行。
+ *
+ * 幂等:重写后的文本里不再含任何规则命中的模式(中性句本身不含品牌词),
+ * 重复调用不会再变 —— 这一点 {@link rewriteHostIdentity} 有测试钉住。
+ */
+export function rewriteHostIdentityText(text: string): string {
+  let out = text;
+  for (const [pattern, replacement] of HOST_IDENTITY_REWRITES) {
+    out = out.replace(pattern, replacement);
+  }
+  if (out === text) return text;
+  // 剥标签后可能留下连续空行:压成最多一个空行,别让重写本身改变排版语义。
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * 出站重写:对每条 `system` / `assistant` 消息的每个 text part 做完整重写。
+ *
+ * 与门 A/B 不同,这里**始终启用**(由 {@link isWorkbuddyWire} 的调用方决定),
+ * 因为它的成本是纯字符串替换、没有额外上游请求;发出去的就是重写后的文本。
+ *
+ * 扫描面与上游一致(`system` / `assistant`,`user` / `tool` 不扫 —— 实测上游
+ * 也不扫这两个角色,改写它们只会破坏用户原文)。
+ *
+ * 返回**新数组**;没有任何改动时返回原数组引用(调用方据此判断是否要动 body)。
+ */
+export function rewriteHostIdentity(
+  messages: unknown[] | null | undefined,
+): unknown[] | null | undefined {
+  if (!Array.isArray(messages)) return messages;
+  let changed = false;
+  const out = messages.map((m) => {
+    if (!m || typeof m !== "object" || Array.isArray(m)) return m;
+    const msg = m as { role?: unknown; content?: unknown };
+    if (!isScannedRole(msg.role)) return m;
+    if (typeof msg.content === "string") {
+      const next = rewriteHostIdentityText(msg.content);
+      if (next === msg.content) return m;
+      changed = true;
+      return { ...msg, content: next };
+    }
+    if (Array.isArray(msg.content)) {
+      let any = false;
+      const parts = msg.content.map((part) => {
+        if (!isTextPart(part)) return part;
+        const next = rewriteHostIdentityText(part.text as string);
+        if (next === part.text) return part;
+        any = true;
+        return { ...part, text: next };
+      });
+      if (!any) return m;
+      changed = true;
+      return { ...msg, content: parts };
+    }
+    return m;
+  });
+  return changed ? out : messages;
+}
+
+/* ------------------------------------------------------------------ *
  * 门 A —— 开头指纹:命中已知句式 → 前缀中性头(保留原前导空白)
+ *
+ * ⚠️ 2026-11-15 起**出站路径不再使用**这两条门:改由
+ * {@link rewriteHostIdentity} 在转接时整段重写。保留它们是因为归因/回显
+ * 与历史测试仍按这套语义描述上游行为,删掉会丢掉诊断口径。
  * ------------------------------------------------------------------ */
 
 /**

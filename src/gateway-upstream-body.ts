@@ -14,7 +14,7 @@ import { identityFromExtra, prepareTraeRequest } from "@as-one/core/src/connecto
 import { buildWorkbuddyBody } from "@as-one/core/src/connectors/workbuddy-wire.js";
 import { imagePartIndices } from "@as-one/core/src/gateway/image-bridge.js";
 import type { BridgeMessage } from "@as-one/core/src/gateway/image-bridge.js";
-import { isWorkbuddyWire } from "@as-one/core/src/connectors/workbuddy-gate.js";
+import { isWorkbuddyWire, rewriteHostIdentity } from "@as-one/core/src/connectors/workbuddy-gate.js";
 import { toAnthropicRequest } from "@as-one/core/src/connectors/minimax-llm.js";
 import { minimaxUpstreamModelOf } from "@as-one/core/src/connectors/minimax-models.js";
 import { CACHE_ROUTING_KEY_FIELD } from "@as-one/core/src/gateway/request-fields.js";
@@ -175,7 +175,22 @@ export function bodyForProtocol(
     // ⚠️ 2026-10-29:只有 `protocol === "workbuddy"` 走这里。provider 名里带
     // workbuddy/wb 但 protocol 是 openai 的(如用户自建的 workbuddy_yn 指向
     // hyperai),必须走下面的通用 OpenAI 形状 —— 塞 workbuddy 报文会 401。
-    return buildWorkbuddyBody(req);
+    const body = buildWorkbuddyBody(req);
+    // ⚠️ 2026-11-15 用户定案:**宿主身份文本在转接时整段重写**。
+    //
+    // 以前是「先原样发、撞上 11128 再补救」:门 A 前缀中性头 / 门 B 零宽扰动
+    // (见 core/connectors/workbuddy-gate.ts)。那两条都有个共同问题 ——
+    // **原句已经完整发给上游了**,补救只是把它推离 offset 0 或插不可见字符;
+    // 而每次补救都是一次真实上游请求(白打一轮 + 多点一次风控采样)。
+    // 现在改为出站前就重写成中性形态:发出去的报文里不存在宿主身份句。
+    //
+    // 只对 `protocol === "workbuddy"` 做:sensenova 是普通 OpenAI 兼容后端,
+    // 没有渠道校验,没有理由改写它的提示词。
+    if (isWorkbuddyWire(protocol)) {
+      const rewritten = rewriteHostIdentity(body.messages as unknown[]);
+      if (rewritten !== body.messages) body.messages = rewritten;
+    }
+    return body;
   }
   // openai 兼容与未知协议:通用 OpenAI 形状。
   return bodyFor(req);
