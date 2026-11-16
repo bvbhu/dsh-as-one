@@ -468,8 +468,26 @@ export class Scheduler {
 
   // ------------------------------------------------------------- 额度
   private _quotaMap(now: number, force: boolean): Record<string, QuotaSnapshot> {
-    const fresh = !force && now - this._quotasAt < this.ttl;
-    if (fresh && Object.keys(this._quotas).length > 0) return this._quotas;
+    // ⚠️ **空表永远不算「新鲜」**（2026-11-16 用户报「due-first 没生效、一直走 trae」）。
+    //
+    // 旧逻辑只看 `now - _quotasAt < ttl`，而 `_quotasAt` 记的是**读取时刻**、不是
+    // 数据本身的 `fetched_at`。于是进程刚启动时第一次 `chain()` 读到空表 → 把
+    // 「空」连同「当前时刻」一起固化 → **之后 ttl（300s）内所有请求都复用这份空表**，
+    // 到期排序键全空 → 退化成 members 配置序（trae 恒第一）。
+    //
+    // 面板刷新额度时确实会 `scheduler.invalidate()`（清 `_quotas`），但只要调度先
+    // 于刷新跑一次，就又能把空表固化 5 分钟。用户体感就是「明明 workbuddy 12/3 最早，
+    // 却一直走 trae」。
+    //
+    // 修法：空表不缓存 —— 每次都重读 `repo.quotas()`（它读的是模块级缓存，纯内存，
+    // 代价可忽略）。这样额度一到位，下一次调度立刻就能用上，不需要等 TTL 过期。
+    const current = this._quotas;
+    const fresh =
+      !force &&
+      now - this._quotasAt < this.ttl &&
+      current !== null &&
+      Object.keys(current).length > 0;
+    if (fresh) return current;
     const quotas = this.repo.quotas() ?? {};
     this._quotas = { ...quotas };
     this._quotasAt = now;
@@ -544,7 +562,10 @@ export class Scheduler {
   invalidate(): void {
     this._cache.clear();
     this._quotas = {};
-    this._quotasAt = 0.0;
+    // ⚠️ 必须把时间戳也归零（2026-11-16）：`_quotasAt` 与 `_quotas` 是**一对**，
+    // 只清其中一个会让「空表 + 新时间戳」被当成新鲜额度，正好复现
+    // 「due-first 一直失效」的那个 bug。见 `_quotaMap` 的注释。
+    this._quotasAt = 0;
     this._cfgCache = null;
     this._cfgAt = 0.0;
   }

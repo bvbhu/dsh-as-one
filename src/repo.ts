@@ -124,21 +124,12 @@ export class AppSchedulerRepo implements SchedulerRepo {
   /**
    * 成员×启用账户展开成 RawEndpointRow。
    *
-   * ⚠️ **账号顺序 = 调度顺序**(2026-11-16 用户报「路由仍然不对」)。
+   * ⚠️ **只负责展开，不负责排序**。账号层的「先到期优先」由调度器负责 ——
+   * `Scheduler.chain()` 在组装完 items 后按 (priority, key 到期) 稳定排序，
+   * 见 engine.ts 的 `items.sort` 段。两处都排会造成双真源。
    *
-   * 以前这里按 `registry.listAccounts()` 的凭据插入序展开 —— 于是同一 member
-   * 下的多个账号永远按「谁先导入」排,`due-first` 只作用到 member 层、到不了
-   * 账号层:trae 有 `bvbhu`(12/11 到期)和 `用户2767`(12/8 到期),额度快照
-   * 里明明前者更晚到期,调度却恒定先用 `bvbhu`。
-   *
-   * 现在按**到期时间升序**排:有 `expires_at` 的按升序在前,到期未知(null/0)
-   * 的排末位(与 `engine._order` 的 due-first 同一口径:未知**不是**永不过期)。
-   * 并列时保持凭据序(稳定排序),所以没有额度数据的渠道行为完全不变。
-   *
-   * 为什么在这里做而不是改 engine:engine 的 `_expiryMap` 按 **member**
-   * (`provider/model`)聚合,同 member 内多账号的先后由 `endpoint_chain` 的
-   * 行序决定 —— 行序就是这里给的。改 engine 要动它的排序键结构,而改行序
-   * 是「把已有信息喂给它」,风险小得多。
+   * （历史上这里曾按凭据序展开，一度被误认为「due-first 没生效」的原因；
+   * 真正的原因是 `_quotaMap` 把空表当成新鲜缓存了 300s，见那里的注释。）
    */
   #rowsFor(
     provider: string,
@@ -194,18 +185,17 @@ export class AppSchedulerRepo implements SchedulerRepo {
         rows.push(endpoint as unknown as RawEndpointRow);
       }
     }
-    // ── 账号层到期排序(见方法头注释)────────────────────────────────────
-    // 只读一次快照表(它自带 fetched_at,再套 TTL 只会让面板刷新后仍排旧序)。
-    const quotas = this.quotas();
-    const expiryOf = (row: RawEndpointRow): number => {
-      const username = (row as { endpoint?: { username?: string } }).endpoint?.username ?? "";
-      const snap = quotas[`${provider}/${username}`];
-      const exp = snap && typeof snap === "object" ? (snap as { expires_at?: unknown }).expires_at : undefined;
-      // 未知 → Infinity:排在已知到期之后(due-first 同口径)。
-      return typeof exp === "number" && exp > 0 ? exp : Number.POSITIVE_INFINITY;
-    };
-    // `Array.prototype.sort` 自 ES2019 起保证稳定,所以并列时凭据序不变。
-    rows.sort((a, b) => expiryOf(a) - expiryOf(b));
+    /**
+     * ⚠️ 这里**不做到期排序**（2026-11-16 复核后撤销）。
+     *
+     * 一度在这里按账号 `expires_at` 排过序，但 `Scheduler.chain()` 已经实现了
+     * 同一件事且更完整（engine.ts 的 `items.sort`：先按档序 priority，同档内按
+     * 「key 到期升序」，未知排末位）—— 它用的是 `endpoint.endpointId`（含 key），
+     * 比这里的行序更精确（同一 member 下不同 key 的到期不同）。
+     *
+     * 两处都排 = 重复实现 + 双真源：任何一边改了排序口径，两边就会打架。
+     * 所以此处的职责只剩「展开成员×启用账户」，顺序交回去让 engine 决定。
+     */
     return rows;
   }
 }
