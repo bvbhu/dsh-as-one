@@ -1,46 +1,55 @@
 /**
- * 签到顺序：把「可以少签一个」的账号排到最后。
+ * 签到顺序：把「优先签」的账号排到最前。
  *
  * 为什么只有 trae 需要：trae 的签到积分是**按设备**发的 —— 同机多账号时，
  * 第一个签上的账号拿走当天额度，其余账号按设备级短路直接判「本设备今日已签」
- * （`REMOTE_TRAE_CODE_DEVICE_ALREADY`）。也就是说**顺序决定谁被牺牲**。
+ * （`TRAE_CODE_DEVICE_ALREADY`）。也就是说**顺序决定谁被牺牲**。
  *
- * 用户 2026-11-16 定案：优先签**不是 `bvbhu`** 的账号，让自己的号排在最后。
+ * 名单来自设置项 `checkin.trae.priority.accounts`（逗号分隔的用户名，**不在面板
+ * 显示**），缺省为空 = 不干预顺序。代码里**不写死任何账号名**。
  *
  * 口径：
  * - 只做**稳定分区**（保序），不排序、不改变账号集合 —— 面板展示与逐账号查询
  *   都靠 `index` 回指原始顺序，重排数组但不能弄丢 `index`。
- * - 匹配是**大小写不敏感的子串**：账号标签常带后缀（`bvbhu@example.com`、
- *   `bvbhu-2`），用全等会漏。
- * - 列表可注入（测试与将来的设置项用），缺省 {@link TRAE_DEPRIORITIZED_LABELS}。
+ * - 匹配是**大小写不敏感的子串**：账号标签常带后缀（`用户2767@…`），用全等会漏。
  */
 
-/** 缺省「排到后面」的账号标签（大小写不敏感的子串匹配）。 */
-export const TRAE_DEPRIORITIZED_LABELS: readonly string[] = ["bvbhu"];
+/** 设置项键名（不在面板展示，用 `setting` 表直接写）。 */
+export const TRAE_PRIORITY_SETTING_KEY = "checkin.trae.priority.accounts";
 
-/** 标签是否命中「排后面」列表；空标签不命中（宁可正常顺序，不要误判）。 */
-export function isDeprioritizedLabel(
-  label: string | null | undefined,
-  deprioritized: readonly string[] = TRAE_DEPRIORITIZED_LABELS,
-): boolean {
+/** 逗号分隔的名单串 → 去空、去重、保序的数组。 */
+export function parsePriorityList(raw: string | null | undefined): string[] {
+  const out: string[] = [];
+  for (const part of String(raw ?? "").split(",")) {
+    const v = part.trim();
+    if (v === "" || out.includes(v)) continue;
+    out.push(v);
+  }
+  return out;
+}
+
+/** 标签是否命中「优先签」名单；空标签不命中。 */
+export function isPriorityLabel(label: string | null | undefined, priority: readonly string[]): boolean {
   const text = (label ?? "").trim().toLowerCase();
   if (text === "") return false;
-  return deprioritized.some((d) => d !== "" && text.includes(d.trim().toLowerCase()));
+  return priority.some((p) => p !== "" && text.includes(p.trim().toLowerCase()));
 }
 
 /**
- * 稳定分区：未命中的在前（保持原相对顺序），命中的在后（同样保持原顺序）。
+ * 稳定分区：命中的在前（保持原相对顺序），其余在后（同样保持原顺序）。
  *
- * 不改元素本身 —— 调用方靠 `index` 回指原始账号行。
+ * 名单为空时**原样返回**（不制造任何顺序变化）。
  */
 export function prioritizeCheckinAccounts<T extends { username?: string | null }>(
   accounts: readonly T[],
-  deprioritized: readonly string[] = TRAE_DEPRIORITIZED_LABELS,
+  priority: readonly string[],
 ): T[] {
+  const cleaned = priority.map((p) => p.trim()).filter((p) => p !== "");
+  if (cleaned.length === 0) return accounts.slice();
   const first: T[] = [];
-  const last: T[] = [];
+  const rest: T[] = [];
   for (const acc of accounts) {
-    (isDeprioritizedLabel(acc.username, deprioritized) ? last : first).push(acc);
+    (isPriorityLabel(acc.username, cleaned) ? first : rest).push(acc);
   }
-  return [...first, ...last];
+  return [...first, ...rest];
 }

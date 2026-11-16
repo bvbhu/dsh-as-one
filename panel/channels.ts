@@ -16,7 +16,7 @@
  *     所以它必须随本文件导出,而不能留在 createPanel 里。
  */
 
-import { prioritizeCheckinAccounts } from "./checkin-order.js";
+import { parsePriorityList, prioritizeCheckinAccounts, TRAE_PRIORITY_SETTING_KEY } from "./checkin-order.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -665,9 +665,11 @@ export function createChannelsDomain(
       });
     }
     // trae 的签到积分按**设备**发：第一个签上的账号拿走当天额度，其余账号按
-    // 设备级短路直接判「本设备今日已签」。所以**顺序决定谁被牺牲** —— 用户
-    // 2026-11-16 定案：`bvbhu` 排最后（见 panel/checkin-order.ts）。
-    return pid === "trae" ? prioritizeCheckinAccounts(out) : out;
+    // 设备级短路直接判「本设备今日已签」。所以**顺序决定谁被牺牲**。
+    // 优先名单来自设置项 `checkin.trae.priority.accounts`（逗号分隔的用户名，
+    // **面板不展示**，直接写 setting 表）；为空 = 不干预顺序，代码不写死任何账号。
+    const priority = parsePriorityList(ctx.db.setting.get(TRAE_PRIORITY_SETTING_KEY)?.v ?? "");
+    return pid === "trae" ? prioritizeCheckinAccounts(out, priority) : out;
   };
 
 
