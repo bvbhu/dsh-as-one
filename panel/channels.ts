@@ -16,6 +16,7 @@
  *     所以它必须随本文件导出,而不能留在 createPanel 里。
  */
 
+import { prioritizeCheckinAccounts } from "./checkin-order.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -663,7 +664,10 @@ export function createChannelsDomain(
         extra: raw,
       });
     }
-    return out;
+    // trae 的签到积分按**设备**发：第一个签上的账号拿走当天额度，其余账号按
+    // 设备级短路直接判「本设备今日已签」。所以**顺序决定谁被牺牲** —— 用户
+    // 2026-11-16 定案：`bvbhu` 排最后（见 panel/checkin-order.ts）。
+    return pid === "trae" ? prioritizeCheckinAccounts(out) : out;
   };
 
 
