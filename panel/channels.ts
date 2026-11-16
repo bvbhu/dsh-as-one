@@ -53,6 +53,7 @@ import {
   minimaxSigninStatus,
 } from "@as-one/core/src/connectors/minimax-signin.js";
 import { minimaxAccountFor } from "./minimax-renew.js";
+import { codeartsIdeCheckin } from "@as-one/core/src/connectors/codearts-ide.js";
 import { panelClaimedToday, panelTodayPoints } from "@as-one/core/src/connectors/minimax-wire.js";
 import { discoverTraeAccounts } from "@as-one/core/src/connectors/discover.js";
 import {
@@ -731,6 +732,51 @@ export function createChannelsDomain(
     confirm: boolean,
   ): Promise<CheckinClaimRow> => {
     const baseRow = { index: acc.index, provider: pid, username: acc.username, region: acc.region };
+    if (protocol === "codearts") {
+      // B 族（AK/SK 签名网关）签到 —— 2026-11-16 实测三步全通（见 codearts-ide.ts）。
+      // 凭据就是推理用的那份 raw_json（accessKey/secretKey/...），没有令牌字段。
+      const raw = (acc.extra ?? {}) as Record<string, unknown>;
+      const accessKey = String(raw["accessKey"] ?? "");
+      const secretKey = String(raw["secretKey"] ?? "");
+      if (accessKey === "" || secretKey === "") {
+        return { ...baseRow, status: "failed", message: "该账号缺少 accessKey/secretKey" };
+      }
+      try {
+        const res = await codeartsIdeCheckin(
+          {
+            accessKey,
+            secretKey,
+            ...(typeof raw["securityToken"] === "string" && raw["securityToken"] !== ""
+              ? { securityToken: raw["securityToken"] }
+              : {}),
+            ...(typeof raw["domainId"] === "string" && raw["domainId"] !== ""
+              ? { domainId: raw["domainId"] }
+              : {}),
+            label: acc.username,
+          },
+          {
+            ...(base ? { baseUrl: base } : {}),
+            confirm,
+          },
+        );
+        // already=true 且 code=0 = 已签已入账；dry_run（confirm=false）≠ 失败。
+        const status: CheckinClaimRow["status"] = res.ok
+          ? "claimed"
+          : res.already && res.code === 0
+            ? "already"
+            : res.code === -1 && res.message.includes("干跑")
+              ? "dry_run"
+              : "failed";
+        return {
+          ...baseRow,
+          status,
+          message: res.message,
+          ...(res.credit > 0 ? { credit: res.credit } : {}),
+        };
+      } catch (err) {
+        return { ...baseRow, status: "failed", message: checkinErrText(err) };
+      }
+    }
     if (protocol === "minimax") {
       // 走 minimaxAccountFor:401 时自动 refresh 续期并重试(签到/领取都要)。
       const bound = await minimaxAccountFor(ctx.vault, pid, acc.username);

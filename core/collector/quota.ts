@@ -686,6 +686,29 @@ export async function probe_minimax_quota(
 /** 积分总览（B 族）。2026-11-16 实测：`/package/overview` 与 `/statistics/plugin` 都 200。 */
 export const CODEARTS_PACKAGE_OVERVIEW_PATH = "/snap-manager/v1/package/overview";
 
+/**
+ * 用量统计（B 族）。除 `metrics` 外还带**套餐周期** `start_date` / `end_date`
+ * （形如 `"2026-12-17"`，无时间部分）与 `package` 节点。
+ *
+ * 注意：`end_date` 是**套餐周期结束/重置日**，不是积分作废时刻 —— 只用作
+ * {@link probe_codearts_quota} 的次级兜底。
+ */
+export const CODEARTS_STATISTICS_PLUGIN_PATH = "/snap-manager/v1/statistics/plugin";
+
+/**
+ * `YYYY-MM-DD` → 该日 **UTC 23:59:59** 的 epoch 秒；解析不出返回 null。
+ *
+ * 为什么取当天结束而不是当天开始：到期日按「当天仍可用」理解，取 00:00:00 会让
+ * 账号在最后一天一开始就被判过期（due-first 会提前把它排到最前，白烧一轮 4xx）。
+ */
+export function periodEndSecondsOf(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (m === null) return null;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
 export const CODEARTS_QUOTA_TIMEOUT_MS = 20_000;
 
 export interface CodeartsQuotaOptions {
@@ -851,17 +874,60 @@ export async function probe_codearts_quota(
   const credits = parse_codearts_credits(payload);
   const fetchedAt = Math.floor(Date.now() / 1000);
 
-  // ── 到期：从运营活动里取「仍有余额的那批」最早 endTime ──────────────────
+  // ── 到期估算（用户 2026-11-16 最终定案）─────────────────────────────
+  //
+  // 实测事实（用户面板「获取明细」页 + 逐笔 claim/confirm 响应）：
+  //   · 订阅套餐 500 分 → 2026/12/16 23:59 到期（上游 statistics 的
+  //     `end_date="2026-12-17"` 是周期结束的**次日起始日** → 前一天 23:59）；
+  //   · 注册送 4000 分 → 获取 +30 天，与套餐同期到期；
+  //   · 签到 100 分 → **只有 24 小时**（claim `expireAt` = claimedAt + 1d），
+  //     面板把它标「即将到期」—— 正是 overview 的 `expiring_credit_amount`。
+  //
+  // ⚠️ 活动接口 `/v1/ops/delivery` 的 `extra.endTime` 被**实测证伪**：那是「活动
+  // 可领取的截止时间」（12/30-12/31），不是积分作废时间 —— 弃用。
+  //
+  // 规则（两条，优先级从上到下）：
+  //   1. `expiring_credit_amount > 0` → 有积分马上作废 → **明天此刻**（24h 后）；
+  //   2. 否则 → `end_date` 的**前一天 23:59:59**（end_date 是次日起始日；
+  //      end_date 读不到时写死 2026-12-16 23:59:59 —— 当前唯一实测样本）。
   let expiresAt: number | null = null;
-  let expiryError: string | null = null;
-  try {
-    const delivery = await get(CODEARTS_DELIVERY_PATH);
-    const campaigns = parseCodeartsCampaigns(delivery);
-    const ends = campaigns.map((c) => c.endAt).filter((n): n is number => typeof n === "number" && n > fetchedAt);
-    if (ends.length > 0) expiresAt = Math.min(...ends);
-  } catch (err) {
-    // 活动读不到不影响余额展示：只把到期留 null（未知），并如实记原因。
-    expiryError = err instanceof Error ? err.message : String(err);
+  let expiryBasis: "expiring-tomorrow" | "period-end" | "period-end-fallback" | "unknown" =
+    "unknown";
+  if (credits.expiring > 0) {
+    expiresAt = fetchedAt + 86_400;
+    expiryBasis = "expiring-tomorrow";
+  } else {
+    // end_date 前一天 23:59:59：把 end_date 转 epoch 后减一天即得前一天，再压到
+    // 当天 23:59:59 —— periodEndSecondsOf 本身返回「当天 23:59:59」，所以对
+    // end_date 先做「日期 -1 天」的换算。
+    try {
+      const stats = await get(CODEARTS_STATISTICS_PLUGIN_PATH);
+      const endDate = typeof stats["end_date"] === "string" ? stats["end_date"] : "";
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(endDate.trim());
+      if (m !== null) {
+        // end_date 当天的 UTC 0 点 → 减 1 天 = 前一天 → 前一天的 23:59:59。
+        const dayStart = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 1000;
+        const prevDay = periodEndSecondsOf(
+          new Date((dayStart - 86_400) * 1000).toISOString().slice(0, 10),
+        );
+        if (prevDay !== null && prevDay > fetchedAt) {
+          expiresAt = prevDay;
+          expiryBasis = "period-end";
+        }
+      }
+    } catch {
+      /* end_date 读不到 → 走写死兜底 */
+    }
+    if (expiresAt === null) {
+      // 写死 2026-12-16 23:59:59（体验版周期，当前唯一实测样本；end_date 每月
+      // 会变，读不到再写死是保底而不是长期方案 —— 面板刷新每轮都会重新读）。
+      expiresAt = periodEndSecondsOf("2026-12-16");
+      expiryBasis = "period-end-fallback";
+    }
+  }
+  if (expiresAt === null || expiresAt <= fetchedAt) {
+    expiresAt = null;
+    expiryBasis = "unknown";
   }
 
   return {
@@ -878,9 +944,10 @@ export async function probe_codearts_quota(
         remain: credits.remaining,
         expires_at: expiresAt,
         counts_for_expiry: credits.remaining > 0,
-        extra: { expiring: credits.expiring },
+        extra: { expiring: credits.expiring, expiry_basis: expiryBasis },
       },
     ],
-    error: expiryError,
+    // 到期是估算（见上），不算错误：只有积分总览本身读不到才会在上面抛 QuotaError。
+    error: null,
   };
 }

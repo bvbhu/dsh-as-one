@@ -85,11 +85,13 @@ const wbAccount = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("checkinSupported / CHECKIN_PROVIDERS", () => {
-  it("认 trae / workbuddy / minimax", () => {
-    expect([...CHECKIN_PROVIDERS]).toEqual(["trae", "workbuddy", "minimax"]);
+  it("认 trae / workbuddy / minimax / codearts", () => {
+    // 2026-11-16 补入 codearts：B 族 AK/SK 实测可完整走通 delivery→claim→confirm。
+    expect([...CHECKIN_PROVIDERS]).toEqual(["trae", "workbuddy", "minimax", "codearts"]);
     expect(checkinSupported("trae")).toBe(true);
     expect(checkinSupported("workbuddy")).toBe(true);
     expect(checkinSupported("minimax")).toBe(true);
+    expect(checkinSupported("codearts")).toBe(true);
     expect(checkinSupported("sensenova")).toBe(false);
     expect(checkinSupported("")).toBe(false);
     expect(checkinSupported(null)).toBe(false);

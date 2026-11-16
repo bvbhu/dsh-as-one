@@ -1,0 +1,50 @@
+feat(codearts): 实现签到三步 + 修正到期估算（实测证伪 endTime）
+
+用户定案：「签到要求必须实现」「有即将到期→明天，没有 end_date 前一天 23:59」。
+
+## 1. CodeArts 签到（B 族 AK/SK，实测三步全通）
+
+新增 `core/connectors/codearts-ide.ts`（与 A 族 Cookie 的 `codearts-signin.ts` 并列）：
+
+- `GET  /v1/ops/delivery?channel=IDE` 活动列表（需 `Agent-Type: PromptCenter`）
+- `POST /v1/ops/claim`   `{campaignId, channel:"IDE"}` → `status:"CLAIMED"`
+- `POST /v1/ops/confirm` `{campaignId}` → `status:"CONFIRMED"` = **积分入账**
+
+实测踩到的三个坑都写进注释与测试：
+- claim **必须**带 `channel:"IDE"`，缺它 400「channel : 参数无效」；
+- confirm **不能**带 `channel`，带上就 400 `HDN.1000`；
+- claim 重复回 `40001`（并发冲突）→ 视为「今日已签」，不是错误。
+
+接入面板：`CHECKIN_PROVIDERS` 补 `codearts`，`checkinClaimOne` 增加 codearts 分支
+（凭据直接用推理那份 raw_json 的 accessKey/secretKey）。`status=CLAIMED` 时跳过
+claim 只补 confirm；`status=CONFIRMED` 时零写请求。
+
+端到端真实验证：`codeartsIdeCheckin` 对现有账号返回「今日已签到(已确认入账)」。
+
+## 2. 到期估算修正（重要：推翻上一版的错误逻辑）
+
+**实测证伪**：上一版用活动接口 `extra.endTime` 当积分到期，是错的 —— 那是
+「活动**可领取**的截止时间」（12/30-12/31），不是积分作废时间。用户面板
+「获取明细」页的真实数据：
+
+| 来源 | 面额 | 获取时间 | 到期时间 |
+|---|---|---|---|
+| 订阅套餐 | 500 | 2026/11/16 19:44 | 2026/12/16 23:59 |
+| 注册赠送 | 4,000 | 2026/11/16 19:44 | 2026/12/16 19:44 |
+| 每日签到 | 100 | 2026/11/16 21:54 | **2026/11/17 21:54（仅 24h）** |
+
+另外逐笔 claim 响应里 `expireAt` 与上表一致（= claimedAt + 24h），但上游**没有**
+公开的逐笔查询端点（已逐一探测 404），所以探针无法逐笔取。
+
+按用户定案实现两条规则：
+1. `expiring_credit_amount > 0` → 有积分马上作废 → **明天此刻**（fetched_at+24h）；
+2. 否则 → `end_date` 的**前一天 23:59:59**（`end_date="2026-12-17"` 是次日起始日
+   → 2026-12-16 23:59:59）；`end_date` 读不到时写死 2026-12-16 23:59:59。
+
+`expiry_basis` 记进 pack.extra，页面/排障能看出这一轮用的是哪条规则。
+
+## 3. 顺带修正
+`CodeartsCampaign` 增 `startAt`/`endAt`（`extra.startTime/endTime` 的 epoch 秒），
+B 族行解析与 A 族同形。
+
+测试：94 文件 / 1714 用例全绿；typecheck 干净。

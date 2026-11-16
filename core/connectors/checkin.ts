@@ -54,7 +54,11 @@ export class CheckinCredentialError extends CheckinError {
 // 支持渠道
 // ---------------------------------------------------------------------------
 
-export const CHECKIN_PROVIDERS = ["trae", "workbuddy", "minimax"] as const;
+/**
+ * 支持渠道（2026-11-16 补入 `codearts`：B 族 AK/SK 实测可完整走通
+ * delivery → claim → confirm 三步，见 `codearts-ide.ts`）。
+ */
+export const CHECKIN_PROVIDERS = ["trae", "workbuddy", "minimax", "codearts"] as const;
 
 export function checkinSupported(provider?: string | null): boolean {
   return typeof provider === "string" && (CHECKIN_PROVIDERS as readonly string[]).includes(provider);

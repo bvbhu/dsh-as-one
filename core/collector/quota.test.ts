@@ -9,6 +9,7 @@ import {
   parse_trae_pay_status,
   parse_trae_usage,
   parse_workbuddy,
+  periodEndSecondsOf,
   precise_number,
   probe_codearts_quota,
   probe_trae_quota,
@@ -348,44 +349,52 @@ describe("probe_codearts_quota:到期取活动 endTime", () => {
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-  it("两批积分 → 取仍有余额的活动里最早的 endTime", async () => {
+  // ── 到期估算规则（用户 2026-11-16 最终定案）──────────────────────────
+  //
+  // 背景实测：活动的 extra.endTime 是「可领取截止时间」而非积分作废（已证伪弃用）；
+  // 签到积分只有 24h；订阅套餐 end_date=2026-12-17 → 前一天 23:59:59 到期。
+  it("无即将到期 → end_date 前一天 23:59:59（end_date=2026-12-17 → 12/16 23:59:59）", async () => {
     const fetchFn = routed({
       "package/overview": overviewBody,
-      "/v1/ops/delivery": deliveryBody([
-        // 签到：2026-12-31T15:59:59Z
-        { campaignId: 34, type: "USER_LOGIN", benefitAmount: 100, extra: { endTime: "2026-12-31T15:59:59Z" } },
-        // 注册：2026-12-30T16:00:00Z（更早 → 应被选中）
-        { campaignId: 4, type: "NEW_USER_REGISTER", benefitAmount: 4000, extra: { endTime: "2026-12-30T16:00:00Z" } },
-      ]),
+      "/statistics/plugin": { start_date: "2026-11-16", end_date: "2026-12-17" },
     });
     const snap = await probe_codearts_quota(account, { fetchFn });
     expect(snap.remaining).toBeCloseTo(4499.35);
-    expect(snap.expires_at).toBe(Math.floor(Date.parse("2026-12-30T16:00:00Z") / 1000));
+    expect(snap.expires_at).toBe(Math.floor(Date.UTC(2026, 11, 16, 23, 59, 59) / 1000));
     expect(snap.error).toBeNull();
   });
 
-  it("活动列表读不到 → 余额照常，到期留 null 且 error 如实写原因", async () => {
+  it("有即将到期 → 明天此刻（fetched_at + 24h）", async () => {
     const fetchFn = routed({
-      "package/overview": overviewBody,
-      "/v1/ops/delivery": { error_code: "PROMPTCENTER.00000001", error_msg: "channel : 参数无效" },
+      "package/overview": {
+        ...overviewBody,
+        all_credit_package: { ...overviewBody.all_credit_package, expiring_credit_amount: 100 },
+      },
+      "/statistics/plugin": { end_date: "2026-12-17" },
     });
-    // delivery 返回 200 但缺 data.items → parseCodeartsCampaigns 抛错 → 被吞成 error
     const snap = await probe_codearts_quota(account, { fetchFn });
-    expect(snap.remaining).toBeCloseTo(4499.35);
-    expect(snap.expires_at).toBeNull();
-    expect(snap.error).toContain("items");
+    expect(snap.expires_at).toBe(snap.fetched_at + 86_400);
   });
 
-  it("活动全部已过期（endTime 早于现在）→ 到期为 null，不拿过期时间充数", async () => {
+  it("end_date 读不到 → 写死 2026-12-16 23:59:59（保底）", async () => {
     const fetchFn = routed({
       "package/overview": overviewBody,
-      "/v1/ops/delivery": deliveryBody([
-        { campaignId: 1, type: "OLD", benefitAmount: 10, extra: { endTime: "2020-01-01T00:00:00Z" } },
-      ]),
+      "/statistics/plugin": { foo: 1 },
     });
     const snap = await probe_codearts_quota(account, { fetchFn });
-    expect(snap.expires_at).toBeNull();
-    expect(snap.error).toBeNull();
+    expect(snap.expires_at).toBe(Math.floor(Date.UTC(2026, 11, 16, 23, 59, 59) / 1000));
+  });
+
+  it("statistics 读失败 → 仍走写死兜底", async () => {
+    const fetchFn = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("package/overview")) {
+        return new Response(JSON.stringify(overviewBody), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("boom", { status: 500 });
+    }) as unknown as typeof fetch;
+    const snap = await probe_codearts_quota(account, { fetchFn });
+    expect(snap.expires_at).toBe(Math.floor(Date.UTC(2026, 11, 16, 23, 59, 59) / 1000));
   });
 
   it("缺 accessKey/secretKey → 直接报错（不去打上游）", async () => {
@@ -395,5 +404,18 @@ describe("probe_codearts_quota:到期取活动 endTime", () => {
     await expect(
       probe_codearts_quota({ ...account, extras: {} }, { fetchFn }),
     ).rejects.toThrow(/accessKey/);
+  });
+});
+
+describe("periodEndSecondsOf", () => {
+  it("YYYY-MM-DD → 当天 UTC 23:59:59", () => {
+    expect(periodEndSecondsOf("2026-12-17")).toBe(Math.floor(Date.UTC(2026, 11, 17, 23, 59, 59) / 1000));
+  });
+  it("非日期形态 → null（不猜）", () => {
+    expect(periodEndSecondsOf("2026-12-17T00:00:00Z")).toBeNull();
+    expect(periodEndSecondsOf("")).toBeNull();
+    expect(periodEndSecondsOf(12345)).toBeNull();
+    expect(periodEndSecondsOf(null)).toBeNull();
+    expect(periodEndSecondsOf("2026/12/17")).toBeNull();
   });
 });
