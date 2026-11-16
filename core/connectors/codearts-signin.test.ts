@@ -53,6 +53,8 @@ const CAMP: CodeartsCampaign = {
   benefitAmount: 100,
   claimable: true,
   status: null,
+  startAt: null,
+  endAt: null,
 };
 
 const OVERVIEW = {
@@ -254,7 +256,14 @@ describe("codeartsCampaigns", () => {
     ]);
     const list = await codeartsCampaigns(ACCOUNT, baseOpts(fetchFn));
     expect(list).toHaveLength(2);
-    expect(list[0]).toEqual({ ...CAMP, title: "每日签到" });
+    // 2026-11-16：`extra.startTime/endTime` 现在会被解析成 epoch 秒 ——
+    // 这是「积分有效期」的唯一来源（积分总览只给数量，不给时间）。
+    expect(list[0]).toEqual({
+      ...CAMP,
+      title: "每日签到",
+      startAt: Math.floor(Date.parse("2026-11-01") / 1000),
+      endAt: Math.floor(Date.parse("2026-11-30") / 1000),
+    });
     expect(typeof list[0].campaignId).toBe("number");
     expect(list[1]).toEqual({
       campaignId: 35,
@@ -263,6 +272,9 @@ describe("codeartsCampaigns", () => {
       benefitAmount: 50,
       claimable: false,
       status: "CLAIMED",
+      // 没有 extra → 时间为 null（绝不臆造）
+      startAt: null,
+      endAt: null,
     });
     expect(calls[0].url).toBe(`${CODEARTS_WEB_BASE}${CODEARTS_DELIVERY_PATH}`);
   });

@@ -30,6 +30,7 @@ import {
   probe_trae_quota,
   probe_workbuddy_quota,
   probe_minimax_quota,
+  probe_codearts_quota,
 } from "@as-one/core/src/collector/quota.js";
 import type {
   QuotaAccountInput,
@@ -166,7 +167,7 @@ export function createChannelsSyncDomain(
     const h = Number.isFinite(hours) && hours > 0 ? hours : 24;
     return h * 3600 * 1000;
   };
-  /** 单账号额度探针(trae/workbuddy;其他渠道不支持 → null)。失败记 error,不抛。 */
+  /** 单账号额度探针(trae/workbuddy/minimax/codearts;其他渠道不支持 → null)。失败记 error,不抛。 */
   const chQuotaFetch = async (pid: string, username: string): Promise<QuotaSnapshot | null> => {
     const key = credentialKey(pid, username);
     if (!CH_QUOTA_PROVIDERS.has(pid)) return null;
@@ -195,7 +196,11 @@ export function createChannelsSyncDomain(
               onAuthExpired: (acct) =>
                 renewMinimaxAccount(acct, { vault: ctx.vault, provider: pid, username }),
             })
-          : await probe_workbuddy_quota(account);
+          // CodeArts(B 族 AK/SK):走与推理同一个签名网关查积分总览
+          // (`/snap-manager/v1/package/overview`,2026-11-16 实测 200)。
+          : pid === "codearts"
+            ? await probe_codearts_quota(account)
+            : await probe_workbuddy_quota(account);
     } catch (err) {
       snapshot = {
         credentialKey: key,

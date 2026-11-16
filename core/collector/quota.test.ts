@@ -5,10 +5,12 @@ import { describe, expect, it } from "vitest";
 import {
   earliest_expiry,
   number_of,
+  parse_codearts_credits,
   parse_trae_pay_status,
   parse_trae_usage,
   parse_workbuddy,
   precise_number,
+  probe_codearts_quota,
   probe_trae_quota,
   to_epoch_seconds,
   workbuddy_request_body,
@@ -234,5 +236,164 @@ describe("probe_trae_quota:鉴权失败是 HTTP 200 + body.code 1001", () => {
     expect(snap.remaining).toBe(1660);
     expect(snap.limit).toBe(3800);
     expect(snap.error).toBeNull();
+  });
+});
+
+/**
+ * CodeArts 积分总览（B 族 AK/SK）。
+ *
+ * 形状取自 2026-11-16 **真实上游响应**（`GET /snap-manager/v1/package/overview`，200）。
+ */
+describe("parse_codearts_credits", () => {
+  const REAL = {
+    all_credit_package: {
+      package_credit_amount: 4500,
+      package_credit_used: 0.65,
+      package_credit_remain: 4499.35,
+      package_credit_user_amount: 4500,
+      package_credit_user_used: 0.65,
+      package_credit_user_remain: 4499.35,
+      expiring_credit_amount: 0,
+      expiring_credit_user_amount: 0,
+    },
+    basic_package: {
+      package_credit_amount: 500,
+      package_credit_used: 0,
+      package_credit_remain: 500,
+      expiring_credit_amount: 0,
+    },
+    ondemand_credit_package: null,
+    bonus_credit_package: {
+      package_credit_amount: 4000,
+      package_credit_used: 0.65,
+      package_credit_remain: 3999.35,
+      expiring_credit_amount: 0,
+    },
+    model_package: [],
+  };
+
+  it("实测形状：取 all_credit_package 的总额/已用/剩余", () => {
+    const c = parse_codearts_credits(REAL);
+    expect(c.remaining).toBeCloseTo(4499.35);
+    expect(c.limit).toBe(4500);
+    expect(c.used).toBeCloseTo(0.65);
+    expect(c.expiring).toBe(0);
+  });
+
+  it("缺 all_credit_package → 逐包相加（ondemand 为 null 时跳过）", () => {
+    const c = parse_codearts_credits({
+      basic_package: REAL.basic_package,
+      ondemand_credit_package: null,
+      bonus_credit_package: REAL.bonus_credit_package,
+    });
+    expect(c.limit).toBe(4500);
+    expect(c.remaining).toBeCloseTo(4499.35);
+    expect(c.used).toBeCloseTo(0.65);
+  });
+
+  it("没有任何可用包 → 报错（不返回全 0 骗过上层）", () => {
+    expect(() => parse_codearts_credits({ model_package: [] })).toThrow(/all_credit_package/);
+    expect(() => parse_codearts_credits({})).toThrow(/all_credit_package/);
+  });
+
+  it("合计节点缺关键字段 → 报错（形态变了要能看出来）", () => {
+    expect(() => parse_codearts_credits({ all_credit_package: { package_credit_amount: 100 } })).toThrow(
+      /package_credit_remain/,
+    );
+  });
+});
+
+/**
+ * CodeArts 到期估算：积分总览只给数量，绝对时间来自运营活动的 `extra.endTime`。
+ *
+ * 2026-11-16 实测真实响应：签到 `2026-12-31T15:59:59Z`、注册/学生认证
+ * `2026-12-30T16:00:00Z`。
+ */
+describe("probe_codearts_quota:到期取活动 endTime", () => {
+  const CREDIT_KEYS = {
+    accessKey: "AK",
+    secretKey: "SK",
+    domainId: "bv_bhu",
+  };
+  const overviewBody = {
+    all_credit_package: {
+      package_credit_amount: 4500,
+      package_credit_used: 0.65,
+      package_credit_remain: 4499.35,
+      expiring_credit_amount: 0,
+    },
+  };
+  const deliveryBody = (items: unknown[]) => ({ code: 0, message: "ok", data: { items } });
+
+  const account: QuotaAccountInput = {
+    credentialKey: "codearts/bv_bhu",
+    provider: "codearts",
+    username: "bv_bhu",
+    token: "",
+    extras: CREDIT_KEYS,
+  };
+
+  /** 按路径分派的假 fetch。 */
+  const routed = (routes: Record<string, unknown>): typeof fetch =>
+    (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      for (const [frag, body] of Object.entries(routes)) {
+        if (url.includes(frag)) {
+          return new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+  it("两批积分 → 取仍有余额的活动里最早的 endTime", async () => {
+    const fetchFn = routed({
+      "package/overview": overviewBody,
+      "/v1/ops/delivery": deliveryBody([
+        // 签到：2026-12-31T15:59:59Z
+        { campaignId: 34, type: "USER_LOGIN", benefitAmount: 100, extra: { endTime: "2026-12-31T15:59:59Z" } },
+        // 注册：2026-12-30T16:00:00Z（更早 → 应被选中）
+        { campaignId: 4, type: "NEW_USER_REGISTER", benefitAmount: 4000, extra: { endTime: "2026-12-30T16:00:00Z" } },
+      ]),
+    });
+    const snap = await probe_codearts_quota(account, { fetchFn });
+    expect(snap.remaining).toBeCloseTo(4499.35);
+    expect(snap.expires_at).toBe(Math.floor(Date.parse("2026-12-30T16:00:00Z") / 1000));
+    expect(snap.error).toBeNull();
+  });
+
+  it("活动列表读不到 → 余额照常，到期留 null 且 error 如实写原因", async () => {
+    const fetchFn = routed({
+      "package/overview": overviewBody,
+      "/v1/ops/delivery": { error_code: "PROMPTCENTER.00000001", error_msg: "channel : 参数无效" },
+    });
+    // delivery 返回 200 但缺 data.items → parseCodeartsCampaigns 抛错 → 被吞成 error
+    const snap = await probe_codearts_quota(account, { fetchFn });
+    expect(snap.remaining).toBeCloseTo(4499.35);
+    expect(snap.expires_at).toBeNull();
+    expect(snap.error).toContain("items");
+  });
+
+  it("活动全部已过期（endTime 早于现在）→ 到期为 null，不拿过期时间充数", async () => {
+    const fetchFn = routed({
+      "package/overview": overviewBody,
+      "/v1/ops/delivery": deliveryBody([
+        { campaignId: 1, type: "OLD", benefitAmount: 10, extra: { endTime: "2020-01-01T00:00:00Z" } },
+      ]),
+    });
+    const snap = await probe_codearts_quota(account, { fetchFn });
+    expect(snap.expires_at).toBeNull();
+    expect(snap.error).toBeNull();
+  });
+
+  it("缺 accessKey/secretKey → 直接报错（不去打上游）", async () => {
+    const fetchFn = (async () => {
+      throw new Error("不应该发起请求");
+    }) as unknown as typeof fetch;
+    await expect(
+      probe_codearts_quota({ ...account, extras: {} }, { fetchFn }),
+    ).rejects.toThrow(/accessKey/);
   });
 });

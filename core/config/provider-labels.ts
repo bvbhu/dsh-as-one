@@ -53,6 +53,9 @@ export const PROVIDER_DISPLAY_NAMES: Readonly<Record<string, string>> = Object.f
   qoder: "Qoder",
   minimax: "MiniMax",
   sensenova: "SenseNova",
+  // CodeArts 是第七种协议(签名网关),渠道页卡头/签到标签都用它;漏了就会在
+  // 界面上显示裸 id「codearts」,与其余渠道的人话名不一致。
+  codearts: "CodeArts",
   openrouter: "OpenRouter",
 });
 

@@ -19,6 +19,7 @@ describe("providerDisplayName", () => {
     expect(providerDisplayName("workbuddy")).toBe("WorkBuddy");
     expect(providerDisplayName("minimax")).toBe("MiniMax");
     expect(providerDisplayName("sensenova")).toBe("SenseNova");
+    expect(providerDisplayName("codearts")).toBe("CodeArts");
     expect(providerDisplayName("openrouter")).toBe("OpenRouter");
   });
 

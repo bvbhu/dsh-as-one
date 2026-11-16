@@ -489,8 +489,27 @@ export class Scheduler {
       Object.keys(current).length > 0;
     if (fresh) return current;
     const quotas = this.repo.quotas() ?? {};
-    this._quotas = { ...quotas };
-    this._quotasAt = now;
+    // ⚠️ **空表不能盖上「新鲜」的时间戳**（2026-11-16 用户报「启动后没读到到期时间
+    // 就路由了」）。
+    //
+    // 上一处修（上面的 `keys.length > 0`）只保证 `_quotaMap` 自己会重读，但它在
+    // 下面**无条件**执行 `this._quotasAt = now` —— 即使重读回来仍是空表。于是
+    // 「空」这个状态带着一个崭新的时间戳，骗过了别人的新鲜判定：
+    //
+    //   `_plan()` 的缓存命中条件是 `quotaFresh = _quotasAt > 0 && now - _quotasAt < ttl`
+    //   ——它**只看时间戳**，不看表里有没有东西。于是「到期全 null」的排序结果
+    //   被写进 `_cache`，并在 ttl(300s) 内被反复复用：due-first 的排序键全并列，
+    //   退化成 members 配置序（`deepseek-flash` 的第一个成员是 trae）。
+    //
+    // 修法：读到空表时**不推进** `_quotasAt`（保持 0 / 维持上一次有效读的时刻），
+    // 让「空」永远无法被任何地方当成新鲜数据。
+    if (Object.keys(quotas).length > 0) {
+      this._quotas = { ...quotas };
+      this._quotasAt = now;
+    } else {
+      // 空表：表本身清空（上游真的没数据），但时间戳不动 —— 不能声称新鲜。
+      this._quotas = {};
+    }
     return this._quotas;
   }
   private _quotaAgeOf(
@@ -743,7 +762,13 @@ export class Scheduler {
     const minute = fmtMinute(now);
     if (cacheable && !force) {
       const hit = this._cache.get(logicalName);
-      const quotaFresh = this._quotasAt > 0 && now - this._quotasAt < this.ttl;
+      // ⚠️ 与 `_quotaMap` **同一口径**：除了看时间戳，还必须确认表里真有数据
+      // （2026-11-16）。只看 `_quotasAt` 会被「空表 + 新时间戳」骗过，从而把
+      // 「到期全 null」的排序缓存 300s —— 那正是启动后首个请求走 trae 的原因。
+      const quotaFresh =
+        this._quotasAt > 0 &&
+        now - this._quotasAt < this.ttl &&
+        Object.keys(this._quotas).length > 0;
       if (
         hit &&
         hit.minute === minute &&
@@ -773,7 +798,13 @@ export class Scheduler {
         strategy,
       };
     });
-    if (cacheable) {
+    // ⚠️ 只缓存**基于有效额度快照**排出来的结果（2026-11-16）。
+    //
+    // 空快照下算出来的顺序等价于 members 配置序，把它写进 `_cache` 就等于把
+    // 「策略失效」固化 300 秒 —— 之后即使额度到位，也要等 TTL 过期才纠正。
+    // 不缓存，下一次 `_plan` 就会用新数据重算（代价：空快照期间每请求重算一次，
+    // 纯内存操作，可忽略）。
+    if (cacheable && this._quotasAt > 0 && Object.keys(this._quotas).length > 0) {
       this._cache.set(logicalName, {
         minute,
         strategy,

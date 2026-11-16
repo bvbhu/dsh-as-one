@@ -79,7 +79,25 @@ function createQuotaWarmup(
     }
     const fn = panel?.syncAllQuota;
     if (typeof fn !== "function") return;
-    await fn.call(panel, true);
+    const res = (await fn.call(panel, true)) as
+      | { ok?: boolean; message?: string; written?: number; probed?: number }
+      | null
+      | undefined;
+    // ⚠️ **不完整就是失败**（2026-11-16 用户定案：「syncAllQuota，对于非 openai
+    // 供应商必须全部读到数据」）。
+    //
+    // `syncAllQuota` 的 `ok` 现在是严格口径：任何有账号的渠道只要有账号没读到
+    // 额度/到期，就返回 `ok:false`。以前它只看 `written>0`，「3 个渠道里 2 个缺
+    // 到期时间」也会报成功，于是这层预热认为已就绪、把请求放行 —— 首个请求就用
+    // 「到期全未知」的快照排了序（due-first 退化成 members 配置序，恒走 trae）。
+    //
+    // 现在：把 `ok:false` 直接抛出去，让 `warmup-gate` 记为「预热失败」，
+    // 由它的 `needsRefresh()` + 节流在下一个请求前再刷一轮，直到真的读到数据。
+    // 仍然保留 gate 的「失败也放行」语义（预热是优化，不是可用性前提）。
+    const incomplete =
+      res !== null && res !== undefined && res.ok === false
+        ? (res.message ?? `额度刷新不完整(${res.written ?? 0}/${res.probed ?? 0} 个账号读到)`)
+        : null;
     // ⚠️ **刷新后必须让调度器缓存失效** —— 这是「启动后第一次请求路由错」的根因。
     //
     // `Scheduler.chain()` 对 due-first 会把结果按「分钟 + 额度代数」记忆化
@@ -90,11 +108,15 @@ function createQuotaWarmup(
     //
     // `invalidate()` 清掉 `_cache` 与 `_quotas`，下一次 `chain()` 会重读
     // `repo.quotas()`（→ `chQuotaTableForScheduler()` → 我们刚写好的缓存）。
+    //
+    // ⚠️ 放在抛错**之前**：即使这一轮只刷到部分渠道，也要让调度器看到这份
+    // 新数据（总比旧快照好），然后才把「不完整」上报给预热门去重试。
     try {
       runtime.scheduler.invalidate();
     } catch (err) {
       ctx.logger?.warn?.("[as-one] 预热后调度器缓存失效失败", err);
     }
+    if (incomplete !== null) throw new Error(incomplete);
   };
 
   /**

@@ -247,13 +247,24 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
     // 思考强度:提交体没给 → 优先用**本次上游目录**刚拉到的能力表,
     // 目录也没有才保留原值(用户可能手改过库)。
     const cat = catalogRows.get(pid)?.get(bare);
+    // 窗口/输出上限同样吃这份目录缓存:2026-11-16 workbuddy/hy4flash-free 实测
+    // 上游 /v3/config 给了 maxInputTokens=960000/maxOutputTokens=64000,但目录
+    // 拉取只写能力列、不 insert 未登记行;用户勾选登记时 UI 只提交 id/name,
+    // 于是新行的两个窗口列永远是 NULL,之后 refresh 的 nextDeclaredCapability
+    // 虽然会回补,但在此之前选择器/网关已经按「没有窗口」处理了。
+    // 这里在「提交体没给 + 库里也没有」时,最后再兜一层目录里的真实值。
+    // 只有 `undefined`(=没碰过)才兜;显式 `null`(=用户清空)依旧写 NULL。
+    const fallbackCtx = cat?.context_window ?? null;
+    const fallbackOut = cat?.max_output ?? null;
     ctx.db.realModel.set({
       provider: pid,
       model: bare,
       name: name !== "" ? name : (row?.name ?? bare),
       supports_vision: vision ?? (row?.supports_vision ?? 0),
-      max_input_tokens: ctxWin === undefined ? (row?.max_input_tokens ?? null) : ctxWin,
-      max_output_tokens: maxOut === undefined ? (row?.max_output_tokens ?? null) : maxOut,
+      max_input_tokens:
+        ctxWin === undefined ? (row?.max_input_tokens ?? fallbackCtx) : ctxWin,
+      max_output_tokens:
+        maxOut === undefined ? (row?.max_output_tokens ?? fallbackOut) : maxOut,
       hidden: 0,
       // ⚠️ 2026-11-08:并发是**每凭据**的;老行保留原值,新行按供应商缺省
       // (workbuddy=2,其余 1),别一律写 1。
@@ -459,20 +470,53 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
     }
     const probed = accounts.length;
     let written = 0;
+    /** 拿到了快照、但**没有到期时间**的账号（用户 2026-11-16 定案：不算成功）。 */
+    let noExpiry = 0;
     for (const acc of accounts) {
       const snap = await chAwaitQuota(pid, acc.cred.username, forced);
+      // ⚠️ **到期时间是必读项**（2026-11-16 用户定案：「syncAllQuota，对于非 openai
+      // 供应商必须全部读到数据」）。
+      //
+      // 只判 `remaining` 是不够的：`remaining` 有的渠道（sensenova 通用池、minimax
+      // 充值包）能拿到数字却**永远没有到期**，于是 `chQuotaTableForScheduler()` 写出的
+      // 那行没有 `expires_at` 键 → 调度器 `_expiryMap` 算不出到期 → due-first 的排序键
+      // 全并列 → 退化成 members 配置序（`deepseek-flash` 恒走 trae）。用户看到的就是
+      // 「没读到到期时间就路由了」。
+      //
+      // 所以这里把「到期」提升为硬性成功口径：没有 `expires_at` 就当这条**没读到**，
+      // 记进 errors 让页面能看见到底缺什么，而不是把它算进 `written` 骗过上层。
+      const hasExpiry =
+        snap !== null &&
+        snap !== undefined &&
+        typeof (snap as { expires_at?: number | null }).expires_at === "number" &&
+        (snap as { expires_at: number }).expires_at > 0;
       if (snap && snap.error === null && snap.remaining !== null) {
-        written += 1;
+        if (hasExpiry) {
+          written += 1;
+        } else {
+          noExpiry += 1;
+          errors[credentialKey(pid, acc.cred.username)] = "已取到额度但缺到期时间(到期未知)";
+        }
       } else {
         errors[credentialKey(pid, acc.cred.username)] = snap?.error ?? "无密钥";
       }
     }
+    // `ok` 的口径是**全部账号都读到了额度且读到了到期**。少一个都不算 ok ——
+    // 上层 `syncAllQuota` 的 `ok` 与预热门的重试判定都依赖这个严格口径。
     const quota = written === probed
       ? { status: "ok", reason: `已刷新 ${written} 个账号额度` }
-      : { status: "partial", reason: `${written} 成功 / ${probed - written} 失败` };
+      : {
+          status: written === 0 ? "failed" : "partial",
+          reason:
+            noExpiry > 0
+              ? `${written} 成功 / ${probed - written} 失败(其中 ${noExpiry} 个缺到期时间)`
+              : `${written} 成功 / ${probed - written} 失败`,
+        };
     const message = quota.status === "ok"
       ? `已刷新 ${written}/${probed} 个账号的额度`
-      : `刷新失败:${Object.values(errors)[0] ?? "无结果"}`;
+      : noExpiry > 0
+        ? `刷新不完整:${noExpiry} 个账号没有到期时间 —— ${Object.values(errors)[0] ?? "无结果"}`
+        : `刷新失败:${Object.values(errors)[0] ?? "无结果"}`;
     return { probed, written, message, missing: [], errors, quota };
   }
 
@@ -1385,7 +1429,32 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       const missingAll = new Set<string>();
       let probed = 0;
       let written = 0;
-      for (const pid of CH_QUOTA_PROVIDERS) {
+
+      // ⚠️ **覆盖面 = 全部非 openai 协议渠道**（2026-11-16 用户定案：
+      // 「syncAllQuota，对于非 openai 供应商必须全部读到数据」）。
+      //
+      // 以前只跑 `CH_QUOTA_PROVIDERS`（trae/workbuddy/minimax）+ 单独一遍 qoder，
+      // sensenova 和 codearts 这两个**非 openai** 渠道完全不在循环里 —— 它们的
+      // 账号从来没被这轮刷新碰过，`chQuotaTableForScheduler()` 里也就没有它们的
+      // 到期数据，due-first 对这两个供应商恒退化为配置序。
+      //
+      // 现在按「协议 != openai」把范围内的渠道补齐：有额度能力的照常探针，
+      // 没有额度协议的（如 codearts 若无积分接口）如实标「无额度协议」，
+      // 但**不会**再被静默跳过。
+      const nonOpenAiProviders = (): string[] => {
+        const out = new Set<string>(CH_QUOTA_PROVIDERS);
+        try {
+          for (const row of ctx.db.provider.list()) {
+            const proto = String(row.protocol ?? "").toLowerCase();
+            if (proto !== "" && proto !== "openai") out.add(row.id);
+          }
+        } catch {
+          /* 读表异常不阻断：退回 CH_QUOTA_PROVIDERS 的保守集合 */
+        }
+        return [...out].sort();
+      };
+
+      for (const pid of nonOpenAiProviders()) {
         const accounts = await refreshAccountsOf(pid);
         const quota = await runQuotaSegment(pid, forced, accounts);
         probed += quota.probed;
@@ -1424,17 +1493,40 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
           });
         }
       }
-      // `ok` 口径:至少刷到过一个账号的额度;别处没有账号/没刷到则如实写失败文案。
+      // `ok` 口径（2026-11-16 用户定案）：
+      //
+      // **非 openai 供应商必须全部读到数据**才算成功。以前是 `written > 0`
+      // ——只要有一个账号刷到额度就算 ok，于是「3 个渠道里 2 个缺到期时间」
+      // 也会返回 ok，预热门（`warmup-gate.ts`）据此认为「已就绪」放行，
+      // 首个请求就用「到期全未知」的快照排了序（`deepseek-flash` 恒走 trae）。
+      //
+      // 现在的口径：只要**任何一个**渠道出现「有账号但没全部读到」，
+      // 整个 `syncAllQuota` 就不是 ok —— 让上游能看见「不完整」并重试，
+      // 而不是把半份数据当成完成。
+      //
+      // 两个**不算失败**的例外（都不是「没读到」，而是「本来就没有」）：
+      //   · 没有账号的渠道 —— 那是没配，不是读失败；
+      //   · 额度状态为 `missing` 的渠道（`runQuotaSegment` 判「该渠道无额度协议」）
+      //     —— codearts 这类只有推理能力、没有积分接口的渠道属于此类。
+      const incomplete = rows.filter((r) => {
+        if (typeof r["probed"] !== "number" || (r["probed"] as number) === 0) return false;
+        const q = r["quota"] as { status?: string } | undefined;
+        if (q?.status === "missing") return false;
+        return r["written"] !== r["probed"];
+      });
+      const allRead = incomplete.length === 0;
       return {
-        ok: written > 0,
+        ok: written > 0 && allRead,
         count: rows.length,
         probed,
         written,
         message: rows.length > 0
-          ? `已刷新 ${rows.length} 个渠道额度(${written} 个账号成功${
-              probed - written > 0 ? `,${probed - written} 个失败` : ""
-            })`
-          : "没有可刷新额度的渠道(CH_QUOTA_PROVIDERS = trae/workbuddy/minimax)",
+          ? allRead
+            ? `已刷新 ${rows.length} 个渠道额度(${written} 个账号全部读到,含到期时间)`
+            : `刷新不完整:${incomplete.length} 个渠道没有全部读到到期数据(${incomplete
+                .map((r) => String(r["provider"]))
+                .join("/")}) —— ${written}/${probed} 个账号成功`
+          : "没有可刷新额度的渠道(非 openai 渠道均无额度协议)",
         missing: [...missingAll],
         errors: errorsAll,
         channels: rows,

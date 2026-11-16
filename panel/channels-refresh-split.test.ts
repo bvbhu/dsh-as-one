@@ -119,7 +119,9 @@ describe("syncChannelQuota:打开页/点刷新只刷额度", () => {
 
     expect(r.ok).toBe(false);
     expect(r.errors).toMatchObject({ "trae/u1": "401" });
-    expect(r.quota).toMatchObject({ status: "partial" });
+    // 2026-11-16：一个都没成功 → `failed`（不再是 `partial`）。
+    // `partial` 现在专指「部分成功」，零成功属于整体失败。
+    expect(r.quota).toMatchObject({ status: "failed" });
   });
 });
 
@@ -196,6 +198,48 @@ describe("syncAllQuota:打开渠道页则对每个额度渠道各刷一次", () 
     expect(chAwaitCatalog).not.toHaveBeenCalled();
     expect(checkinAccountsOf).not.toHaveBeenCalled();
     expect(r.ok).toBe(true);
+  });
+
+  it("缺到期时间 → 不算成功(2026-11-16 定案:非 openai 渠道必须全部读到)", async () => {
+    // 有额度数字、但没有 expires_at —— 正是启动后 due-first 失效的那种快照。
+    const noExpiry = { ...quotaSnap, expires_at: null };
+    const chAwaitQuota = vi.fn(async (pid: string) => ({ ...noExpiry, credentialKey: `${pid}/u` }));
+    const refreshAccountsOf = vi.fn(async (pid: string) => [fakeAccount(`${pid}-u`)]);
+    const methods = createChannelsMethods(
+      makeCtx(),
+      makeDeps({ chAwaitQuota, refreshAccountsOf }),
+    );
+
+    const r = await methods.syncAllQuota();
+
+    // 一个账号都没算成功：有额度但缺到期 = 没读到。
+    expect(r.written).toBe(0);
+    expect(r.ok).toBe(false);
+    expect(String(r.message)).toContain("不完整");
+  });
+
+  it("非 openai 渠道只要有一个没全部读到 → 整体 ok=false", async () => {
+    // trae 两个账号、其中一个失败；其余渠道全部正常。
+    const chAwaitQuota = vi.fn(async (pid: string, username: string) =>
+      pid === "trae" && username === "bad"
+        ? { ...quotaSnap, remaining: null, error: "401" }
+        : { ...quotaSnap, credentialKey: `${pid}/${username}` },
+    );
+    const refreshAccountsOf = vi.fn(async (pid: string) =>
+      pid === "trae" ? [fakeAccount("ok"), fakeAccount("bad")] : [fakeAccount(`${pid}-u`)],
+    );
+    const methods = createChannelsMethods(
+      makeCtx(),
+      makeDeps({ chAwaitQuota, refreshAccountsOf }),
+    );
+
+    const r = await methods.syncAllQuota();
+
+    expect(r.written).toBeGreaterThan(0);
+    // 关键：不能因为「有账号刷到了」就报 ok。
+    expect(r.ok).toBe(false);
+    expect(String(r.message)).toContain("不完整");
+    expect(String(r.message)).toContain("trae");
   });
 });
 

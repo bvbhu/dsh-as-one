@@ -113,4 +113,37 @@ describe("额度缓存：空表不缓存（due-first 修复）", () => {
     const after = rt.scheduler.chain("lg1");
     expect(after.map((c) => c.endpoint.username)).toEqual(["a", "b"]);
   });
+
+  /**
+   * 2026-11-16「启动后首个请求没读到到期时间就路由」的直接回归。
+   *
+   * 与上面两条的区别：这里**不传 force**，专打 `_plan()` 的按分钟缓存
+   * （`_cache`）。旧实现里 `_quotaMap` 会给空表盖上新鲜时间戳，于是
+   * `_plan` 的 `quotaFresh` 判定为真 → 「到期全 null」的排序被缓存 300s，
+   * 额度到账后同分钟内依旧走旧序。
+   */
+  it("空快照排出来的顺序不进 _cache：额度到账后同分钟内立刻生效（不传 force）", async () => {
+    const dbPath = join(makeTmpDir(), "as-one.db");
+    seed(dbPath);
+
+    const now = Math.floor(Date.now() / 1000);
+    let quotas: Record<string, unknown> = {};
+    const rt = await setupAsOne({
+      dbPath,
+      env: {},
+      quotaSnapshot: () => quotas,
+    } as never);
+
+    // 第 1 次：空快照 → 凭据序 (a, b)，且**不该**被记忆化
+    expect(rt.scheduler.chain("lg1").map((c) => c.endpoint.username)).toEqual(["a", "b"]);
+
+    quotas = {
+      "stub/a": { expires_at: now + 30 * 86_400, fetched_at: now },
+      "stub/b": { expires_at: now + 1 * 86_400, fetched_at: now },
+    };
+
+    // 第 2 次：同一分钟内、**不传 force** —— 必须立刻排成 (b, a)。
+    // 若空快照被缓存，这里会拿到旧的 (a, b) 而失败。
+    expect(rt.scheduler.chain("lg1").map((c) => c.endpoint.username)).toEqual(["b", "a"]);
+  });
 });

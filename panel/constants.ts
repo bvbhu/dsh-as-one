@@ -43,8 +43,15 @@ export const KIND_BY_PROTOCOL: Record<string, "channel" | "endpoint"> = {
   codearts: "channel",
 };
 
-/** 有运行期额度探针的渠道(assembly-channels.ts 从这里取,第十一刀从 channels 域搬来)。 */
-export const CH_QUOTA_PROVIDERS = new Set(["trae", "workbuddy", "minimax"]);
+/**
+ * 有运行期额度探针的渠道(assembly-channels.ts 从这里取,第十一刀从 channels 域搬来)。
+ *
+ * ⚠️ 2026-11-16 补入 `codearts`:它有 B 族 AK/SK 可读的积分总览
+ * (`GET /snap-manager/v1/package/overview`,实测 200)。在此之前它不在这个集合里,
+ * 于是 `syncAllQuota` 的循环从来没碰过它,`chQuotaTableForScheduler()` 里也就没有
+ * 它的额度/到期 —— 用户定案「非 openai 供应商必须全部读到数据」正是针对这类漏网。
+ */
+export const CH_QUOTA_PROVIDERS = new Set(["trae", "workbuddy", "minimax", "codearts"]);
 /**
  * 有模型目录采集的渠道(与 core catalog.ts `CATALOG_PROVIDERS` 一致)。
  *

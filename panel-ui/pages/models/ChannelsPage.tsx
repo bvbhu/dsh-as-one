@@ -1,8 +1,9 @@
 /**
- * 「渠道」合并页:Trae / WorkBuddy / MiniMax / Qoder / SenseNova 五张折叠卡
+ * 「渠道」合并页:Trae / WorkBuddy / MiniMax / Qoder / SenseNova / CodeArts 折叠卡
  * (2026-11-08 用户定案:WorkBuddy **重新显性化**)。
  *
- * 卡序:**恢复隐藏前的原顺序** —— Trae → WorkBuddy → MiniMax → Qoder → SenseNova。
+ * 卡序:**恢复隐藏前的原顺序** —— Trae → WorkBuddy → MiniMax → Qoder → SenseNova,
+ * 2026-11-16 追加 CodeArts(接在最后,不动老渠道的肌肉记忆位置)。
  * 为什么不把 WorkBuddy 挪到最后(风险最高的一档):这个顺序是渠道接入历史
  * (Trae 最早、其后 WorkBuddy),也是用户肌肉记忆的位置;而「风险」已经由
  * 卡头 title + 展开处的短提示 + 总览签到行的 title 三处显式告知 ——
@@ -39,13 +40,14 @@ import ChannelPage from "./ChannelPage";
 /* Qoder 独立页已移除(2026-11-15):五个渠道统一走 ChannelPage。 */
 import SenseNovaPage from "./SenseNovaPage";
 
-/** 卡序(2026-11-08 恢复):Trae → WorkBuddy → MiniMax → Qoder → SenseNova。 */
+/** 卡序(2026-11-08 恢复):Trae → WorkBuddy → MiniMax → Qoder → SenseNova → CodeArts。 */
 const CARDS = [
   { provider: "trae", label: "Trae" },
   { provider: "workbuddy", label: "WorkBuddy" },
   { provider: "minimax", label: "MiniMax" },
   { provider: "qoder", label: "Qoder" },
   { provider: "sensenova", label: "SenseNova" },
+  { provider: "codearts", label: "CodeArts" },
 ] as const;
 
 /**
@@ -375,7 +377,7 @@ export default function ChannelsPage(): React.JSX.Element {
       {note ? <p className="chx-note">{note}</p> : null}
 
       {ov !== null && visibleCards.length === 0 ? (
-        // 全部渠道都没凭据:如实说明「没有渠道」而不是摆 5 张空卡。
+        // 全部渠道都没凭据:如实说明「没有渠道」而不是摆一堆空卡。
         // 凭据由 Agent 写入数据库,所以这句话对用户是可执行的指引。
         <p className="chx-empty hint na">
           还没有任何渠道 —— 凭据配置由 Agent 直接写入数据库,配置后这里会自动出现对应渠道。

@@ -390,6 +390,21 @@ export interface CodeartsCampaign {
   claimable: boolean;
   /** 不可领时为 `null`（上游就是这么给的，不是空串）。 */
   status: string | null;
+  /**
+   * 活动开始时刻（epoch 秒）；上游 `extra.startTime` 的 ISO 串转来，读不到为 null。
+   *
+   * 用途：到期估算的时间基准（见 {@link CodeartsCampaign.endAt}）。
+   */
+  startAt: number | null;
+  /**
+   * 活动结束时刻（epoch 秒）= **这批积分的有效期终点**；读不到为 null。
+   *
+   * ⚠️ 2026-11-16：`/snap-manager/v1/package/overview` 只给
+   * `expiring_credit_amount`（数量），**没有绝对到期时间**。想要 due-first 能按
+   * 到期排序，只能用这里 —— 且必须在 UI/日志里标明是「按活动期估算」，不能当成
+   * 上游权威值。
+   */
+  endAt: number | null;
 }
 
 /**
@@ -410,6 +425,11 @@ export function parseCodeartsCampaigns(payload: Record<string, unknown>): Codear
     const campaignId = toNumber(item["campaignId"]);
     // campaignId 是领取的唯一输入，缺失/非法就丢弃（绝不写死兜底 id）。
     if (!(campaignId > 0)) continue;
+    // `extra.endTime` 是**积分有效期**的唯一权威来源（2026-11-16 实测：
+    // 签到活动 `"endTime":"2026-12-31T15:59:59Z"`）。积分总览接口只给
+    // `expiring_credit_amount`（即将过期的**数量**），没有绝对时间 —— 到期估算
+    // 必须靠这里。解析不出来一律 null，不臆造。
+    const extra = isRecord(item["extra"]) ? item["extra"] : null;
     out.push({
       campaignId,
       title: typeof item["title"] === "string" ? item["title"] : "",
@@ -417,9 +437,18 @@ export function parseCodeartsCampaigns(payload: Record<string, unknown>): Codear
       benefitAmount: toNumber(item["benefitAmount"]),
       claimable: item["claimable"] === true,
       status: typeof item["status"] === "string" ? item["status"] : null,
+      startAt: isoSecondsOf(extra?.["startTime"]),
+      endAt: isoSecondsOf(extra?.["endTime"]),
     });
   }
   return out;
+}
+
+/** ISO 8601 串 → epoch 秒；解析不出来返回 null（绝不拿当前时间顶上）。 */
+function isoSecondsOf(value: unknown): number | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
 }
 
 /** 活动列表。 */

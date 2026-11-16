@@ -43,6 +43,12 @@ import {
   minimaxCreditGrants,
   type MinimaxAccount,
 } from "../connectors/minimax-signin.js";
+import { CODEARTS_BASE_CN, codeartsIdentityHeaders } from "../connectors/codearts.js";
+import { signCodeartsRequest } from "../connectors/codearts-sign.js";
+import {
+  CODEARTS_DELIVERY_PATH,
+  parseCodeartsCampaigns,
+} from "../connectors/codearts-signin.js";
 
 // ---------------------------------------------------------------------------
 // 错误类型
@@ -670,5 +676,211 @@ export async function probe_minimax_quota(
     fetched_at: fetchedAt,
     packs,
     error: grantError,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * CodeArts（B 族 AK/SK 签名网关）
+ * ------------------------------------------------------------------ */
+
+/** 积分总览（B 族）。2026-11-16 实测：`/package/overview` 与 `/statistics/plugin` 都 200。 */
+export const CODEARTS_PACKAGE_OVERVIEW_PATH = "/snap-manager/v1/package/overview";
+
+export const CODEARTS_QUOTA_TIMEOUT_MS = 20_000;
+
+export interface CodeartsQuotaOptions {
+  fetchFn?: typeof fetch;
+  timeoutMs?: number;
+  /** base 覆盖（自建反代时用）；缺省 {@link CODEARTS_BASE_CN}。 */
+  baseUrl?: string;
+}
+
+/**
+ * 解析 CodeArts 积分总览 —— 纯函数（导出给测试）。
+ *
+ * 响应形态（实测 2026-11-16）：
+ * ```json
+ * {"all_credit_package":{"package_credit_amount":4500,"package_credit_used":0.65,
+ *   "package_credit_remain":4499.35,"expiring_credit_amount":0},
+ *  "basic_package":{...},"ondemand_credit_package":null,"bonus_credit_package":{...},
+ *  "model_package":[]}
+ * ```
+ *
+ * ⚠️ **上游不给绝对到期时间**：只有 `expiring_credit_amount`（即将过期的额度**数量**），
+ * 没有「哪一天到期」。所以 `expires_at` 这里一律 null，**绝不虚报** —— 由装配层按
+ * 用户定案（「设法估算」）另行补，且必须标明是估算值。
+ *
+ * 总额/已用/剩余优先取 `all_credit_package`（= basic + bonus + ondemand 的合计）；
+ * 缺这个节点就逐个可用包相加，一个都读不到才报错。
+ */
+export function parse_codearts_credits(payload: Record<string, unknown>): {
+  remaining: number;
+  limit: number;
+  used: number;
+  expiring: number;
+} {
+  const num = (v: unknown): number | null => {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const record = (v: unknown): Record<string, unknown> | null =>
+    v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
+  const total = record(payload["all_credit_package"]);
+  if (total !== null) {
+    const remain = num(total["package_credit_remain"]);
+    const amount = num(total["package_credit_amount"]);
+    if (remain === null || amount === null) {
+      throw new QuotaError("codearts 积分总览缺少 package_credit_remain / package_credit_amount");
+    }
+    return {
+      remaining: remain,
+      limit: amount,
+      used: num(total["package_credit_used"]) ?? Math.max(0, amount - remain),
+      expiring: num(total["expiring_credit_amount"]) ?? 0,
+    };
+  }
+
+  // 没有合计节点：逐包相加（ondemand 常为 null，跳过即可）。
+  let remain = 0;
+  let amount = 0;
+  let used = 0;
+  let expiring = 0;
+  let found = 0;
+  for (const key of ["basic_package", "bonus_credit_package", "ondemand_credit_package"]) {
+    const pkg = record(payload[key]);
+    if (pkg === null) continue;
+    const r = num(pkg["package_credit_remain"]);
+    const a = num(pkg["package_credit_amount"]);
+    if (r === null || a === null) continue;
+    remain += r;
+    amount += a;
+    used += num(pkg["package_credit_used"]) ?? 0;
+    expiring += num(pkg["expiring_credit_amount"]) ?? 0;
+    found += 1;
+  }
+  if (found === 0) {
+    throw new QuotaError("codearts 积分总览缺少 all_credit_package（上游应答形态变了）");
+  }
+  return { remaining: remain, limit: amount, used, expiring };
+}
+
+/**
+ * CodeArts 单账号额度探针（B 族 AK/SK）。
+ *
+ * 走的是和推理同一个签名网关（{@link signCodeartsRequest}），**只读**、不烧额度。
+ * 凭据来自 `account.extras` 的 `accessKey` / `secretKey` / `securityToken`（与
+ * `connectorExtra` 同一份口径）。
+ *
+ * ## 到期时间怎么来（用户 2026-11-16 定案「codeart 我会处理，设法估算」）
+ *
+ * 积分总览 `/snap-manager/v1/package/overview` **只给数量**（`expiring_credit_amount`
+ * = 即将过期的额度有多少），**没有绝对时间**。真正的有效期在运营活动接口
+ * `/v1/ops/delivery?channel=IDE` 的 `extra.endTime` 里（实测：签到积分
+ * `2026-12-31T15:59:59Z`、注册/学生认证 `2026-12-30T16:00:00Z`）。
+ *
+ * 所以到期取「**仍有余额的那批活动**里最早的 `endTime`」—— 与 trae/workbuddy
+ * 「最早到期优先」同一业务口径。拿不到活动列表时 `expires_at` 留 null 且
+ * `error` 如实写原因，**绝不虚报**。
+ */
+export async function probe_codearts_quota(
+  account: QuotaAccountInput,
+  opts: CodeartsQuotaOptions = {},
+): Promise<QuotaSnapshot> {
+  const raw = account.extras ?? {};
+  const accessKey = String(raw["accessKey"] ?? "");
+  const secretKey = String(raw["secretKey"] ?? "");
+  const securityToken = String(raw["securityToken"] ?? "");
+  const domainId = String(raw["domainId"] ?? "");
+  if (accessKey === "" || secretKey === "") {
+    throw new QuotaError("codearts 账号缺少 accessKey / secretKey");
+  }
+
+  const base = (opts.baseUrl || CODEARTS_BASE_CN).replace(/\/+$/, "");
+  const timeoutMs = opts.timeoutMs ?? CODEARTS_QUOTA_TIMEOUT_MS;
+  const fetchFn = opts.fetchFn ?? fetch;
+
+  const get = async (path: string): Promise<Record<string, unknown>> => {
+    const url = `${base}${path}`;
+    const signed = signCodeartsRequest({
+      accessKey,
+      secretKey,
+      ...(securityToken !== "" ? { securityToken } : {}),
+      method: "GET",
+      url,
+      headers: {
+        ...codeartsIdentityHeaders({
+          accessKey,
+          ...(domainId !== "" ? { domainId } : {}),
+        }),
+        // `/v1/ops/*` 必须带这个头（签名后追加），否则 400「请求头Agent-Type为空」。
+        "Agent-Type": "PromptCenter",
+      },
+    });
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let resp: Response;
+    try {
+      resp = await fetchFn(url, { method: "GET", headers: signed.headers, signal: controller.signal });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new QuotaError(
+        controller.signal.aborted
+          ? `codearts 额度查询超时(${timeoutMs}ms)`
+          : `codearts 额度查询连接失败: ${msg}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const text = await resp.text();
+    if (!resp.ok) throw new QuotaError(`codearts ${path} HTTP ${resp.status}: ${text.slice(0, 300)}`);
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new QuotaError(
+        `codearts ${path} 响应不是 JSON(HTTP ${resp.status}): ${text
+          .replace(/[^\x20-\x7e\u4e00-\u9fff]/g, "?")
+          .slice(0, 120)}`,
+      );
+    }
+  };
+
+  const payload = await get(CODEARTS_PACKAGE_OVERVIEW_PATH);
+  const credits = parse_codearts_credits(payload);
+  const fetchedAt = Math.floor(Date.now() / 1000);
+
+  // ── 到期：从运营活动里取「仍有余额的那批」最早 endTime ──────────────────
+  let expiresAt: number | null = null;
+  let expiryError: string | null = null;
+  try {
+    const delivery = await get(CODEARTS_DELIVERY_PATH);
+    const campaigns = parseCodeartsCampaigns(delivery);
+    const ends = campaigns.map((c) => c.endAt).filter((n): n is number => typeof n === "number" && n > fetchedAt);
+    if (ends.length > 0) expiresAt = Math.min(...ends);
+  } catch (err) {
+    // 活动读不到不影响余额展示：只把到期留 null（未知），并如实记原因。
+    expiryError = err instanceof Error ? err.message : String(err);
+  }
+
+  return {
+    credentialKey: account.credentialKey,
+    remaining: credits.remaining,
+    limit: credits.limit,
+    expires_at: expiresAt,
+    fetched_at: fetchedAt,
+    packs: [
+      {
+        name: "credit_package",
+        limit: credits.limit,
+        used: credits.used,
+        remain: credits.remaining,
+        expires_at: expiresAt,
+        counts_for_expiry: credits.remaining > 0,
+        extra: { expiring: credits.expiring },
+      },
+    ],
+    error: expiryError,
   };
 }

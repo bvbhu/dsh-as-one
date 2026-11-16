@@ -244,3 +244,69 @@ describe("setChannelModel:上下文窗口/输出上限的提交契约", () => {
     expect(syncRegistry).toHaveBeenCalled();
   });
 });
+
+/**
+ * 2026-11-16 用户实测 workbuddy/hy4flash-free:上游 `/v3/config` 明示
+ * `maxInputTokens=960000 / maxOutputTokens=64000`,但勾选登记后的新行两列
+ * 都是 NULL。原因:目录拉取只更新已登记行,勾选时 UI 只提交 id/name,
+ * `upsertRealModelRow` 于是把 NULL 写了进去。修法:提交体没给(undefined)
+ * 且库里也空时,从本轮目录缓存里兜底取真实窗口。
+ */
+describe("setChannelModel:新登记行的窗口从目录缓存兜底", () => {
+  function setupWithCatalog(catEntry: Record<string, unknown>) {
+    const { db, rows, writes } = makeRealModelDb();
+    const catalogRows = new Map<string, Map<string, any>>([
+      ["workbuddy", new Map([["hy4flash-free", catEntry as any]])],
+    ]);
+    // 用真实的序列化(本文件其它 describe 的 mock 固定返回 null)
+    const deps = makeDeps({
+      catalogRows,
+      serializeReasoningEfforts: (e: readonly string[] | null) => e ? JSON.stringify(e) : null,
+    });
+    const ctx = {
+      db,
+      registry: { getProvider: () => undefined },
+      scheduler: { invalidate: vi.fn() },
+      syncRegistry: vi.fn(),
+    } as unknown as PanelContext;
+    return { methods: createChannelsMethods(ctx, deps), rows };
+  }
+
+  it("hy4flash-free:库里没有 + 提交体没给 → 写进上游 960000/64000", async () => {
+    const { methods, rows } = setupWithCatalog({
+      id: "hy4flash-free", name: "Hy4 flash",
+      context_window: 960_000, max_output: 64_000,
+      origin: "config", rate: 0,
+      reasoning_efforts: ["high"], reasoning_allows_off: false,
+    });
+    const r = await methods.setChannelModel("workbuddy", {
+      id: "workbuddy/hy4flash-free",
+      name: "Hy4 flash",
+      vision: false,
+      // UI 没碰窗口 → undefined
+      exposed: true,
+    });
+    expect(r.ok).toBe(true);
+    const row = rows.get("workbuddy/hy4flash-free")!;
+    expect(row.max_input_tokens).toBe(960_000);
+    expect(row.max_output_tokens).toBe(64_000);
+    expect(row.supported_reasoning_efforts).toBe('["high"]');
+  });
+
+  it("显式 null 清空仍优先,不被目录覆盖", async () => {
+    const { methods, rows } = setupWithCatalog({
+      id: "hy4flash-free", name: "Hy4 flash",
+      context_window: 960_000, max_output: 64_000,
+      reasoning_efforts: null, reasoning_allows_off: null,
+    });
+    await methods.setChannelModel("workbuddy", {
+      id: "workbuddy/hy4flash-free",
+      context_window: null,
+      max_output: null,
+      exposed: true,
+    });
+    const row = rows.get("workbuddy/hy4flash-free")!;
+    expect(row.max_input_tokens).toBeNull();
+    expect(row.max_output_tokens).toBeNull();
+  });
+});

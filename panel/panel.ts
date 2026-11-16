@@ -676,6 +676,20 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
       });
     }
 
+    // CodeArts:AK/SK 签名网关,没有额度探针(不进 CH_QUOTA_PROVIDERS),但凭据
+    // 仍在 credential 表里 —— 卡头按凭据行出账号(未采集 = 余额未知),和 minimax
+    // 同款「有凭据就出卡」口径。展开后由 ChannelPage 读 real_model 列模型。
+    {
+      const accounts = await accountsOfProvider("codearts");
+      cards.push({
+        provider: "codearts",
+        label: checkinLabelOf("codearts"),
+        signedIn: accounts.length > 0,
+        accounts,
+        note: null,
+      });
+    }
+
     // Qoder:qoderCredits 的运行期缓存(账号行里读到的那份)
     {
       const cached = qd.methods.qoderCreditsCached();

@@ -605,6 +605,46 @@ export function createChannelsDomain(
     return out;
   };
 
+  /**
+   * 多字段凭据的**字段声明表**(目前只有 codearts 用)。
+   *
+   * 为什么要有这张表:codearts 的 AK/SK 三元组里 `secret` 列只放得下 AK 一份,
+   * SK / securityToken / domainId 都在 `raw_json` 里(见网关侧 `connectorExtra` 的
+   * 透传白名单),单看 `key_fp` 根本判断不出「这个账号到底能不能签名」。所以渠道
+   * 页按这张表逐字段回一个**在场标记** —— 只说「配了 / 没配」,绝不回显值。
+   *
+   * `secretKey` 标为必填:缺了它连接器直接抛「凭据不完整」。securityToken 是 STS
+   * 临时凭据才有(IAM 永久凭据为空是正常的),所以只显示可选标记,不报警。
+   */
+  const CH_CREDENTIAL_FIELDS: Readonly<Record<string, Array<{ key: string; label: string; required: boolean }>>> = {
+    codearts: [
+      { key: "accessKey", label: "Access Key", required: true },
+      { key: "secretKey", label: "Secret Key", required: true },
+      { key: "securityToken", label: "Security Token(STS)", required: false },
+      { key: "domainId", label: "Domain ID", required: false },
+      { key: "expiresAtMs", label: "过期时间", required: false },
+    ],
+  };
+
+  /** 凭据字段在场投影(codearts):从 vault 读一次,只回布尔,不回明文。 */
+  const credentialFieldsOf = async (pid: string, username: string): Promise<ChannelAccount["credentialFields"]> => {
+    const specs = CH_CREDENTIAL_FIELDS[pid];
+    if (!specs) return undefined;
+    const cred = await ctx.vault.get(pid, username);
+    const raw = cred?.raw ?? {};
+    return specs.map(({ key, label, required }) => ({
+      key,
+      label,
+      required,
+      // `secret` 列放的是 AK,raw_json 里也留了一份(登录脚本两边都写),
+      // 两处任一有值就算配好。
+      present:
+        (key === "accessKey" && typeof cred?.secret === "string" && cred.secret.trim() !== "") ||
+        (typeof raw[key] === "string" && (raw[key] as string).trim() !== "") ||
+        (key === "expiresAtMs" && typeof raw[key] === "number" && Number.isFinite(raw[key] as number)),
+    }));
+  };
+
   /** 某 provider 的 credential 行转 ChannelAccount[](来源 = credential 表)。 */
   const channelAccountsOf = async (pid: string): Promise<ChannelAccount[]> => {
     const creds = await ctx.vault.list(pid);
@@ -624,6 +664,7 @@ export function createChannelsDomain(
         token_expires_at_ms: s.expiresAt !== null ? Math.round(s.expiresAt * 1000) : null,
         refresh_expires_at_ms: null,
         last_refresh: null,
+        ...(CH_CREDENTIAL_FIELDS[pid] ? { credentialFields: await credentialFieldsOf(pid, s.username) } : {}),
       });
     }
     return out;
@@ -924,8 +965,14 @@ export function createChannelsDomain(
         listed: mv !== undefined,
         available: mv !== undefined || up.vision !== undefined,
         vision: mv ? mv.supportsVision : up.vision,
-        context_window: mv ? mv.maxInputTokens : null,
-        // 库里空 + 上游有值 → 用上游值顶上(见上面第二条口径)
+        // 库里空 + 上游有值 → 用上游值顶上(与紧邻的 max_output 同一口径)。
+        // 2026-11-16 用户反馈 workbuddy/hy4flash-free:上游 /v3/config 明明给了
+        // maxInputTokens=960000,库里却是 NULL,目录拉取也没有补回去 —— 这里原先
+        // 只有 max_output 做了 `mv 空 → up 顶上`,context_window 却直接取
+        // `mv ? mv.maxInputTokens : null`,于是已登记但窗口为空的行永远显示空,
+        // UI/网关跟着拿不到窗口。沿用 max_output 的 `||` 口径:0 视为坏值,
+        // 同样落到上游值(而不是把 0 当成合法窗口发出去)。
+        context_window: (mv?.maxInputTokens ?? null) || up.context_window || null,
         max_output: (mv?.maxOutputTokens ?? null) || up.max_output || null,
         // 倍率来自上游目录解析(workbuddy credits / trae consumption_rate);
         // 目录没给(或解析失败)才是 null,不硬编码丢弃。

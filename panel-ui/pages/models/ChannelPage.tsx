@@ -60,7 +60,7 @@ export interface ChannelPageProps {
    * 独立的 QoderPage + `qoder.models` 偏好勾选,现在与其它渠道共用本页 ——
    * 勾选真源统一为 `real_model` 表,目录走 `CH_CATALOG_PROVIDERS` 里的 qoder
    * 通路,保存走同一条 `setChannelModel` 单行 upsert。 */
-  provider: "trae" | "workbuddy" | "minimax" | "qoder";
+  provider: "trae" | "workbuddy" | "minimax" | "qoder" | "codearts";
 }
 
 /** 完整 id(`provider/模型`)→ 裸模型名(表格行键 + 提交用)。 */
@@ -209,6 +209,21 @@ export default function ChannelPage({ provider }: ChannelPageProps): React.JSX.E
     });
   }, [page]);
 
+  /**
+   * AK/SK 这类**多字段凭据**的在场清单(codearts)。
+   *
+   * ⚠️ 只显示「已配置 / 未配置」,绝不回显值(后端 {@link ChannelAccount.credentialFields}
+   * 也只给布尔)。缺必填项时把那一项标红,并在账号行下补一句提示 —— 用户对着一张
+   * 只有用户名、什么都说不出的卡片,没法判断「是不是 SK 漏了」。
+   */
+  const credentialFieldsByAccount = React.useMemo(() => {
+    const out = new Map<string, NonNullable<ChannelAccount["credentialFields"]>>();
+    for (const a of page?.accounts ?? []) {
+      if (a.credentialFields && a.credentialFields.length > 0) out.set(a.label, a.credentialFields);
+    }
+    return out;
+  }, [page]);
+
   /** 一行额度都没拉到 → 把原因摆一行 warn-line(只摆一次,不按行重复)。
    *
    *  ⚠️ 判据是「所有账号都没有可用余额」,**不是**「credits 为空」:单账号正常时
@@ -354,6 +369,28 @@ export default function ChannelPage({ provider }: ChannelPageProps): React.JSX.E
         emptyText={signedIn ? "暂无账号" : "未接入账号"}
         footer={creditsError ? <p className="chan-hint warn-line">{creditsError}</p> : null}
       />
+      {/* AK/SK 这类多字段凭据(codearts):逐账号列字段在场。凭据由 Agent 写库,
+          面板只读;缺字段时标红,值一律不回显。没有该声明的渠道整段不渲染。 */}
+      {credentialFieldsByAccount.size > 0 ? (
+        <article className="chan-card">
+          <header className="chan-head"><h3>凭据字段</h3></header>
+          {[...credentialFieldsByAccount.entries()].map(([username, fields]) => (
+            <p className="chan-hint" key={username}>
+              <b>{username}</b>{" "}
+              {fields.map((f) => (
+                <span
+                  key={f.key}
+                  // 选填项(STS token / 过期时间)缺失是正常的 IAM 永久凭据,不标红。
+                  className={`chan-badge ${f.present ? "ok" : f.required ? "bad" : ""}`}
+                  title={f.key}
+                >
+                  {f.label} {f.present ? "已配置" : f.required ? "未配置" : "无"}
+                </span>
+              ))}
+            </p>
+          ))}
+        </article>
+      ) : null}
       {!page ? (
         <div className="chan-card">
           <p className="chan-empty">加载中…</p>
