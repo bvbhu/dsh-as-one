@@ -161,11 +161,17 @@ async function startAsOne(ctx: Context): Promise<void> {
     return;
   }
 
+  // ⚠️ 预热门必须在**两处**都注入（2026-11-16 真根因）：
+  //   · `buildGatewayRoutes` → 外部 `/v1/*` 调用方；
+  //   · `AsOneLlmAdapter`   → **DSH 自己的对话请求**（进程内 `adapter.stream()`，
+  //     不走 HTTP 路由，所以只修前者的那段预热对用户看到的请求完全无效）。
+  // 它内部惰性建面板 host，提前构造是安全的。
+  const warmup = createQuotaWarmup(runtime, ctx);
+
   ctx.effect(
     () => {
       // 面板要先建出来 —— 预热门要借它的 `syncAllQuota(true)` 打真实探针。
       const panelRoutes = buildPanelRoutes(runtime);
-      const warmup = createQuotaWarmup(runtime, ctx);
       const gatewayRoutes = buildGatewayRoutes(runtime, {
         logger: ctx.logger as unknown as Pick<Console, "warn" | "error">,
         warmup,
@@ -272,6 +278,10 @@ async function startAsOne(ctx: Context): Promise<void> {
   ctx.inject(["llm"], (child) => {
     child.effect(() => {
       const adapter = new AsOneLlmAdapter(runtime, {
+        // ⚠️ DSH 的对话请求走这条进程内路径（`adapter.stream()` → `resolveUpstream`），
+        // **不经过** `/v1/chat/completions` 路由 —— 所以预热门必须在这里再注入一次，
+        // 否则启动后首个请求仍会拿空额度快照排成 members 配置序（恒走 trae）。
+        warmup,
         // 宿主 attachments 服务的惰性取用口 —— adapter 靠它把 `read_image`
         // 与用户附件的「附件引用」读成字节再编成 data URL。
         //

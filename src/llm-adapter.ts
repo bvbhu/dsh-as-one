@@ -910,6 +910,20 @@ export interface AsOneLlmAdapterOptions {
    * **缺省 = 不重路由**:任何 `purpose` 都按客户端给的模型走。
    */
   reroutes?: () => RerouteSettings;
+  /**
+   * 额度预热门（启动后首个请求先刷新到期时间再选路）。
+   *
+   * ⚠️ **必须注入**（2026-11-16 用户反复报「启动后首个请求仍走 trae」的真根因）：
+   * DSH 的请求**不走** HTTP 路由 —— 宿主 `ctx.inject(["llm"])` 注册本 adapter 后，
+   * 对话请求是**进程内** `adapter.stream()` 直接调 `rt.resolveUpstream()`。
+   * 所以 `routes.ts` 里那句 `await awaitWarmup()` 对 DSH 自己的请求**完全不起作用**：
+   * 进程刚启动时额度表是空的，due-first 退化成 members 配置序（`deepseek-flash`
+   * 配置序第一个正是 `trae`），而 HTTP 路由上的预热只影响外部 `/v1/*` 调用方。
+   *
+   * 接入口径与 HTTP 路由一致：**每次** stream 前 await（门内部幂等，只有第一次
+   * 真等刷新，之后 `needsRefresh()` 无效才重刷，其余直接返回）。
+   */
+  warmup?: { wait(): Promise<unknown> };
 }
 
 /**
@@ -930,6 +944,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
   private readonly providerName: string;
   private readonly resolveAttachments: (() => DshAttachmentService | undefined) | undefined;
   private readonly reroutes: () => RerouteSettings;
+  private readonly warmup: { wait(): Promise<unknown> } | undefined;
 
   constructor(
     private readonly rt: Pick<AsOneRuntime, "listModels" | "resolveUpstream" | "onRequestDone">,
@@ -939,6 +954,26 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     this.providerName = opts.providerName ?? AS_ONE_PROVIDER_NAME;
     this.resolveAttachments = opts.resolveAttachments;
     this.reroutes = opts.reroutes ?? (() => ({}));
+    this.warmup = opts.warmup;
+  }
+
+  /**
+   * 等一次额度预热（启动后首个请求先刷新到期时间，再 `resolveUpstream`）。
+   *
+   * ⚠️ **位置关键**：必须在 `rt.resolveUpstream()` 之前 —— 那一步内部就是
+   * `scheduler.chain()`，due-first 的到期排序就在那一刻算。晚一步就等于
+   * 「用空快照排完再刷」。
+   *
+   * 门自己吞掉「刷新失败」并放行（预热是优化，不是可用性前提）；这里只兜住
+   * 门实现被替换成会抛的版本，避免把一次预热异常升级成「模型不可用」。
+   */
+  private async awaitWarmup(): Promise<void> {
+    if (this.warmup === undefined) return;
+    try {
+      await this.warmup.wait();
+    } catch (err) {
+      console.warn("[as-one] 额度预热等待失败，已放行请求", err);
+    }
   }
 
   /** `id` 必须**逐字**等于注册时的 provider,否则宿主判 `INVALID_ADAPTER`。 */
@@ -1282,6 +1317,9 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
     if (model === undefined) return undefined;
     const windows = await this.windowsOf(model);
     if (windows.max !== undefined && minInputTokens > windows.max) return undefined;
+    // 与 stream() 同口径：兜底选路同样是 resolveUpstream（内部 chain()），
+    // 也要在到期排序前先更新额度。门幂等，已预热时零开销。
+    await this.awaitWarmup();
     const fbUpstream = this.rt.resolveUpstream(model);
     if (!fbUpstream) {
       console.warn(`[as-one] compact 会话模型兜底不可用(库里没有 ${model})`);
@@ -1325,6 +1363,12 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
 
   /** 唯一的抽象:产出**语法合法**的块流。 */
   async *stream(options: DshGenerateOptions): AsyncGenerator<DshStreamChunk> {
+    // ⚠️ **先更新到期时间，再调度**（用户 2026-11-16 定案）。
+    // 必须在 `rt.resolveUpstream()` 之前：那是 scheduler.chain() 的入口，
+    // due-first 的到期排序就在里面算。DSH 的请求走的是这条进程内路径，
+    // **不经过** HTTP 路由，所以 routes.ts 里的预热对它们无效 —— 这就是
+    // 「启动后首个请求仍走 trae」的真根因。
+    await this.awaitWarmup();
     // 辅助请求按设置项重路由;**没配就是没机制** —— 模型、会话号、图片都原样。
     const target = rerouteModel(this.reroutes(), options.purpose);
     let rerouted = target !== undefined;
