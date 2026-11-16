@@ -32,6 +32,7 @@ import {
   wbCheckinStatus,
 } from "@as-one/core/src/connectors/checkin.js";
 import { invalidateCheckinCache } from "./checkin-cache.js";
+import { codeartsIdeCheckin } from "@as-one/core/src/connectors/codearts-ide.js";
 import { minimaxSigninStatus } from "@as-one/core/src/connectors/minimax-signin.js";
 import { minimaxAccountFor } from "./minimax-renew.js";
 import { panelClaimedToday, panelTodayPoints } from "@as-one/core/src/connectors/minimax-wire.js";
@@ -1092,6 +1093,56 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
             message: st.message ? st.message.slice(0, 300) : null,
           });
         }
+        if (protocol === "codearts") {
+          // B 族 AK/SK 签到:delivery → claim → confirm(status 也走这条只读活动列表)。
+          // ⚠️ 不能在下面的兜底分支里落进 wbCheckinStatus —— 那会把 AK 当 Bearer
+          // 发给 workbuddy,回 401,并把别人的错误挂到 CodeArts 行上。
+          const raw = (acc.extra ?? {}) as Record<string, unknown>;
+          const accessKey = String(raw["accessKey"] ?? "");
+          const secretKey = String(raw["secretKey"] ?? "");
+          if (accessKey === "" || secretKey === "") {
+            return flat({ supported: true, reason: "该账号缺少 accessKey/secretKey" });
+          }
+          const res = await codeartsIdeCheckin(
+            {
+              accessKey,
+              secretKey,
+              ...(typeof raw["securityToken"] === "string" && raw["securityToken"] !== ""
+                ? { securityToken: raw["securityToken"] }
+                : {}),
+              ...(typeof raw["domainId"] === "string" && raw["domainId"] !== ""
+                ? { domainId: raw["domainId"] }
+                : {}),
+              label: acc.username,
+            },
+            { ...(checkinBaseOf(pdef) ? { baseUrl: checkinBaseOf(pdef)! } : {}), confirm: false },
+          );
+          // 只读状态:已签 = 有签到活动且上游说今天已领/已确认;否则 pending。
+          // 活动不存在 / 上游失败都放 error,由本渠道行自己承担。
+          if (res.code === -1 && /没有签到活动/.test(res.message)) {
+            return flat({ supported: true, reason: "该渠道当前没有签到活动" });
+          }
+          // 干跑:有活动但还没签(或已领取未确认)—— 是「待签」,不是查询失败。
+          if (res.code === -1) {
+            return flat({
+              supported: true,
+              active: true,
+              checked_in: false,
+              daily_credit: res.credit > 0 ? res.credit : null,
+              reason: res.already ? res.message : `今日可领取${res.credit > 0 ? ` ${res.credit} 积分` : ""}(未签)`,
+            });
+          }
+          if (!res.already && res.code !== 0) {
+            return flat({ supported: true, error: res.message });
+          }
+          return flat({
+            supported: true,
+            active: true,
+            checked_in: res.already,
+            daily_credit: res.credit > 0 ? res.credit : null,
+            reason: res.already ? res.message : null,
+          });
+        }
         if (protocol === "minimax") {
           // 走 minimaxAccountFor:401 时自动 refresh 续期并重试。
           const bound = await minimaxAccountFor(ctx.vault, pid, acc.username);
@@ -1121,15 +1172,12 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
           { index: acc.index, username: acc.username, token: acc.token!, domain: acc.domain, uid: acc.uid, enterprise_id: acc.enterprise_id },
           { baseUrl: checkinBaseOf(pdef) ?? undefined },
         );
+        // status 端点已下线:不报错、不假装「未签」,把原因摆在该渠道自己的行上。
         return flat({
           supported: true,
-          active: st.active,
-          checked_in: st.today_checked_in,
-          daily_credit: st.daily_credit,
-          streak_days: st.streak_days,
-          today_credit: st.today_credit,
-          is_streak_day: st.is_streak_day,
-          claim_button_text: st.claim_button_text,
+          active: null,
+          checked_in: null,
+          reason: st.reason,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

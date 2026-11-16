@@ -12,6 +12,7 @@
 import type { CredentialVault } from "@as-one/core/src/config/credentials.js";
 import { providerDisplayName } from "@as-one/core/src/config/provider-labels.js";
 import { CHECKIN_PROVIDERS, checkinSupported } from "@as-one/core/src/connectors/checkin.js";
+import { codeartsIdeCheckin } from "@as-one/core/src/connectors/codearts-ide.js";
 import { MINIMAX_QUOTA_TIMEOUT_MS } from "@as-one/core/src/collector/quota.js";
 import { minimaxSigninStatus } from "@as-one/core/src/connectors/minimax-signin.js";
 import { minimaxAccountFor } from "./minimax-renew.js";
@@ -349,7 +350,10 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
     //   且「领到多少」按账号可能不同(400/1000 连签档),聚合会吞掉数字。
     //   trae 在 2026-11-09 从这条通道拆出(用户报「两个账号只显示一个」)。
     for (const pid of CHECKIN_PROVIDERS) {
-      if (pid === "minimax" || pid === "trae") continue;
+      // 逐账号读的渠道(minimax/trae)与 B 族 codearts 都单列在后面:
+      // 前者要 per-account 计数,后者走 AK/SK;不能落进「代表账号 + workbuddy 兜底」
+      // 的分支 —— 那会把 workbuddy 的错误挂到 CodeArts 行上。
+      if (pid === "minimax" || pid === "trae" || pid === "codearts") continue;
       const pdef = ctx.registry.getProvider(pid);
       const protocol = pdef?.protocol?.toLowerCase() ?? "";
       if (!pdef || !checkinSupported(protocol)) {
@@ -407,6 +411,96 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
         });
         if (row !== null) channels.push(row);
       }
+    }
+
+    // ── codearts:B 族 AK/SK 签到(与 workbuddy JWT 完全独立)────────────
+    // 逐账号只读活动列表:codeartsIdeCheckin(confirm:false) 只发签名的
+    // delivery GET,不发 claim/confirm 写请求;已签/可领由上游 status 给出。
+    // 每个账号的 error 只写入这一行;不和 workbuddy/其它渠道共用 message 变量。
+    if (ctx.registry.getProvider("codearts")) {
+      const row = await cachedChannel("codearts", async () => {
+        const accounts = await chd.methods.getChannelAccounts("codearts").catch(() => []);
+        if (accounts.length === 0) return null;
+        const rows = await ctx.vault.list("codearts");
+        let checkedIn = 0;
+        let pending = 0;
+        let dailyCredit = 0;
+        let error: string | null = null;
+        let reason: string | null = null;
+        const credits: number[] = [];
+        for (const acc of accounts) {
+          const full = rows.find((r) => r.username === acc.label);
+          const raw = (full?.raw ?? {}) as Record<string, unknown>;
+          const accessKey = typeof raw["accessKey"] === "string" ? raw["accessKey"] : "";
+          const secretKey = typeof raw["secretKey"] === "string" ? raw["secretKey"] : "";
+          if (accessKey === "" || secretKey === "") {
+            error = error ?? `账号 ${acc.label} 缺少 accessKey/secretKey`;
+            continue;
+          }
+          try {
+            const res = await codeartsIdeCheckin(
+              {
+                accessKey,
+                secretKey,
+                ...(typeof raw["securityToken"] === "string" && raw["securityToken"] !== ""
+                  ? { securityToken: raw["securityToken"] }
+                  : {}),
+                ...(typeof raw["domainId"] === "string" && raw["domainId"] !== ""
+                  ? { domainId: raw["domainId"] }
+                  : {}),
+                label: acc.label,
+              },
+              { confirm: false },
+            );
+            if (res.code === -1 && /没有签到活动/.test(res.message)) {
+              reason = reason ?? "该渠道当前没有签到活动";
+              continue;
+            }
+            if (res.code === -1) {
+              if (res.credit > 0) {
+                credits.push(res.credit);
+                dailyCredit += res.credit;
+              }
+              if (res.already) checkedIn += 1;
+              else {
+                pending += 1;
+                reason = reason ?? res.message;
+              }
+              continue;
+            }
+            if (!res.already && res.code !== 0) {
+              error = error ?? res.message;
+              continue;
+            }
+            if (res.already) {
+              checkedIn += 1;
+              reason = reason ?? res.message;
+            } else pending += 1;
+            if (res.credit > 0) {
+              credits.push(res.credit);
+              dailyCredit += res.credit;
+            }
+          } catch (e) {
+            error = error ?? errTextOf(e);
+          }
+        }
+        return {
+          provider: "codearts",
+          label: checkinLabelOf("codearts"),
+          supported: true,
+          accounts: accounts.length,
+          countExact: true,
+          checkedIn,
+          pending,
+          dailyCredit: dailyCredit > 0 ? dailyCredit : null,
+          perAccountCredit:
+            credits.length > 1 && new Set(credits).size === 1 ? credits[0]! : null,
+          streak: null,
+          reason,
+          error,
+        };
+      });
+      if (row !== null) channels.push(row);
     }
 
     // ── minimax:逐账号读签到面板 ──────────────────────────────────────────

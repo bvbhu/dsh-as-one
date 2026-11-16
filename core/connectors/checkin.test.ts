@@ -20,6 +20,8 @@ import {
   wbCheckinHeaders,
   wbCheckinStatus,
   wbCheckinClaim,
+  WbHttpCheckinError,
+  WB_CODE_ALREADY_CHECKED_IN,
   CheckinError,
   CheckinRegionError,
   CheckinCredentialError,
@@ -365,7 +367,7 @@ describe("wbCheckinHeaders", () => {
   });
 });
 
-describe("wbCheckinStatus(仅国内版)", () => {
+describe("wbCheckinStatus(状态端点已下线)", () => {
   it("全球域名 → CheckinRegionError,零请求", async () => {
     const { fetchFn, calls } = makeFetch(() => STATUS_OK({ code: 0, data: {} }));
     await expect(wbCheckinStatus(wbAccount({ domain: "www.workbuddy.ai" }), { fetchFn })).rejects.toThrow(
@@ -374,39 +376,14 @@ describe("wbCheckinStatus(仅国内版)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("envelope {code:0,data} → 解析全字段(_num 换算)", async () => {
-    const { fetchFn, calls } = makeFetch(() =>
-      STATUS_OK({
-        code: 0,
-        data: { active: true, today_checked_in: false, streak_days: 3, daily_credit: 20, today_credit: 0, is_streak_day: true, claim_button_text: "签到" },
-      }),
-    );
+  it("不再打失效的 checkin-activity-status;明确返回 unavailable", async () => {
+    const { fetchFn, calls } = makeFetch(() => STATUS_OK({ code: 0, data: {} }));
     const st = await wbCheckinStatus(wbAccount(), { baseUrl: "https://www.codebuddy.cn", fetchFn });
-    expect(st.active).toBe(true);
+    expect(st.unavailable).toBe(true);
+    expect(st.reason).toContain("已下线");
     expect(st.today_checked_in).toBe(false);
-    expect(st.streak_days).toBe(3);
-    expect(st.daily_credit).toBe(20);
-    expect(st.today_credit).toBe(0);
-    expect(st.is_streak_day).toBe(true);
-    expect(st.claim_button_text).toBe("签到");
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe(`https://www.codebuddy.cn${WB_CHECKIN_STATUS_PATH}`);
-    expect(calls[0].body).toBe("{}");
-  });
-
-  it("code != 0 → CheckinError 业务失败(HTTP 200 不算成功)", async () => {
-    const { fetchFn } = makeFetch(() => STATUS_OK({ code: 1001, message: "nope" }));
-    const err = await wbCheckinStatus(wbAccount(), { fetchFn }).catch((e) => e);
-    expect(err).toBeInstanceOf(CheckinError);
-    expect(String(err.message)).toContain("code=1001");
-    expect(String(err.message)).toContain("nope");
-  });
-
-  it("HTTP 400 → CheckinError", async () => {
-    const { fetchFn } = makeFetch(() => ({ status: 400, text: "bad request" }));
-    const err = await wbCheckinStatus(wbAccount(), { fetchFn }).catch((e) => e);
-    expect(err).toBeInstanceOf(CheckinError);
-    expect(String(err.message)).toContain("HTTP 400");
+    expect(calls).toHaveLength(0);
+    expect(WB_CHECKIN_STATUS_PATH).toBe("/v2/billing/meter/checkin-activity-status");
   });
 });
 
@@ -425,21 +402,56 @@ describe("wbCheckinClaim", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("成功:先 status 再 POST claim,返回 credit/streak_days", async () => {
+  it("成功:只打 daily-checkin(code 0),返回 credit/streak_days", async () => {
     const { fetchFn, calls } = makeFetch((call) => {
-      if (call.url.includes(WB_CHECKIN_CLAIM_PATH))
-        return STATUS_OK({ code: 0, data: { credit: 30, streak_days: 4, is_streak_day: true } });
-      return STATUS_OK({ code: 0, data: { active: true, today_checked_in: false, streak_days: 3, daily_credit: 20 } });
+      expect(call.url).toBe(`https://www.codebuddy.cn${WB_CHECKIN_CLAIM_PATH}`);
+      return STATUS_OK({ code: 0, data: { credit: 30, streak_days: 4, is_streak_day: true } });
     });
     const r = await wbCheckinClaim(wbAccount(), { baseUrl: "https://www.codebuddy.cn", fetchFn });
+    expect(r.already).toBe(false);
     expect(r.credit).toBe(30);
     expect(r.streak_days).toBe(4);
     expect(r.is_streak_day).toBe(true);
-    expect(calls).toHaveLength(2);
-    expect(calls[0].url).toContain(WB_CHECKIN_STATUS_PATH);
-    expect(calls[1].url).toBe(`https://www.codebuddy.cn${WB_CHECKIN_CLAIM_PATH}`);
-    expect(calls[1].body).toBe("{}");
-    expect(calls[1].headers["Authorization"]).toBe("Bearer tok-wb");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body).toBe("{}");
+    expect(calls[0].headers["Authorization"]).toBe("Bearer tok-wb");
+    expect(calls[0].headers["X-User-Id"]).toBeUndefined();
+  });
+
+  it("HTTP 400 + code 10001 + 已签到 → already(不是失败)", async () => {
+    const { fetchFn, calls } = makeFetch(() => ({
+      status: 400,
+      text: JSON.stringify({ code: WB_CODE_ALREADY_CHECKED_IN, msg: "今天已签到，请明天再来" }),
+    }));
+    const r = await wbCheckinClaim(wbAccount(), { fetchFn });
+    expect(r.already).toBe(true);
+    expect(r.message).toContain("今天已签到");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("HTTP 404 → WbHttpCheckinError 带真实状态码与片段,不再误报 401", async () => {
+    const { fetchFn } = makeFetch(() => ({ status: 404, text: "404 page not found" }));
+    const err = await wbCheckinClaim(wbAccount(), { fetchFn }).catch((e) => e);
+    expect(err).toBeInstanceOf(WbHttpCheckinError);
+    expect(err.httpStatus).toBe(404);
+    expect(String(err.message)).toContain("HTTP 404");
+    expect(String(err.message)).toContain("404 page not found");
+    expect(String(err.message)).not.toContain("401");
+  });
+
+  it("身份头带在请求上(uid/domain/UA/Origin/Referer)", async () => {
+    const { fetchFn, calls } = makeFetch(() => STATUS_OK({ code: 0, data: {} }));
+    await wbCheckinClaim(
+      wbAccount({ uid: "u-1", domain: "www.workbuddy.cn", enterprise_id: "ent-1" }),
+      { fetchFn },
+    );
+    const h = calls[0].headers;
+    expect(h["X-User-Id"]).toBe("u-1");
+    expect(h["X-Domain"]).toBe("www.workbuddy.cn");
+    expect(h["X-Enterprise-Id"]).toBe("ent-1");
+    expect(h["User-Agent"]).toContain("Mozilla/5.0");
+    expect(h["Origin"]).toBe("https://www.workbuddy.cn");
+    expect(h["Referer"]).toBe("https://www.workbuddy.cn/");
   });
 });
 // ── 瞬时失败重试(trae 签到高峰「当前参与用户太多,请稍后再试」) ──────────────

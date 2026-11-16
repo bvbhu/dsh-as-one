@@ -880,43 +880,31 @@ export function createChannelsDomain(
         return { ...baseRow, status: "failed", message: checkinErrText(err) };
       }
     }
-    // workbuddy —— Nexus 顺序:区域门禁 → 令牌 → status → 短路 → claim
+    // workbuddy —— 2026-11-16 上游状态端点下线后,直接打 daily-checkin:
+    // code 0 = 领取成功,code 10001「今天已签到」= already(不是失败)。
     if (checkinWbRegionOf(acc.domain) !== "cn") {
       return { ...baseRow, status: "skipped", message: "国际版无签到(订阅制,额度走 payStatus)" };
     }
     if (!acc.token) {
       return { ...baseRow, status: "failed", message: "该账号没有可用令牌" };
     }
+    if (!confirm) {
+      // 没有可靠 status 就不打写端点;诚实告诉用户「状态不可预查」。
+      return {
+        ...baseRow,
+        status: "dry_run",
+        message: "workbuddy 签到状态接口已下线,无法预查;确认签到后由领取接口回报结果",
+        would_claim: true,
+      };
+    }
     try {
-      const st = await wbCheckinStatus(
-        { index: acc.index, username: acc.username, token: acc.token, domain: acc.domain, uid: acc.uid, enterprise_id: acc.enterprise_id },
-        { baseUrl: base ?? undefined },
-      );
-      if (!st.active) {
-        return { ...baseRow, status: "skipped", message: "该账号未启用签到活动", streak_days: st.streak_days };
-      }
-      if (st.today_checked_in) {
-        return {
-          ...baseRow,
-          status: "already",
-          message: `今日已签到${st.streak_days > 0 ? ` · 连续 ${st.streak_days} 天` : ""}`,
-          streak_days: st.streak_days,
-        };
-      }
-      if (!confirm) {
-        return {
-          ...baseRow,
-          status: "dry_run",
-          message: "可领取(未确认,未发出领取请求)",
-          would_claim: true,
-          daily_credit: st.daily_credit,
-        };
-      }
       const res = await wbCheckinClaim(
         { index: acc.index, username: acc.username, token: acc.token, domain: acc.domain, uid: acc.uid, enterprise_id: acc.enterprise_id },
         { baseUrl: base },
       );
-      // 与 trae 同款:成功要说清领到了什么,不能只有一个「领取成功」。
+      if (res.already) {
+        return { ...baseRow, status: "already", message: `今日已签到（${res.message}）` };
+      }
       const message = `领取成功${res.credit > 0 ? `,获得 ${res.credit} 积分` : ""}${
         res.streak_days > 0 ? ` · 连续 ${res.streak_days} 天` : ""}`;
       return { ...baseRow, status: "claimed", message, credit: res.credit, streak_days: res.streak_days };

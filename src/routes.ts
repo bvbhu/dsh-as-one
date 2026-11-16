@@ -85,15 +85,28 @@ export function buildGatewayRoutes(
    * 位置很关键：必须在 `resolveUpstream`（内部就是 `scheduler.chain()`）之前，
    * 因为 due-first 的到期排序发生在那一刻 —— 晚一步就等于「用空快照排完再刷」。
    *
-   * 预热失败/超时**不拦请求**（门自己保证 resolve），预热是优化不是前提。
+   * 刷新真正抛错 → 放行但记明确降级日志；刷新未完成/超时 → **挡住请求**，
+   * 绝不让 chain() 拿到半份/旧快照（用户 2026-11-16 二次定案）。
    */
   const awaitWarmup = async (): Promise<void> => {
     if (!opts.warmup) return;
     try {
-      await opts.warmup.wait();
+      const outcome = await opts.warmup.wait() as {
+        ok?: boolean;
+        timedOut?: boolean;
+        error?: string | null;
+      } | null;
+      if (outcome && outcome.ok === false && !outcome.timedOut) {
+        // 刷新真正抛错（不是超时）：门放行，但必须留下明确的降级记录 —— 这一轮
+        // due-first 到期排序不可用，不是「正常按新快照选路」。
+        logger.warn?.(
+          `[as-one] 额度刷新失败，本轮按降级快照选路（到期排序不可用）：${outcome.error ?? "未知原因"}`,
+        );
+      }
     } catch (err) {
-      // 门内部已经吞掉错误并 resolve；走到这里是兜底（门被替换成会抛的实现）。
-      logger.warn?.("[as-one] 额度预热等待失败，已放行请求", err);
+      // 超时 / 刷新未完成 → 门抛错，**必须挡住请求**，绝不能拿旧快照 chain()。
+      logger.error?.("[as-one] 额度预热未完成，拒绝按未刷新快照选路", err);
+      throw err;
     }
   };
 
@@ -222,14 +235,6 @@ export function buildGatewayRoutes(
           body = await readJsonBody(req as never);
           model = String(body.model ?? "").trim();
           if (!model) throw new GatewayHttpError(400, { detail: "缺少 model" });
-          {
-            // 熔断是 workbuddy 渠道级的:用模型 id 的 provider 前缀判断
-            // (Upstream 接口不暴露 provider,而 model 形如 `workbuddy/xxx`
-            // 或逻辑模型名 —— 逻辑模型的成员可能含 workbuddy,故两者都看)。
-            const touchesWorkbuddy =
-              model.startsWith("workbuddy/") || modelIncludesWorkbuddyMember(model);
-            if (touchesWorkbuddy && rejectIfBreakerTripped(nres)) return;
-          }
           stream = Boolean(body.stream);
 
           // 会话号/缓存路由键:与 electron 同口径(DSH 一个会话标识都不发,
@@ -244,6 +249,19 @@ export function buildGatewayRoutes(
           // due-first 的到期排序就在里面算 —— 放它后面等于白刷一轮。
           // 只有进程启动后的第一个请求会真等,之后门已开、零开销。
           await awaitWarmup();
+
+          {
+            // ⚠️ 熔断判定必须**在预热之后**:`modelIncludesWorkbuddyMember()` 内部就
+            // 调 `scheduler.chain()`。放在 awaitWarmup() 之前的旧顺序会在预热门尚未
+            // settle 时先算一次排序 —— 即使门本身等到了新额度，那一次 chain() 也已经
+            // 用旧快照把结果写进 `_cache`，后续 resolveUpstream 命中缓存仍是错序。
+            // 熔断是 workbuddy 渠道级的:用模型 id 的 provider 前缀判断
+            // (Upstream 接口不暴露 provider,而 model 形如 `workbuddy/xxx`
+            // 或逻辑模型名 —— 逻辑模型的成员可能含 workbuddy,故两者都看)。
+            const touchesWorkbuddy =
+              model.startsWith("workbuddy/") || modelIncludesWorkbuddyMember(model);
+            if (touchesWorkbuddy && rejectIfBreakerTripped(nres)) return;
+          }
 
           const upstream = rt.resolveUpstream(model);
           if (!upstream) throw new GatewayHttpError(404, { detail: `未知模型: ${model}` });

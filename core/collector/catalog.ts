@@ -7,7 +7,10 @@
  *   - workbuddy `GET /v3/config`(两区域首选;CN 失败回退
  *               `/v2/enterprises/personal/models`);
  *   - sensenova `GET https://token.sensenova.cn/v1/models`(OpenAI 形态,
- *               **API key** 认证,不是控制台 JWT)。
+ *               **API key** 认证,不是控制台 JWT);
+ *   - codearts  B 族(AK/SK 签名网关)`GET /v1/model/builtin` + `Agent-Type: PromptCenter`
+ *               (签名后追加),上游给 `model_id` / `model_name` / `max_tokens` /
+ *               `context_window` / `supports_images`,实测 12 个模型。
  *
  * 两条 business 口径(不可改):
  *   1. **读目录绝不烧额度** —— 三个渠道的目录端点都是配置/元数据接口,与
@@ -42,6 +45,12 @@ import { number_of } from "./quota.js";
 import { reasoning_allows_off_of, reasoning_efforts_of, reasoning_field_of } from "../gateway/model-catalog.js";
 import { MINIMAX_MODELS } from "../connectors/minimax-models.js";
 import { QoderClient } from "../connectors/qoder.js";
+import {
+  CODEARTS_BASE_CN,
+  CODEARTS_MODELS_PATH,
+  codeartsIdentityHeaders,
+} from "../connectors/codearts.js";
+import { signCodeartsRequest } from "../connectors/codearts-sign.js";
 
 // ---------------------------------------------------------------------------
 // 错误类型
@@ -176,7 +185,7 @@ function is_list(value: unknown): unknown[] {
 }
 
 /** 有上游目录通路的渠道。其余渠道的清单来自 real_model(登记),无可拉目录。 */
-export const CATALOG_PROVIDERS = ["trae", "workbuddy", "sensenova", "minimax", "qoder"] as const;
+export const CATALOG_PROVIDERS = ["trae", "workbuddy", "sensenova", "minimax", "qoder", "codearts"] as const;
 
 /** 目录请求超时。比额度采集**更紧**:目录只影响页面展示,不值得让「刷新」等 15 秒。 */
 export const CATALOG_TIMEOUT_MS = 8_000;
@@ -1025,6 +1034,125 @@ export async function fetch_qoder_catalog(
   };
 }
 
+// ---------------------------------------------------------------------------
+// codearts（B 族 AK/SK 签名网关）
+// ---------------------------------------------------------------------------
+
+/**
+ * CodeArts `GET /v1/model/builtin` 单行 → 目录行(纯函数)。
+ *
+ * 实测 200 响应行(2026-11-16):
+ * ```json
+ * {"model_id":"GLM-5.2","model_name":"GLM-5.2","enable":true,
+ *  "display_enabled":true,"supports_images":false,
+ *  "max_tokens":65536,"context_window":202752}
+ * ```
+ * - `max_tokens` 是**输出上限** → `CatalogEntry.max_output`;
+ * - `context_window` 是**上下文窗口** → `CatalogEntry.context_window`;
+ * - `supports_images` 直接给 vision(上游如给 false 就是明确不支持)。
+ *
+ * `enable === false` 或 `display_enabled === false` 的模型留着但标 `callable:false`
+ * (不藏用户自己的模型,与 trae remote 同口径)。
+ */
+export function parse_codearts_model(value: unknown): CatalogEntry | null {
+  const raw = record(value);
+  const mid = nonempty_str(raw["model_id"]);
+  if (!mid) return null;
+  return {
+    id: mid,
+    name: nonempty_str(raw["model_name"]) || mid,
+    vision: raw["supports_images"] === true,
+    context_window: positive_int(raw["context_window"]),
+    max_output: positive_int(raw["max_tokens"]),
+    rate: null,
+    origin: "remote",
+    callable: raw["enable"] !== false && raw["display_enabled"] !== false,
+    // 上游目录不思考档位/可否关思考字段 → 未知(null),网关不拦。
+    reasoning_efforts: null,
+    reasoning_allows_off: null,
+  };
+}
+
+/**
+ * CodeArts B 族模型目录 = `GET /v1/model/builtin`。
+ *
+ * ⚠️ 鉴权必须走 {@link signCodeartsRequest}(复刻了官方 SDK 的两处怪癖) ——
+ * 手写签名会 401 `APIG.0301`。`Agent-Type: PromptCenter` 在签名**之后**追加,
+ * 不能进 SignedHeaders(进了同样 401),见 codearts-sign.ts 顶部声明。
+ * 凭据从 `account.extras` 的 `accessKey` / `secretKey` / `securityToken` /
+ * `domainId` 取(与网关推理、额度探针、签到同一份 raw_json)。
+ */
+export async function fetch_codearts_catalog(
+  account: CatalogAccountInput,
+  opts: { baseUrl?: string; fetchFn?: typeof fetch; timeoutMs?: number } = {},
+): Promise<CatalogResult> {
+  const raw = account.extras ?? {};
+  const accessKey = nonempty_str(raw["accessKey"]);
+  const secretKey = nonempty_str(raw["secretKey"]);
+  if (accessKey === "" || secretKey === "") {
+    throw new CatalogError("codearts 账号缺少 accessKey / secretKey,拉不了模型目录");
+  }
+  const base = (opts.baseUrl || account.baseUrl || CODEARTS_BASE_CN).replace(/\/+$/, "");
+  const url = `${base}${CODEARTS_MODELS_PATH}`;
+  const signed = signCodeartsRequest({
+    accessKey,
+    secretKey,
+    ...(nonempty_str(raw["securityToken"]) !== ""
+      ? { securityToken: String(raw["securityToken"]) }
+      : {}),
+    method: "GET",
+    url,
+    headers: {
+      ...codeartsIdentityHeaders({
+        accessKey,
+        ...(nonempty_str(raw["domainId"]) !== "" ? { domainId: String(raw["domainId"]) } : {}),
+      }),
+      // 签名后追加,不进 SignedHeaders。
+      "Agent-Type": "PromptCenter",
+    },
+  });
+  const fetchFn = opts.fetchFn ?? fetch;
+  const timeoutMs = opts.timeoutMs ?? CATALOG_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let resp: Response;
+  try {
+    resp = await fetchFn(url, { method: "GET", headers: signed.headers, signal: controller.signal });
+  } catch (err) {
+    throw new CatalogError(
+      controller.signal.aborted
+        ? `codearts 模型目录超时(${timeoutMs}ms)`
+        : `codearts 模型目录连接失败:${err instanceof Error ? err.message : String(err)}`,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+  const text = await resp.text();
+  if (resp.status >= 400) throw new CatalogError(`codearts ${CODEARTS_MODELS_PATH} HTTP ${resp.status}: ${text.slice(0, 300)}`);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new CatalogError("codearts 模型目录响应不是 JSON");
+  }
+  const entries: CatalogEntry[] = [];
+  for (const row of is_list(record(payload)["builtinModels"])) {
+    const entry = parse_codearts_model(row);
+    if (entry !== null) entries.push(entry);
+  }
+  if (entries.length === 0) {
+    throw new CatalogError("codearts /v1/model/builtin 没有返回可用模型");
+  }
+  entries.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return {
+    provider: "codearts",
+    entries,
+    source: "api",
+    fetched_at: Math.floor(Date.now() / 1000),
+    warnings: [],
+  };
+}
+
 /** 按渠道拉目录;不支持的渠道抛 {@link CatalogError}(调用方按能力分流)。 */
 export async function fetch_catalog(
   provider_id: string,
@@ -1036,6 +1164,8 @@ export async function fetch_catalog(
   if (provider === "workbuddy") return fetch_workbuddy_catalog(account, opts);
   if (provider === "sensenova") return fetch_sensenova_catalog(account, opts);
   if (provider === "qoder") return fetch_qoder_catalog(account, opts);
+  // codearts B 族(AK/SK 签名网关):/v1/model/builtin + Agent-Type: PromptCenter。
+  if (provider === "codearts") return fetch_codearts_catalog(account, opts);
   // minimax 没有上游目录 API:内置固定名单(origin=router),不打上游。
   if (provider === "minimax") return Promise.resolve(fetch_minimax_catalog(account, opts));
   throw new CatalogError(`${provider} 没有可拉取的上游模型目录`);

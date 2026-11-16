@@ -50,6 +50,20 @@ export class CheckinCredentialError extends CheckinError {
   }
 }
 
+/** workbuddy 计费端点的非 2xx 应答(状态/业务码/原文都留在对象上)。 */
+export class WbHttpCheckinError extends CheckinError {
+  readonly kind = "wb_http";
+  constructor(
+    message: string,
+    readonly httpStatus: number,
+    readonly upstreamCode: number | null,
+    readonly upstreamMessage: string,
+  ) {
+    super(message);
+    this.name = "WbHttpCheckinError";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 支持渠道
 // ---------------------------------------------------------------------------
@@ -573,11 +587,17 @@ export async function traeCheckinClaim(
 // ---------------------------------------------------------------------------
 
 export const WB_CN_BILLING_BASE = "https://www.codebuddy.cn";
+/**
+ * 旧状态端点 `/v2/billing/meter/checkin-activity-status` 已下线（实测 GET 404）。
+ * 保留导出仅为兼容旧调用方；生产逻辑不再打它。
+ */
 export const WB_CHECKIN_STATUS_PATH = "/v2/billing/meter/checkin-activity-status";
 export const WB_CHECKIN_CLAIM_PATH = "/v2/billing/meter/daily-checkin";
 export const WB_GLOBAL_BASE = "https://www.workbuddy.ai";
 export const WB_GLOBAL_BASE_CODEBUDDY = "https://www.codebuddy.ai";
 export const WB_CHECKIN_TIMEOUT_MS = 30_000;
+/** 上游「今天已签」业务码（HTTP 400，code 10001 + 中文 msg）。 */
+export const WB_CODE_ALREADY_CHECKED_IN = 10001;
 
 const GLOBAL_DOMAINS = ["workbuddy.ai", "codebuddy.ai"];
 
@@ -610,6 +630,11 @@ export function wbCheckinHeaders(
     Authorization: `Bearer ${token}`,
     Accept: "application/json",
     "Content-Type": "application/json",
+    // 计费域是 openresty/APISIX 前置的独立站点，桌面端计费接口要带浏览器身份头。
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    Origin: "https://www.workbuddy.cn",
+    Referer: "https://www.workbuddy.cn/",
   };
   if (uid && uid.length > 0) headers["X-User-Id"] = uid;
   if (enterpriseId && enterpriseId.length > 0) {
@@ -634,11 +659,32 @@ function num(v: unknown): number {
   return isNumber(v) ? v : 0;
 }
 
+function wbEnvelopeMessage(envelope: Record<string, unknown>): string {
+  const message =
+    (typeof envelope["message"] === "string" && envelope["message"].length > 0 ? envelope["message"] : "") ||
+    (typeof envelope["msg"] === "string" && envelope["msg"].length > 0 ? envelope["msg"] : "");
+  return message;
+}
+
+interface WbPostResult {
+  envelope: Record<string, unknown>;
+  data: Record<string, unknown>;
+  code: number | null;
+  message: string;
+}
+
+/**
+ * 打一次 workbuddy 计费接口。
+ *
+ * ⚠️ 2026-11-16 上游变更:`daily-checkin` 用 **HTTP 400 + code 10001** 表达
+ * 「今日已签」,不是 200 也不是 401;所以这里把 HTTP 状态、业务码、业务 msg
+ * 全部原样带回,由调用方分类,不再一律把非 2xx 包装成「HTTP xxx 失败」。
+ */
 async function wbPost(
   opts: WbCheckinOptions,
   path: string,
   account: WbCheckinAccount,
-): Promise<Record<string, unknown>> {
+): Promise<WbPostResult> {
   const base = (opts.baseUrl ?? wbBillingBase(account.domain)).replace(/\/+$/, "");
   const url = `${base}${path}`;
   const r = await rawPost(
@@ -647,72 +693,93 @@ async function wbPost(
     wbCheckinHeaders(account.token ?? "", account.uid, account.domain, account.enterprise_id),
     opts.timeoutMs ?? WB_CHECKIN_TIMEOUT_MS,
   );
-  if (r.status < 200 || r.status >= 300) {
-    throw new CheckinError(`workbuddy 签到端点返回 HTTP ${r.status}`);
-  }
+  const snippet = r.text.slice(0, 300);
   let payload: unknown;
   try {
     payload = JSON.parse(r.text);
   } catch {
-    throw new CheckinError("workbuddy 签到应答不是合法 JSON");
+    if (r.status < 200 || r.status >= 300) {
+      throw new WbHttpCheckinError(`workbuddy 签到端点 ${path} 返回 HTTP ${r.status}: ${snippet}`, r.status, null, "");
+    }
+    throw new CheckinError(`workbuddy 签到端点 ${path} 应答不是合法 JSON: ${snippet}`);
   }
   if (typeof payload !== "object" || payload === null) {
-    throw new CheckinError("workbuddy 签到应答不是对象");
+    throw new CheckinError(`workbuddy 签到端点 ${path} 应答不是对象`);
   }
   const envelope = payload as Record<string, unknown>;
-  // code 缺失/非数字/非 0 一律业务失败(Nexus:code != 0 → 失败)
-  if (!(isNumber(envelope["code"]) && envelope["code"] === 0)) {
-    const code = isNumber(envelope["code"]) ? envelope["code"] : null;
-    const message =
-      (typeof envelope["message"] === "string" && envelope["message"].length > 0 ? envelope["message"] : "") ||
-      (typeof envelope["msg"] === "string" && envelope["msg"].length > 0 ? envelope["msg"] : "");
-    throw new CheckinError(`workbuddy 业务失败 code=${code === null ? "None" : code}: ${message}`);
+  const code = isNumber(envelope["code"]) ? envelope["code"] : null;
+  const message = wbEnvelopeMessage(envelope);
+  if (r.status < 200 || r.status >= 300) {
+    // 上游错误体里若带了业务码/文案,原样带出(400/10001「今天已签」靠这里)。
+    const detail = code !== null || message.length > 0
+      ? `（code=${code === null ? "None" : code}${message.length > 0 ? `: ${message}` : ""}）`
+      : `: ${snippet}`;
+    throw new WbHttpCheckinError(`workbuddy 签到端点 ${path} 返回 HTTP ${r.status}${detail}`, r.status, code, message);
   }
   const data = envelope["data"];
-  return typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
+  return {
+    envelope,
+    data: typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {},
+    code,
+    message,
+  };
 }
 
 export type WbCheckinOptions = CheckinHttpOptions;
 
 export interface WbStatus {
+  /** 状态端点已下线,恒 false —— 不要把「不知道」伪装成「未启用」。 */
   active: boolean;
+  /** 旧字段保留兼容,恒 null 语义(false 但配合 active=false = 未知)。 */
   today_checked_in: boolean;
   streak_days: number;
   daily_credit: number;
   today_credit: number;
   is_streak_day: boolean;
   claim_button_text: string | null;
+  /** true = 上游已无預查端点,唯一可靠途径是直接领取(claim)。 */
+  unavailable: boolean;
+  /** 给面板显示的原因(不再谎称 HTTP 401/404)。 */
+  reason: string;
 }
 
-/** workbuddy 签到状态:仅国内版(global 直接区域拒绝,零请求)。 */
-export async function wbCheckinStatus(account: WbCheckinAccount, opts: WbCheckinOptions = {}): Promise<WbStatus> {
+/**
+ * workbuddy 签到状态:旧 status 端点已下线,这里**不发任何网络请求**,
+ * 明确告知调用方「状态不可预查」(避免把 404 错报成 401,也避免假装未签)。
+ */
+export async function wbCheckinStatus(account: WbCheckinAccount, _opts: WbCheckinOptions = {}): Promise<WbStatus> {
   if (wbRegionOf(account.domain) !== "cn") {
     throw new CheckinRegionError("国际版无签到(订阅制,额度走 payStatus)");
   }
-  const data = await wbPost(opts, WB_CHECKIN_STATUS_PATH, account);
   return {
-    active: data["active"] === true,
-    today_checked_in: data["today_checked_in"] === true,
-    streak_days: num(data["streak_days"]),
-    daily_credit: num(data["daily_credit"]),
-    today_credit: num(data["today_credit"]),
-    is_streak_day: data["is_streak_day"] === true,
-    claim_button_text:
-      typeof data["claim_button_text"] === "string" && data["claim_button_text"].length > 0
-        ? data["claim_button_text"]
-        : null,
+    active: false,
+    today_checked_in: false,
+    streak_days: 0,
+    daily_credit: 0,
+    today_credit: 0,
+    is_streak_day: false,
+    claim_button_text: null,
+    unavailable: true,
+    reason: "workbuddy 签到状态接口已下线,无法预查;直接签到即可(已签会原样返回上游提示)",
   };
 }
 
 export interface WbClaimResult {
+  /** true = 今天已签(上游 code 10001 / 幂等回报),不是失败。 */
+  already: boolean;
   credit: number;
   streak_days: number;
   is_streak_day: boolean;
+  /** 上游原始文案(含 code),面板要如实展示。 */
+  message: string;
 }
 
 /**
- * workbuddy 领取:先查状态再 POST claim(与 Nexus 一致;未启用/今日已签的短路
- * 在装配层统一循环里做,Nexus 同样如此)。
+ * workbuddy 领取:直接 POST `/v2/billing/meter/daily-checkin`(不再预查 status)。
+ *
+ * - HTTP 200 + code 0 → 领取成功;
+ * - HTTP 400 + code 10001 + 「已签到」→ 今日已签(`already:true`);
+ * - 其它 → 抛 CheckinError/WbHttpCheckinError,message 含真实状态码 + 上游原文。
  */
 export async function wbCheckinClaim(account: WbCheckinAccount, opts: WbCheckinOptions = {}): Promise<WbClaimResult> {
   if (!account.token) {
@@ -721,11 +788,39 @@ export async function wbCheckinClaim(account: WbCheckinAccount, opts: WbCheckinO
   if (wbRegionOf(account.domain) !== "cn") {
     throw new CheckinRegionError("国际版无签到(订阅制,额度走 payStatus)");
   }
-  await wbCheckinStatus(account, opts);
-  const data = await wbPost(opts, WB_CHECKIN_CLAIM_PATH, account);
+  let res: WbPostResult;
+  try {
+    res = await wbPost(opts, WB_CHECKIN_CLAIM_PATH, account);
+  } catch (err) {
+    // 上游用 **HTTP 400 + code 10001 + 「今天已签到」** 表达幂等已签(实测)。
+    // 这是「成功的一种结果」,不是失败 —— 在这里收敛,绝不暴露成 401/其它错误。
+    if (
+      err instanceof WbHttpCheckinError &&
+      err.httpStatus === 400 &&
+      err.upstreamCode === WB_CODE_ALREADY_CHECKED_IN &&
+      /已签到|已签/.test(err.upstreamMessage)
+    ) {
+      return {
+        already: true,
+        credit: 0,
+        streak_days: 0,
+        is_streak_day: false,
+        message: err.upstreamMessage,
+      };
+    }
+    throw err;
+  }
+  if (res.code === WB_CODE_ALREADY_CHECKED_IN && /已签到|已签/.test(res.message)) {
+    return { already: true, credit: 0, streak_days: 0, is_streak_day: false, message: res.message };
+  }
+  if (res.code === null || res.code !== 0) {
+    throw new CheckinError(`workbuddy 业务失败 code=${res.code === null ? "None" : res.code}: ${res.message}`);
+  }
   return {
-    credit: num(data["credit"]),
-    streak_days: num(data["streak_days"]),
-    is_streak_day: data["is_streak_day"] === true,
+    already: false,
+    credit: num(res.data["credit"]),
+    streak_days: num(res.data["streak_days"]),
+    is_streak_day: res.data["is_streak_day"] === true,
+    message: res.message,
   };
 }

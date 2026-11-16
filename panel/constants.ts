@@ -61,8 +61,13 @@ export const CH_QUOTA_PROVIDERS = new Set(["trae", "workbuddy", "minimax", "code
  * `runCatalogSegment` 直接判「该渠道没有 upstream_catalog 的能力声明」返回,
  * 内置清单永远进不了 `catalogRows`,页面的「模型目录」就一直空着。
  * 名字叫 CATALOG 不是 CATALOG_UPSTREAM:内置目录同样要走这条合并路径。
+ *
+ * ⚠️ 2026-11-16 补入 `codearts`:B 族(AK/SK 签名网关)有真实模型清单接口
+ * `GET /v1/model/builtin`(Agent-Type: PromptCenter + SDK-HMAC-SHA256 签名,
+ * 实测 200 / 12 个模型)。以前它不在这个集合里,`runCatalogSegment` 直接判
+ * 「该渠道没有 upstream_catalog 的能力声明」返回,渠道页一直挂红条。
  */
-export const CH_CATALOG_PROVIDERS = new Set(["trae", "workbuddy", "sensenova", "minimax", "qoder"]);
+export const CH_CATALOG_PROVIDERS = new Set(["trae", "workbuddy", "sensenova", "minimax", "qoder", "codearts"]);
 
 /**
  * 策略机器键 → 显示名 —— 逐字对齐 Nexus `api_pages.py:_STRATEGY_LABELS`。

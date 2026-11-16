@@ -71,7 +71,8 @@ function createQuotaWarmup(
     if (panel === null) {
       // 与 `buildPanelRoutes` 内部用的是**同一个** runtime，但各自建一份 host
       // 会让 chQuotaCache（模块级）被两个实例共享 —— 那没问题（缓存本来就是
-      // 模块级单例），但省一次构造更省事：这里直接用 panel 路由那份。
+      // 模块级单例）；两份 host 的 `qoderQuotaRefresh` 闭包各自引用同一 runtime，
+      // 覆盖面一致（`CH_QUOTA_PROVIDERS` 是模块级常量，含 codearts）。
       const { createPanelHost } = await import("./panel-host.js");
       panel = createPanelHost(runtime, {}).panel as unknown as {
         syncAllQuota?: (force?: boolean) => Promise<unknown>;
@@ -79,42 +80,31 @@ function createQuotaWarmup(
     }
     const fn = panel?.syncAllQuota;
     if (typeof fn !== "function") return;
-    const res = (await fn.call(panel, true)) as
-      | { ok?: boolean; message?: string; written?: number; probed?: number }
-      | null
-      | undefined;
-    // ⚠️ **不完整就是失败**（2026-11-16 用户定案：「syncAllQuota，对于非 openai
-    // 供应商必须全部读到数据」）。
-    //
-    // `syncAllQuota` 的 `ok` 现在是严格口径：任何有账号的渠道只要有账号没读到
-    // 额度/到期，就返回 `ok:false`。以前它只看 `written>0`，「3 个渠道里 2 个缺
-    // 到期时间」也会报成功，于是这层预热认为已就绪、把请求放行 —— 首个请求就用
-    // 「到期全未知」的快照排了序（due-first 退化成 members 配置序，恒走 trae）。
-    //
-    // 现在：把 `ok:false` 直接抛出去，让 `warmup-gate` 记为「预热失败」，
-    // 由它的 `needsRefresh()` + 节流在下一个请求前再刷一轮，直到真的读到数据。
-    // 仍然保留 gate 的「失败也放行」语义（预热是优化，不是可用性前提）。
-    const incomplete =
-      res !== null && res !== undefined && res.ok === false
-        ? (res.message ?? `额度刷新不完整(${res.written ?? 0}/${res.probed ?? 0} 个账号读到)`)
-        : null;
+
     // ⚠️ **刷新后必须让调度器缓存失效** —— 这是「启动后第一次请求路由错」的根因。
-    //
     // `Scheduler.chain()` 对 due-first 会把结果按「分钟 + 额度代数」记忆化
-    // （`_cache`），而额度代数 `_quotasAt` 只在 `_quotaMap()` 里推进。刚启动时
-    // 一次 `chain()` 就可能已经把**空快照**的排序结果写进缓存；此时我们刷到了
-    // 新额度、写进了 `chQuotaCache`，但调度器手里的 `_quotas` 还是旧的那份 ——
-    // 第一个请求仍然按空快照的链序走，等于预热白做。
-    //
-    // `invalidate()` 清掉 `_cache` 与 `_quotas`，下一次 `chain()` 会重读
-    // `repo.quotas()`（→ `chQuotaTableForScheduler()` → 我们刚写好的缓存）。
-    //
-    // ⚠️ 放在抛错**之前**：即使这一轮只刷到部分渠道，也要让调度器看到这份
-    // 新数据（总比旧快照好），然后才把「不完整」上报给预热门去重试。
+    // （`_cache`）；刷到新额度却不清缓存，下一次 chain() 仍拿旧快照排序。
+    // 放在 finally 里：即使 syncAllQuota 抛错、或 ok:false 被我们转成失败，
+    // 只要探针写过任何一行，调度器都必须重新读，不允许任何 chain() 用旧快照。
+    let incomplete: string | null = null;
     try {
-      runtime.scheduler.invalidate();
+      const res = (await fn.call(panel, true)) as
+        | { ok?: boolean; message?: string; written?: number; probed?: number }
+        | null
+        | undefined;
+      // ⚠️ **不完整就是失败**（2026-11-16 用户定案：「syncAllQuota，对于非 openai
+      // 供应商必须全部读到数据」）。`ok:false` 抛给 gate，由它明确记降级原因。
+      if (res !== null && res !== undefined && res.ok === false) {
+        incomplete = res.message ?? `额度刷新不完整(${res.written ?? 0}/${res.probed ?? 0} 个账号读到)`;
+      }
     } catch (err) {
-      ctx.logger?.warn?.("[as-one] 预热后调度器缓存失效失败", err);
+      incomplete = err instanceof Error ? err.message : String(err);
+    } finally {
+      try {
+        runtime.scheduler.invalidate();
+      } catch (err) {
+        ctx.logger?.warn?.("[as-one] 预热后调度器缓存失效失败", err);
+      }
     }
     if (incomplete !== null) throw new Error(incomplete);
   };

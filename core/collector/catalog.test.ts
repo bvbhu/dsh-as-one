@@ -13,12 +13,14 @@ import {
   CatalogError,
   catalog_supported,
   fetch_catalog,
+  fetch_codearts_catalog,
   fetch_minimax_catalog,
   fetch_sensenova_catalog,
   fetch_trae_catalog,
   fetch_workbuddy_catalog,
   merge_trae,
   NATIVE_MODALITY_BY_MODEL_ID,
+  parse_codearts_model,
   parse_sensenova_model,
   parse_trae_remote_model,
   parse_trae_wire_model,
@@ -71,11 +73,12 @@ const ACCOUNT = {
 // ---------------------------------------------------------------------------
 
 describe("catalog_supported", () => {
-  it("列五个渠道(minimax 是本地内置名单,也算可拉目录;qoder 有 model/list)", () => {
-    expect(CATALOG_PROVIDERS).toEqual(["trae", "workbuddy", "sensenova", "minimax", "qoder"]);
+  it("列六个渠道(minimax 是本地内置名单,也算可拉目录;qoder 有 model/list;codearts 走 B 族签名网关)", () => {
+    expect(CATALOG_PROVIDERS).toEqual(["trae", "workbuddy", "sensenova", "minimax", "qoder", "codearts"]);
   });
   it("大小写/空白不敏感", () => {
     expect(catalog_supported(" Trae ")).toBe(true);
+    expect(catalog_supported(" CodeArts ")).toBe(true);
     expect(catalog_supported("openai")).toBe(false);
   });
 });
@@ -116,6 +119,112 @@ describe("fetch_minimax_catalog(内置固定名单)", () => {
 describe("fetch_catalog", () => {
   it("不支持的渠道抛 CatalogError", async () => {
     await expect(fetch_catalog("openai", ACCOUNT)).rejects.toThrow(CatalogError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// codearts B 族 AK/SK 签名网关目录
+// ---------------------------------------------------------------------------
+
+describe("parse_codearts_model", () => {
+  it("model_id/model_name/max_tokens/context_window/supports_images → CatalogEntry", () => {
+    const entry = parse_codearts_model({
+      model_id: "GLM-5.2",
+      model_name: "GLM-5.2",
+      enable: true,
+      display_enabled: true,
+      supports_images: false,
+      max_tokens: 65536,
+      context_window: 202752,
+    });
+    expect(entry).not.toBeNull();
+    expect(entry!.id).toBe("GLM-5.2");
+    expect(entry!.name).toBe("GLM-5.2");
+    expect(entry!.vision).toBe(false);
+    expect(entry!.context_window).toBe(202752);
+    expect(entry!.max_output).toBe(65536);
+    expect(entry!.origin).toBe("remote");
+    expect(entry!.callable).toBe(true);
+    expect(entry!.reasoning_efforts).toBeNull();
+    expect(entry!.reasoning_allows_off).toBeNull();
+  });
+  it("supports_images=true → vision", () => {
+    expect(parse_codearts_model({ model_id: "m", supports_images: true })!.vision).toBe(true);
+  });
+  it("enable=false / display_enabled=false → callable=false(不藏模型)", () => {
+    expect(parse_codearts_model({ model_id: "m", enable: false })!.callable).toBe(false);
+    expect(parse_codearts_model({ model_id: "m", display_enabled: false })!.callable).toBe(false);
+  });
+  it("缺 model_id → null;name 缺失回退 model_id;非正数窗口 → null", () => {
+    expect(parse_codearts_model({ model_name: "x" })).toBeNull();
+    const e = parse_codearts_model({ model_id: "m", context_window: 0, max_tokens: -1 })!;
+    expect(e.name).toBe("m");
+    expect(e.context_window).toBeNull();
+    expect(e.max_output).toBeNull();
+  });
+});
+
+describe("fetch_codearts_catalog", () => {
+  const ACCOUNT_CA = {
+    provider: "codearts",
+    username: "u",
+    token: "AK",
+    extras: { accessKey: "AK", secretKey: "SK", securityToken: "ST", domainId: "d1" },
+  };
+  const BODY = {
+    count: 2,
+    builtinModels: [
+      { model_id: "GLM-5.2", model_name: "GLM-5.2", enable: true, display_enabled: true, supports_images: false, max_tokens: 65536, context_window: 202752 },
+      { model_id: "deepseek-v4.1-flash-1017", model_name: "DeepSeek V4.1 Flash", enable: true, display_enabled: true, supports_images: true, max_tokens: 32768, context_window: 131072 },
+    ],
+  };
+
+  it("POST 不走:GET /v1/model/builtin + Agent-Type 头 + Authorization 签名头", async () => {
+    const fetchFn = fakeJson(BODY);
+    const res = await fetch_codearts_catalog(ACCOUNT_CA, { fetchFn: fetchFn as never });
+    expect(res.provider).toBe("codearts");
+    expect(res.source).toBe("api");
+    expect(res.entries.map((e) => e.id)).toEqual(["GLM-5.2", "deepseek-v4.1-flash-1017"]);
+    expect(res.entries[1].vision).toBe(true);
+    expect(res.warnings).toEqual([]);
+    expect(String(fetchFn.mock.calls[0][0])).toBe(
+      "https://snap-access.cn-north-4.myhuaweicloud.com/v1/model/builtin",
+    );
+    const init = fetchFn.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("GET");
+    const headers = init.headers as Record<string, string>;
+    expect(headers["Agent-Type"]).toBe("PromptCenter");
+    expect(headers["Authorization"]).toMatch(/^SDK-HMAC-SHA256 Access=AK,/);
+    expect(headers["X-Security-Token"]).toBe("ST");
+    // Agent-Type 不能进 SignedHeaders（进了会 401）
+    expect(headers["Authorization"]).not.toContain("agent-type");
+    expect(headers["X-Sdk-Date"]).toBeTruthy();
+  });
+
+  it("缺 AK/SK → CatalogError,不打上游", async () => {
+    const boom = (() => { throw new Error("不该发请求"); }) as unknown as typeof fetch;
+    await expect(
+      fetch_codearts_catalog({ ...ACCOUNT_CA, extras: {} }, { fetchFn: boom }),
+    ).rejects.toThrow(/accessKey/);
+  });
+
+  it("HTTP 401 → CatalogError", async () => {
+    await expect(
+      fetch_codearts_catalog(ACCOUNT_CA, { fetchFn: fakeJson({}, { status: 401 }) as never }),
+    ).rejects.toThrow(/HTTP 401/);
+  });
+
+  it("空 builtinModels → CatalogError(不是静默空表)", async () => {
+    await expect(
+      fetch_codearts_catalog(ACCOUNT_CA, { fetchFn: fakeJson({ builtinModels: [] }) as never }),
+    ).rejects.toThrow(/没有返回可用模型/);
+  });
+
+  it("fetch_catalog 按 provider 分派到 codearts", async () => {
+    const fetchFn = fakeJson(BODY);
+    const res = await fetch_catalog("codearts", ACCOUNT_CA, { fetchFn: fetchFn as never });
+    expect(res.provider).toBe("codearts");
+    expect(res.entries).toHaveLength(2);
   });
 });
 
