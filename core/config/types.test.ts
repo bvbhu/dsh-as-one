@@ -92,7 +92,10 @@ describe("normalizeExpiresSeconds", () => {
 describe("常量导出", () => {
   it("协议集合与缺省", () => {
     // 第五个协议是 As One 自己加的(qoder 走 cosy 协议,不是 OpenAI 兼容上游);
-    // 第六个 minimax 目前只承载签到 + 额度,聊天转发尚未接入。
+    // 第六个 minimax 目前只承载签到 + 额度,聊天转发尚未接入;
+    // 第七个 codearts 是华为云码道(B 族 SDK-HMAC-SHA256 签名网关)。
+    // ⚠️ 这份列表是**白名单**:漏了哪个协议,toProtocol() 就会把它静默降级成
+    // openai,症状是 fetch 报 `Failed to parse URL from /chat/completions`。
     expect(PROVIDER_PROTOCOLS).toEqual([
       "openai",
       "workbuddy",
@@ -100,6 +103,7 @@ describe("常量导出", () => {
       "sensenova",
       "qoder",
       "minimax",
+      "codearts",
     ]);
     expect(DEFAULT_PROVIDER_PROTOCOL).toBe("openai");
   });

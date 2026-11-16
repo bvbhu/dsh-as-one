@@ -281,6 +281,10 @@ export async function preparePeer(
   } else if (protocol === "codearts") {
     // CodeArts(B 族):签名网关。base_url 只写到 host(自建反代时可覆盖),
     // 路径固定 `/api/v2/chat/completions`。
+    //
+    // ⚠️ 必须兜底:base_url 为空时若拼出 `"" + "/chat/completions"`,fetch 会直接抛
+    // `Failed to parse URL from /chat/completions`(没有 host)。这也是「协议没进
+    // PROVIDER_PROTOCOLS 白名单 → 被降级成 openai」时最先暴露的症状。
     const base = (baseUrl || CODEARTS_BASE_CN).replace(/\/+$/, "");
     url = `${base}${CODEARTS_CHAT_PATH}`;
   } else {

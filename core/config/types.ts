@@ -43,6 +43,12 @@
  *
  * `minimax` 是第六种(MiniMax Agent 国内版):签名头(x-signature/yy)与设备
  * 指纹查询串都不是 OpenAI 形状;目前只用于**签到 + 额度**,聊天转发尚未接入。
+ *
+ * `codearts` 是第七种(华为云 CodeArts 码道):请求体是 OpenAI 形状,但每个请求
+ * 都要 `SDK-HMAC-SHA256` 签名(签名覆盖 URL + body 哈希),所以必须走连接器分叉。
+ * ⚠️ 加进这个白名单是**硬要求**:`toProtocol()` 会把不在表里的协议静默降级成
+ * `openai`,于是 `preparePeer` 拼出 `"" + "/chat/completions"`(没有 host),
+ * 客户端看到的是 `Failed to parse URL from /chat/completions`。
  */
 export const PROVIDER_PROTOCOLS = [
   "openai",
@@ -51,6 +57,7 @@ export const PROVIDER_PROTOCOLS = [
   "sensenova",
   "qoder",
   "minimax",
+  "codearts",
 ] as const;
 
 export type ProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number];

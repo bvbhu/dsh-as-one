@@ -10,7 +10,7 @@
 export const GATEWAY_HOST = "127.0.0.1";
 export const DEFAULT_GATEWAY_PORT = 4000;
 
-export const KNOWN_PROTOCOLS = ["openai", "workbuddy", "trae", "sensenova", "qoder"] as const;
+export const KNOWN_PROTOCOLS = ["openai", "workbuddy", "trae", "sensenova", "qoder", "minimax", "codearts"] as const;
 
 /**
  * 请求日志记录档位 —— 逐字对齐 Nexus `api_pages.py` L5284-5289。
@@ -38,6 +38,9 @@ export const KIND_BY_PROTOCOL: Record<string, "channel" | "endpoint"> = {
   // MiniMax 有签到/额度/内置模型目录,同样是渠道;2026-11-08 接通聊天转发后
   // 仍是渠道 → 只是多了一条 `/mavis/api/v1/llm/v1/messages` 的出站路径。
   minimax: "channel",
+  // CodeArts 是 AK/SK 账号池(一个 AK 一条凭据 + 每账号并发上限 3),
+  // 归 "channel";推理走 `snap-access` 的签名网关,签到走 `/v1/ops/*`。
+  codearts: "channel",
 };
 
 /** 有运行期额度探针的渠道(assembly-channels.ts 从这里取,第十一刀从 channels 域搬来)。 */
