@@ -70,6 +70,14 @@ export interface SetupAsOneOptions {
   logDir?: string;
   /** 环境变量来源(默认 process.env),供 EnvKeyProvider 探测 ONE_API_KEY。 */
   env?: Record<string, string | undefined>;
+  /**
+   * 覆盖运行期额度快照来源（**只给测试用**）。
+   *
+   * 缺省 = 面板的 `chQuotaTableForScheduler()`（模块级 `chQuotaCache` 的投影，
+   * 生产环境唯一正确来源）。测试里注入假表，才能验证「账号层按到期排序」这类
+   * 逻辑 —— 否则永远读空表、所有账号都是「到期未知」。
+   */
+  quotaSnapshot?: () => Record<string, unknown> | null;
 }
 
 export interface AsOneRuntime {
@@ -422,7 +430,9 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     // 没喂它 → due-first 的 `_expiryOf()` 两个来源全空 → 排序键并列 → 只能按
     // members 数组序,「到期早的先上」等于没生效(用户 m17562/m34799)。
     // 面板刷新写完缓存后会 `scheduler.invalidate()`,所以这里不必自己缓存。
-    quotaSnapshot: () => chQuotaTableForScheduler(),
+    quotaSnapshot: options.quotaSnapshot
+      ? () => (options.quotaSnapshot!() ?? {}) as never
+      : () => chQuotaTableForScheduler(),
   });
   const scheduler = new Scheduler(repo, {});
   const router = new Router(repo, {

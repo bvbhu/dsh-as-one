@@ -265,6 +265,30 @@ export function createPanelApi(): RendererApi {
     async setChannelModels(provider: string, models: ChannelModelSpec[]) {
       return call<ApiResult>("setChannelModels", provider, models);
     },
+    /** 调度排序诊断（只读）：看某个逻辑模型「为什么这样排」。 */
+    async getSchedulerPlan(logicalName: string) {
+      return call<{
+        logical_model: string;
+        at: number;
+        members: Array<{
+          provider: string;
+          model: string;
+          expires_at: number | null;
+          expires_at_local: string | null;
+          reason: string;
+          priority: number;
+          free: boolean;
+        }>;
+        accounts: Array<{
+          position: number;
+          provider: string;
+          model: string;
+          username: string;
+          endpoint_id: string;
+        }>;
+        quota_keys: string[];
+      }>("getSchedulerPlan", logicalName);
+    },
     /**
      * 单行实时保存(用户 2026-10-31 定案:四页删掉「撤销/保存」,勾选与改格即落库)。
      *

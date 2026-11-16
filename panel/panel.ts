@@ -758,6 +758,41 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
     // ── 签到总览 / 一键全部签到(总览页「每日签到」卡)────────────────────
     checkinOverview: () => checkinOverviewImpl(),
     channelOverview: () => channelOverviewImpl(),
+    /**
+     * 调度排序诊断（只读）：某个逻辑模型**真实**的成员排序 + 账号行序。
+     *
+     * 为什么要有它：「路由不对」这类问题从请求日志只能看到「最后选了谁」，
+     * 看不到「为什么它排第一」。而 `chQuotaCache` 是模块级缓存，独立脚本
+     * 新起进程读到的是空表 —— 必须在**运行中的进程**里看才准。
+     */
+    getSchedulerPlan: async (logicalName: string) => {
+      const now = Math.floor(Date.now() / 1000);
+      const plan = ctx.scheduler.planMembers(logicalName, { now, force: true });
+      const chain = ctx.scheduler.chain(logicalName);
+      return {
+        logical_model: logicalName,
+        at: now,
+        members: plan.map((m) => ({
+          provider: m.provider,
+          model: m.model,
+          expires_at: m.expiresAt,
+          expires_at_local: m.expiresAt ? new Date(m.expiresAt * 1000).toLocaleString("zh-CN") : null,
+          reason: m.reason,
+          priority: m.priority,
+          free: m.free,
+        })),
+        // 账号层：chain 的行序就是实际选账号的顺序
+        accounts: chain.map((item, i) => ({
+          position: i + 1,
+          provider: item.endpoint.provider,
+          model: item.endpoint.model,
+          username: item.endpoint.username,
+          endpoint_id: item.endpoint.endpointId,
+        })),
+        // 调度器读到的额度键（判断「是不是没数据」最直接）
+        quota_keys: Object.keys(ctx.scheduler["repo"]?.quotas?.() ?? {}).sort(),
+      };
+    },
     checkinAll: async (confirm: boolean): Promise<CheckinAllResult> => {
       const confirmOn = confirm === true;
       const parts: string[] = [];
@@ -961,6 +996,7 @@ export function dispatchPanel(panel: Panel, method: string, args: unknown[]): Pr
     case "checkinOverview": return panel.checkinOverview();
     case "checkinAll": return panel.checkinAll(Boolean(a[0]));
     case "channelOverview": return panel.channelOverview();
+    case "getSchedulerPlan": return panel.getSchedulerPlan(String(a[0] ?? ""));
     case "refreshStatus": return panel.refreshStatus(String(a[0] ?? ""));
     case "refreshRun":
       return panel.refreshRun(

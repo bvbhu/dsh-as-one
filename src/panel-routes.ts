@@ -60,6 +60,8 @@ export const PANEL_METHODS = [
   "checkinOverview",
   "checkinAll",
   "channelOverview",
+  // 调度排序诊断(只读):看「为什么这个模型排在第一位」
+  "getSchedulerPlan",
   "refreshStatus",
   "refreshRun",
   "syncChannel",

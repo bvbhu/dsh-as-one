@@ -1243,6 +1243,36 @@ export interface RendererApi {
   checkinAll(confirm: boolean): Promise<CheckinAllResult>;
   /** 渠道页卡头聚合(只读缓存,不打上游)。 */
   channelOverview(): Promise<ChannelOverview>;
+  /**
+   * 调度排序诊断（只读）。
+   *
+   * 返回某个逻辑模型的**真实**成员排序（含到期时间与排序原因）与账号行序。
+   * 排查「路由不对」用：日志只能看到「最后选了谁」，看不到「为什么它排第一」。
+   *
+   * ⚠️ 声明成 `Promise` 是为了同时满足两处约束：`dispatchPanel` 要求
+   * `Promise<unknown>`，而实现里是同步算完直接返回（`async` 包一层即可）。
+   */
+  getSchedulerPlan(logicalName: string): Promise<{
+    logical_model: string;
+    at: number;
+    members: Array<{
+      provider: string;
+      model: string;
+      expires_at: number | null;
+      expires_at_local: string | null;
+      reason: string;
+      priority: number;
+      free: boolean;
+    }>;
+    accounts: Array<{
+      position: number;
+      provider: string;
+      model: string;
+      username: string;
+      endpoint_id: string;
+    }>;
+    quota_keys: string[];
+  }>;
   refreshStatus(provider: string): Promise<ChannelRefreshStatus>;
   refreshRun(provider: string, confirm: boolean, index?: number): Promise<ApiResult>;
   syncChannel(provider: string, force?: boolean): Promise<ApiResult>;
