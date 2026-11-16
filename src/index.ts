@@ -31,6 +31,8 @@ import type { Context } from "./context-types.js";
 import { internalSwitch, setCompactHost, type CompactTriggerCompaction } from "./compact-trigger.js";
 import { rerouteSettingsFrom } from "./reroute.js";
 import { createExternalUsageCollector, sessionIdOf } from "./usage-external.js";
+import { createWarmupGate, type WarmupGate } from "./warmup-gate.js";
+import { evaluateQuotaFreshness } from "./quota-freshness.js";
 
 export const name = "@bvbhu/as-one";
 export const inject = ["webServer"];
@@ -43,6 +45,81 @@ export function resolveDirs(): { dataDir: string; dbPath: string; logDir: string
 
 export function apply(ctx: Context): void {
   void startAsOne(ctx);
+}
+
+/**
+ * 额度预热门的装配（用户 2026-11-16 定案）。
+ *
+ * 两条触发条件：
+ * 1. **启动后首次调度前** —— 无条件刷一轮，把到期时间填进运行期快照；
+ * 2. **没有有效数据时** —— 每个请求调度前用 {@link evaluateQuotaFreshness}
+ *    判一次（只读内存，廉价），无效才再刷，受节流约束。
+ *
+ * 为什么要借面板的 `syncAllQuota`：额度探针（trae/workbuddy/minimax/qoder）
+ * 全部活在 `@as-one/panel` 里，`src/` 不该反过来实现一遍 —— 那必然和面板分叉。
+ * 面板宿主已经建好（`createPanelHost` 在 `setupAsOne` 之后），这里只是拿它的
+ * 方法当刷新器。
+ */
+function createQuotaWarmup(
+  runtime: AsOneRuntime,
+  ctx: Context,
+): WarmupGate {
+  /** 面板方法表（惰性建：`createPanelHost` 有副作用，别在模块顶层跑）。 */
+  let panel: { syncAllQuota?: (force?: boolean) => Promise<unknown> } | null = null;
+
+  const refresh = async (): Promise<void> => {
+    if (panel === null) {
+      // 与 `buildPanelRoutes` 内部用的是**同一个** runtime，但各自建一份 host
+      // 会让 chQuotaCache（模块级）被两个实例共享 —— 那没问题（缓存本来就是
+      // 模块级单例），但省一次构造更省事：这里直接用 panel 路由那份。
+      const { createPanelHost } = await import("./panel-host.js");
+      panel = createPanelHost(runtime, {}).panel as unknown as {
+        syncAllQuota?: (force?: boolean) => Promise<unknown>;
+      };
+    }
+    const fn = panel?.syncAllQuota;
+    if (typeof fn !== "function") return;
+    await fn.call(panel, true);
+  };
+
+  /**
+   * 「有没有有效到期数据」的判定。
+   *
+   * ⚠️ 数据源必须与调度器读的**同一份**：`chQuotaTableForScheduler()` 是网关
+   * 侧 `quotaSnapshot` 的实现，它把 `chQuotaCache` + provider 聚合 + sensenova
+   * 比例合成一张表。这里只关心「有没有 expires_at / 新不新鲜」。
+   */
+  const needsRefresh = (): boolean => {
+    try {
+      const table = runtime.repo.quotas() ?? {};
+      const snapshots = Object.values(table) as Array<{
+        expires_at?: number | null;
+        fetched_at?: number | null;
+        error?: string | null;
+      }>;
+      const hours = Number(runtime.getSetting("external_refresh.interval_hours") ?? "5");
+      const maxAgeHours = Number.isFinite(hours) && hours > 0 ? hours : 5;
+      const verdict = evaluateQuotaFreshness({
+        snapshots,
+        now: Date.now(),
+        maxAgeMs: maxAgeHours * 3_600_000,
+      });
+      if (!verdict.fresh) {
+        ctx.logger?.info?.(`[as-one] 额度快照无效（${verdict.reason}）→ 调度前先刷新`);
+      }
+      return !verdict.fresh;
+    } catch (err) {
+      // 判定失败**不触发**刷新：宁可少刷一次，也不要因判定 bug 每请求打上游。
+      ctx.logger?.warn?.("[as-one] 额度新鲜度判定失败，本轮不刷新", err);
+      return false;
+    }
+  };
+
+  return createWarmupGate({
+    refresh,
+    needsRefresh,
+    logger: ctx.logger as unknown as Pick<Console, "warn" | "info">,
+  });
 }
 
 async function startAsOne(ctx: Context): Promise<void> {
@@ -59,8 +136,13 @@ async function startAsOne(ctx: Context): Promise<void> {
 
   ctx.effect(
     () => {
-      const gatewayRoutes = buildGatewayRoutes(runtime, { logger: ctx.logger as unknown as Pick<Console, "warn" | "error"> });
+      // 面板要先建出来 —— 预热门要借它的 `syncAllQuota(true)` 打真实探针。
       const panelRoutes = buildPanelRoutes(runtime);
+      const warmup = createQuotaWarmup(runtime, ctx);
+      const gatewayRoutes = buildGatewayRoutes(runtime, {
+        logger: ctx.logger as unknown as Pick<Console, "warn" | "error">,
+        warmup,
+      });
       const disposers: (() => void)[] = [];
       for (const route of [...gatewayRoutes, ...panelRoutes]) {
         try {

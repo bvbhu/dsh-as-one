@@ -45,6 +45,17 @@ import {
 export interface GatewayRouteOptions {
   /** 供 onStreamResult 打日志用。 */
   logger?: Pick<Console, "warn" | "error">;
+  /**
+   * 启动后首次调度前的额度预热门（用户 2026-11-16 定案：先更新到期时间再调度）。
+   *
+   * `due-first` 按到期时间升序排，而到期时间来自运行期额度快照 —— 进程刚起来
+   * 时它是空的，所有成员排序键并列、退化成链序。以前靠请求路径 fire-and-forget
+   * 补刷，但那一次排序**已经用空快照算完了**。这个门在 `resolveUpstream` 之前
+   * 等一次全渠道强制刷新，代价是首个请求变慢（用户明确接受）。
+   *
+   * 不注入 = 不做预热（保持旧行为，测试与 Electron 侧不受影响）。
+   */
+  warmup?: { wait(): Promise<unknown> };
 }
 
 /** 上游 usage → 统计三键(Nexus 口径:prompt / cached / completion)。 */
@@ -67,6 +78,24 @@ export function buildGatewayRoutes(
   opts: GatewayRouteOptions = {},
 ): AsOneWebRoute[] {
   const logger = opts.logger ?? console;
+
+  /**
+   * 等一次额度预热（只在**第一次**真正等，之后立即返回）。
+   *
+   * 位置很关键：必须在 `resolveUpstream`（内部就是 `scheduler.chain()`）之前，
+   * 因为 due-first 的到期排序发生在那一刻 —— 晚一步就等于「用空快照排完再刷」。
+   *
+   * 预热失败/超时**不拦请求**（门自己保证 resolve），预热是优化不是前提。
+   */
+  const awaitWarmup = async (): Promise<void> => {
+    if (!opts.warmup) return;
+    try {
+      await opts.warmup.wait();
+    } catch (err) {
+      // 门内部已经吞掉错误并 resolve；走到这里是兜底（门被替换成会抛的实现）。
+      logger.warn?.("[as-one] 额度预热等待失败，已放行请求", err);
+    }
+  };
 
   const authGuard = (req: IncomingMessage, res: ServerResponse): boolean => {
     const denied = requireKey(req, rt.keyProvider);
@@ -209,6 +238,12 @@ export function buildGatewayRoutes(
           cacheKey = cacheRoutingKeyOf(body) ?? null;
           const fields = classifyRequestFields(body);
           discarded = fields.discarded.length > 0 ? fields.discarded : null;
+
+          // ⚠️ **先更新到期时间,再调度**(用户 2026-11-16 定案)。
+          // 必须在 resolveUpstream 之前:那一步内部就是 scheduler.chain(),
+          // due-first 的到期排序就在里面算 —— 放它后面等于白刷一轮。
+          // 只有进程启动后的第一个请求会真等,之后门已开、零开销。
+          await awaitWarmup();
 
           const upstream = rt.resolveUpstream(model);
           if (!upstream) throw new GatewayHttpError(404, { detail: `未知模型: ${model}` });
