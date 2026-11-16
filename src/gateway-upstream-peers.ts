@@ -87,6 +87,17 @@ export async function connectorExtra(
       const v = raw[key];
       if (typeof v === "string" && v.trim() !== "") out[key] = v.trim();
     }
+    // ⚠️ CodeArts 的 AK/SK 三元组**存在 raw_json 里**(`secret` 列只放 AK 一份,
+    // SK 没有对应的列可放),所以必须在这里显式透传 —— 不透传的症状是连接器
+    // 拿不到 secretKey,直接抛「凭据不完整：需要 accessKey + secretKey」。
+    // 这三个字段只有 codearts 凭据会有,对其它渠道多传无害。
+    for (const key of ["accessKey", "secretKey", "securityToken", "domainId"]) {
+      const v = raw[key];
+      if (typeof v === "string" && v.trim() !== "") out[key] = v.trim();
+    }
+    // STS 临时凭据的过期时刻(毫秒数,不是字符串 —— 单独判类型)。
+    const expiresAtMs = raw["expiresAtMs"];
+    if (typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs)) out.expiresAtMs = expiresAtMs;
     return out;
   } catch {
     // 读不到凭据 raw 不该让请求失败:连接器有 token 兜底判定。

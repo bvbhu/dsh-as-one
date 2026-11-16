@@ -80,6 +80,21 @@ function createQuotaWarmup(
     const fn = panel?.syncAllQuota;
     if (typeof fn !== "function") return;
     await fn.call(panel, true);
+    // ⚠️ **刷新后必须让调度器缓存失效** —— 这是「启动后第一次请求路由错」的根因。
+    //
+    // `Scheduler.chain()` 对 due-first 会把结果按「分钟 + 额度代数」记忆化
+    // （`_cache`），而额度代数 `_quotasAt` 只在 `_quotaMap()` 里推进。刚启动时
+    // 一次 `chain()` 就可能已经把**空快照**的排序结果写进缓存；此时我们刷到了
+    // 新额度、写进了 `chQuotaCache`，但调度器手里的 `_quotas` 还是旧的那份 ——
+    // 第一个请求仍然按空快照的链序走，等于预热白做。
+    //
+    // `invalidate()` 清掉 `_cache` 与 `_quotas`，下一次 `chain()` 会重读
+    // `repo.quotas()`（→ `chQuotaTableForScheduler()` → 我们刚写好的缓存）。
+    try {
+      runtime.scheduler.invalidate();
+    } catch (err) {
+      ctx.logger?.warn?.("[as-one] 预热后调度器缓存失效失败", err);
+    }
   };
 
   /**
