@@ -66,10 +66,18 @@ export type UpstreamErrorKindName =
  *
  * ⚠️ 不含 `upstream`(5xx):那是上游自己出了问题,可能持续一段时间。也不含
  * `alreadyStreaming`:流已开始,换端点救不了这一轮。
+ *
+ * ⚠️ 2026-11-17 补入 `client_disconnected`（用户报「手动打断会话也会让模型进
+ * 冷却」）：客户端打断 = **用户主动放弃这次对话**，端点全程没有失败 —— 上游可能
+ * 正常吐了半个流，是我们这头掐的。按失败记账会给无辜端点白记一次连续失败并落
+ * 冷却（`client_disconnected` 原本不在任何豁免表里，`noteFailure` 按普通失败走
+ * `cooldownFloorS`）。超时/连接类豁免保的是「上游可能病了但大概率自愈」，
+ * 这条保的是「上游根本没病」。
  */
 export const TRANSIENT_KINDS: ReadonlySet<string> = new Set<string>([
   UpstreamErrorKind.Timeout,
   UpstreamErrorKind.Connection,
+  "client_disconnected",
 ]);
 
 /** 一个可被选中的端点 = (真实模型 × 该 provider 名下的一枚凭据)。 */

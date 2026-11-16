@@ -1208,10 +1208,12 @@ describe("纯函数层", () => {
     expect(registry.known("cooling")).toBe(false);
   });
 
-  it("TRANSIENT_KINDS 就是 timeout + connection 两个(哨兵)", () => {
+  it("TRANSIENT_KINDS 是 timeout + connection + client_disconnected(哨兵)", () => {
     // 名单是代码里的常量,改它必须同步改测试 —— 这是哨兵。
+    // 2026-11-17 补入 `client_disconnected`:手动打断会话不许让端点进冷却
+    // （用户报「打断也会让模型进冷却」）。
     expect([...TRANSIENT_KINDS].sort()).toEqual(
-      [UpstreamErrorKind.Timeout, UpstreamErrorKind.Connection].sort(),
+      [UpstreamErrorKind.Timeout, UpstreamErrorKind.Connection, "client_disconnected"].sort(),
     );
   });
 });

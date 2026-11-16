@@ -996,10 +996,16 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
             if (clientGone) {
               router.finish(item, {
                 leaseId,
-                ok: firstChunkEmitted,
+                // ⚠️ 打断**既不算成功也不算上游失败**（2026-11-17 用户报「手动打断
+                // 会话也会让模型进冷却」）：`ok:false` + `kind:"client_disconnected"`
+                // —— `client_disconnected` 已在 `TRANSIENT_KINDS` 里，所以只记账、
+                // 不落冷却。以前首块已发时传 `ok: true`，那是**虚假成功**：它会
+                // 顺手把端点之前的连续失败与冷却清零，等于用一次「用户按了停止」
+                // 洗掉一个真故障的账。
+                ok: false,
                 status: firstChunkEmitted ? 200 : 0,
-                error: firstChunkEmitted ? undefined : "客户端断开",
-                kind: firstChunkEmitted ? undefined : "client_disconnected",
+                error: "客户端断开",
+                kind: "client_disconnected",
                 latencyMs: Math.round(performance.now() - t0),
               });
               return;
