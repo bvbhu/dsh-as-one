@@ -606,46 +606,6 @@ export function createChannelsDomain(
     return out;
   };
 
-  /**
-   * 多字段凭据的**字段声明表**(目前只有 codearts 用)。
-   *
-   * 为什么要有这张表:codearts 的 AK/SK 三元组里 `secret` 列只放得下 AK 一份,
-   * SK / securityToken / domainId 都在 `raw_json` 里(见网关侧 `connectorExtra` 的
-   * 透传白名单),单看 `key_fp` 根本判断不出「这个账号到底能不能签名」。所以渠道
-   * 页按这张表逐字段回一个**在场标记** —— 只说「配了 / 没配」,绝不回显值。
-   *
-   * `secretKey` 标为必填:缺了它连接器直接抛「凭据不完整」。securityToken 是 STS
-   * 临时凭据才有(IAM 永久凭据为空是正常的),所以只显示可选标记,不报警。
-   */
-  const CH_CREDENTIAL_FIELDS: Readonly<Record<string, Array<{ key: string; label: string; required: boolean }>>> = {
-    codearts: [
-      { key: "accessKey", label: "Access Key", required: true },
-      { key: "secretKey", label: "Secret Key", required: true },
-      { key: "securityToken", label: "Security Token(STS)", required: false },
-      { key: "domainId", label: "Domain ID", required: false },
-      { key: "expiresAtMs", label: "过期时间", required: false },
-    ],
-  };
-
-  /** 凭据字段在场投影(codearts):从 vault 读一次,只回布尔,不回明文。 */
-  const credentialFieldsOf = async (pid: string, username: string): Promise<ChannelAccount["credentialFields"]> => {
-    const specs = CH_CREDENTIAL_FIELDS[pid];
-    if (!specs) return undefined;
-    const cred = await ctx.vault.get(pid, username);
-    const raw = cred?.raw ?? {};
-    return specs.map(({ key, label, required }) => ({
-      key,
-      label,
-      required,
-      // `secret` 列放的是 AK,raw_json 里也留了一份(登录脚本两边都写),
-      // 两处任一有值就算配好。
-      present:
-        (key === "accessKey" && typeof cred?.secret === "string" && cred.secret.trim() !== "") ||
-        (typeof raw[key] === "string" && (raw[key] as string).trim() !== "") ||
-        (key === "expiresAtMs" && typeof raw[key] === "number" && Number.isFinite(raw[key] as number)),
-    }));
-  };
-
   /** 某 provider 的 credential 行转 ChannelAccount[](来源 = credential 表)。 */
   const channelAccountsOf = async (pid: string): Promise<ChannelAccount[]> => {
     const creds = await ctx.vault.list(pid);
@@ -665,7 +625,6 @@ export function createChannelsDomain(
         token_expires_at_ms: s.expiresAt !== null ? Math.round(s.expiresAt * 1000) : null,
         refresh_expires_at_ms: null,
         last_refresh: null,
-        ...(CH_CREDENTIAL_FIELDS[pid] ? { credentialFields: await credentialFieldsOf(pid, s.username) } : {}),
       });
     }
     return out;

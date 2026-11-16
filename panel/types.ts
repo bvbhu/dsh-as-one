@@ -575,15 +575,6 @@ export interface ChannelAccount {
    * 故在账号行上再带一份 per-account 快照;null = 这个账号还没拉过额度。
    */
   credits?: ChannelCredits | null;
-  /**
-   * 凭据字段在场表(codearts 专用;其余渠道不给)。
-   *
-   * AK/SK 这类**多字段**凭据的 secret 列只放得下 AK 一份,SK/token/domainId 都在
-   * `raw_json` 里(见网关侧 `connectorExtra` 的透传白名单)。渠道页要能核对「这个
-   * 账号的哪几把钥匙已经配好」,所以把每个字段的在场状态(已配置 / 未配置)回给
-   * 页面,**值一律不回显**(和 key_fp 同一口径:只给指纹,不给明文)。
-   */
-  credentialFields?: Array<{ key: string; label: string; required: boolean; present: boolean }> | null;
 }
 
 export interface CreditPackage {
