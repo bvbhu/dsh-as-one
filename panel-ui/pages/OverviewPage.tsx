@@ -160,20 +160,17 @@ function CheckinRow({ c }: { c: CheckinChannelStatus }): React.JSX.Element {
     cls = checkinDone(c) ? "ok" : "warn";
   }
 
+  // 2026-11-17 用户定案：签到行**只显示两样东西** —— 是否签到（state）+ 本次可领积分。
+  // reason（「可领取 N 积分(干跑,未写)」这类上游原文）、连签天数、error 文案一律不写，
+  // 既不做可见文本也不塞进 title，避免把内部风控/干跑口径暴露给使用者。
   const meta: string[] = [];
   const credit = formatCheckinCreditInline(c);
   if (credit !== null) meta.push(`今日 ${credit}`);
-  if (c.streak !== null) meta.push(`连签 ${c.streak} 天`);
-  if (c.reason) meta.push(c.reason);
-  if (c.error) meta.push(c.error);
 
   return (
     <div className="ov-checkinRow">
-      {/* 2026-11-15 用户定案:签到行不再挂上游风控说明(title 文案已移除)。 */}
       <span className="ov-checkinName">{c.label}</span>
-      <span className={`ov-checkinState is-${cls}`} title={meta.join(" · ")}>
-        {state}
-      </span>
+      <span className={`ov-checkinState is-${cls}`}>{state}</span>
       <span className="ov-checkinMeta">{meta.join(" · ")}</span>
     </div>
   );

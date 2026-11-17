@@ -464,7 +464,12 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
               if (res.already) checkedIn += 1;
               else {
                 pending += 1;
-                reason = reason ?? res.message;
+                // codeartsIdeCheckin(confirm:false) 的 message 是「可领取 N 积分(干跑,未写)」——
+                // 这是给领取调用看的口径；在「只读状态」里展示会让人以为签到坏了。
+                // 这里改成与其余渠道一致的「今日可领取 N 积分(未签)」。
+                reason =
+                  reason ??
+                  `今日可领取${res.credit > 0 ? ` ${res.credit} 积分` : ""}(未签)`;
               }
               continue;
             }
