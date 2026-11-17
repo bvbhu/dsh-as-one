@@ -1,7 +1,7 @@
-﻿{
+{
   "name": "@bvbhu/as-one",
   "version": "0.5.1",
-  "description": "As One 缃戝叧鐨?DSH 鎻掍欢锛氬璐﹀彿妯″瀷璺敱 + OpenAI 鍏煎缃戝叧闈紝鎸傝繘 DSH 鍘熺敓妯″瀷閫夋嫨鍣ㄣ€?,
+  "description": "As One 网关的 DSH 插件：多账号模型路由 + OpenAI 兼容网关面，挂进 DSH 原生模型选择器。",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
