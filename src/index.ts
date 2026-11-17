@@ -35,6 +35,7 @@ import { createWarmupGate, type WarmupGate } from "./warmup-gate.js";
 import { evaluateQuotaFreshness } from "./quota-freshness.js";
 import { createCapacityView } from "./components/capacity.js";
 import { applySubagentLimit } from "./components/subagent-limit.js";
+import { applyCompaction } from "./components/compaction/index.js";
 
 export const name = "@bvbhu/as-one";
 export const inject = ["webServer"];
@@ -170,11 +171,14 @@ async function startAsOne(ctx: Context): Promise<void> {
   // 它内部惰性建面板 host，提前构造是安全的。
   const warmup = createQuotaWarmup(runtime, ctx);
 
-  // 统一并发容量视图 + 嵌入式组件（subagent 限制）。
+  // 统一并发容量视图 + 嵌入式组件（subagent 限制 / 压缩增强）。
   // 容量视图包装 rt.ledger（真实在途账本），组件只按 setting 表的开关/配额裁决，
-  // 不做第二套账本、不注册独立 bundle 行。设置默认开启，关掉即不拦。
+  // 不做第二套账本、不注册独立 bundle 行。设置默认开启，关掉即不生效。
   const capacity = createCapacityView(runtime.ledger);
   const disposeSubagentLimit = applySubagentLimit(ctx, capacity, runtime.getSetting);
+  // 压缩拦截器要挂在有 `llm` 服务的子 fiber 上（下面 llm effect 里装配），
+  // 这里先留 disposer 槽位。
+  let disposeCompaction: (() => void) | undefined;
 
   ctx.effect(
     () => {
@@ -200,6 +204,7 @@ async function startAsOne(ctx: Context): Promise<void> {
       // 那一百毫秒恰好落在「用户按下回车」上就很明显。
       warmupDeepseekTokenizer();
       return () => {
+        disposeCompaction?.();
         disposeSubagentLimit();
         for (const dispose of disposers) dispose();
         runtime.dispose();
@@ -316,6 +321,20 @@ async function startAsOne(ctx: Context): Promise<void> {
         // 记一条日志继续,网关与面板不受影响。
         child.logger?.warn?.("[as-one] llm adapter registration failed:", err);
       }
+
+      // 压缩增强拦截器挂在同一 child 上（它有 llm 服务）。失败只记日志，
+      // 宿主原摘要不受影响。
+      try {
+        disposeCompaction = applyCompaction({
+          ctx: child as unknown as Context,
+          runtime,
+          capacity,
+          getSetting: (key) => runtime.getSetting(key),
+        });
+      } catch (err) {
+        child.logger?.warn?.("[as-one] compaction enhancement setup failed:", err);
+      }
+
       return () => {
         try {
           unregister?.();

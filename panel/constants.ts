@@ -329,4 +329,33 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     label: "主会话占用也计入(不拦截主会话)",
     section: "subagentLimit",
   },
+  // ── 嵌入式组件:压缩增强(src/components/compaction) ───────────────────
+  {
+    key: "compaction.enabled",
+    def: "true",
+    kind: "bool",
+    label: "启用压缩增强(quilt 分层摘要)",
+    section: "compaction",
+  },
+  {
+    key: "compaction.promptMode",
+    def: "dsh-default",
+    kind: "str",
+    label: "压缩提示词模式(dsh-default / anchored)",
+    section: "compaction",
+  },
+  {
+    key: "compaction.logicalModel",
+    def: "",
+    kind: "str",
+    label: "压缩模型(逻辑模型名)",
+    section: "compaction",
+  },
+  {
+    key: "compaction.tiers",
+    def: "[]",
+    kind: "json",
+    label: "模型池 tiers(JSON,覆盖逻辑模型 members)",
+    section: "compaction",
+  },
 ];

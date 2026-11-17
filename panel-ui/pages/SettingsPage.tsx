@@ -823,6 +823,34 @@ export default function SettingsPage(): React.JSX.Element {
     );
   }
 
+  /** 压缩增强（嵌入式组件，代码在 src/components/compaction/）。 */
+  function compactionCard(): React.JSX.Element | null {
+    const keys = [
+      "compaction.enabled",
+      "compaction.promptMode",
+      "compaction.logicalModel",
+      "compaction.tiers",
+    ] as const;
+    const specs = keys.map((k) => specOf(k)).filter((s): s is SettingSpec => s !== undefined);
+    if (specs.length === 0) return null;
+    return (
+      <section key="compaction" id="compaction" className="ui-card">
+        <div className="ui-card-head">
+          <h2 className="ui-card-title">压缩增强（quilt 分层摘要）</h2>
+          <span className="ui-card-sub">分块摘要 + 归并，可选 session-search 锚点</span>
+        </div>
+        <p className="ui-field-hint">
+          开启后在宿主压缩摘要时接管 <code>purpose=compaction</code> 请求，按模型池分块摘要再归并；任何失败都回退宿主原摘要。
+          <b>提示词模式</b>：<code>dsh-default</code> 保持宿主提示词；<code>anchored</code> 附加 <code>&lt;session-search-anchors&gt;</code> 锚点块。
+          模型池 <code>tiers</code> 为空时使用 <b>压缩模型（逻辑模型名）</b> 的 members 作为池。
+        </p>
+        <div className="ui-fields">
+          {specs.map((s) => field("compaction", s, s.kind === "json"))}
+        </div>
+      </section>
+    );
+  }
+
   /** 单张设置卡(外部数据刷新 / 重试策略 / 界面)。 */
   function sectionCard(section: "external_refresh" | "retry" | "ui"): React.JSX.Element | null {
     const specs = specsOf(section);
@@ -933,6 +961,7 @@ export default function SettingsPage(): React.JSX.Element {
             {schedulerPanels()}
             {routingCard()}
             {subagentLimitCard()}
+            {compactionCard()}
             {sectionCard("retry")}
             {sectionCard("ui")}
 
