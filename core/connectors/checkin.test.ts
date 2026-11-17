@@ -431,6 +431,53 @@ describe("wbCheckinStatus(只读活动状态)", () => {
     expect(st.checkin_dates).not.toContain("2026-11-17");
   });
 
+  it("未签到时 today_credit=daily_credit=100 → 仍以 today_checked_in 为准（用户截图场景）", async () => {
+    const { fetchFn, calls } = makeFetch(() =>
+      STATUS_OK({
+        code: 0,
+        data: {
+          active: true,
+          today_checked_in: false,
+          streak_days: 16,
+          daily_credit: 100,
+          today_credit: 100,
+          checkin_dates: ["2026-11-16"],
+          total_credits: 1600,
+        },
+      }),
+    );
+    const st = await wbCheckinStatus(wbAccount(), { baseUrl: "https://www.codebuddy.cn", fetchFn });
+    expect(calls[0]?.method).toBe("POST");
+    expect(st).toMatchObject({
+      active: true,
+      today_checked_in: false,
+      streak_days: 16,
+      daily_credit: 100,
+      today_credit: 100,
+      checkin_dates: ["2026-11-16"],
+    });
+  });
+
+  it("已签到时 checkin_dates[0] = 今天，today_checked_in=true", async () => {
+    const { fetchFn } = makeFetch(() =>
+      STATUS_OK({
+        code: 0,
+        data: {
+          active: true,
+          today_checked_in: true,
+          streak_days: 17,
+          daily_credit: 100,
+          today_credit: 100,
+          checkin_dates: ["2026-11-17", "2026-11-16"],
+        },
+      }),
+    );
+    const st = await wbCheckinStatus(wbAccount(), { baseUrl: "https://www.codebuddy.cn", fetchFn });
+    expect(st.today_checked_in).toBe(true);
+    expect(st.checkin_dates[0]).toBe("2026-11-17");
+    expect(st.streak_days).toBe(17);
+  });
+
   it("业务码非 0 → CheckinError,不伪造未签", async () => {
     const { fetchFn } = makeFetch(() => STATUS_OK({ code: 50000, msg: "活动未开始", data: {} }));
     await expect(

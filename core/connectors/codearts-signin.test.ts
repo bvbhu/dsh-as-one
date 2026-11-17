@@ -633,4 +633,41 @@ describe("codeartsCheckinOne", () => {
     await expect(codeartsCheckinOne(ACCOUNT, baseOpts(fetchFn))).rejects.toThrow(/会话失效/);
     expect(calls).toHaveLength(1);
   });
+
+  // 2026-11-17 面板「CodeArts 未签/可领取(干跑，未写)」回归：
+  // A 族凭据缺 cftk 或 Cookie 失效时必须给出明确状态文案，而不是含糊的「未签」。
+  it('A 族 Cookie 缺 cftk：明确报「缺 devclouddevuibjtcftk」，不发请求', async () => {
+    const { fetchFn, calls } = fakeFetch([{ body: OVERVIEW }, { body: DELIVERY }]);
+    await expect(
+      codeartsCheckinOne({ cookies: "a=1; b=2", label: "x" }, baseOpts(fetchFn)),
+    ).rejects.toThrow(/没有 cftk|devclouddevuibjtcftk/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("A 族 Cookie 失效（HTTP 401）：明确报「会话失效/重新登录」，不伪装成未签", async () => {
+    const { fetchFn, calls } = fakeFetch([{ status: 401, raw: "" }]);
+    await expect(codeartsCheckinOne(ACCOUNT, baseOpts(fetchFn))).rejects.toThrow(/会话失效.*重新登录/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("A 族 dryRun 状态判定：可签=signed=false、已签(CLAIMED)=signed=true，均零写请求", async () => {
+    const pending = await codeartsCheckinOne(ACCOUNT, {
+      ...baseOpts(fakeFetch([{ body: OVERVIEW }, { body: DELIVERY }]).fetchFn),
+      dryRun: true,
+    });
+    expect(pending.signed).toBe(false);
+    expect(pending.claimed).toBe(false);
+    expect(pending.campaign?.claimable).toBe(true);
+    expect(pending.campaign?.benefitAmount).toBe(100);
+
+    const signed = await codeartsCheckinOne(ACCOUNT, {
+      ...baseOpts(fakeFetch([
+        { body: OVERVIEW },
+        { body: { code: 0, data: { items: [{ ...CAMP, claimable: false, status: "CLAIMED" }] } } },
+      ]).fetchFn),
+      dryRun: true,
+    });
+    expect(signed.signed).toBe(true);
+    expect(signed.message).toMatch(/尚未确认/);
+  });
 });
