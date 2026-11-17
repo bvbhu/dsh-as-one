@@ -1,4 +1,4 @@
-# 忽略构建/缓存/临时产物
+﻿# 忽略构建/缓存/临时产物
 node_modules/
 dist/
 out/
@@ -38,7 +38,9 @@ __pycache__/
 .agents/
 
 # 内部文档不入库
-docs/
+docs/*
+!docs/channel-onboarding.md
 ARCHIVED.md
 README.legacy.md
 commit-msg.txt
+
