@@ -33,6 +33,8 @@ import { rerouteSettingsFrom } from "./reroute.js";
 import { createExternalUsageCollector, sessionIdOf } from "./usage-external.js";
 import { createWarmupGate, type WarmupGate } from "./warmup-gate.js";
 import { evaluateQuotaFreshness } from "./quota-freshness.js";
+import { createCapacityView } from "./components/capacity.js";
+import { applySubagentLimit } from "./components/subagent-limit.js";
 
 export const name = "@bvbhu/as-one";
 export const inject = ["webServer"];
@@ -168,6 +170,12 @@ async function startAsOne(ctx: Context): Promise<void> {
   // 它内部惰性建面板 host，提前构造是安全的。
   const warmup = createQuotaWarmup(runtime, ctx);
 
+  // 统一并发容量视图 + 嵌入式组件（subagent 限制）。
+  // 容量视图包装 rt.ledger（真实在途账本），组件只按 setting 表的开关/配额裁决，
+  // 不做第二套账本、不注册独立 bundle 行。设置默认开启，关掉即不拦。
+  const capacity = createCapacityView(runtime.ledger);
+  const disposeSubagentLimit = applySubagentLimit(ctx, capacity, runtime.getSetting);
+
   ctx.effect(
     () => {
       // 面板要先建出来 —— 预热门要借它的 `syncAllQuota(true)` 打真实探针。
@@ -192,6 +200,7 @@ async function startAsOne(ctx: Context): Promise<void> {
       // 那一百毫秒恰好落在「用户按下回车」上就很明显。
       warmupDeepseekTokenizer();
       return () => {
+        disposeSubagentLimit();
         for (const dispose of disposers) dispose();
         runtime.dispose();
       };

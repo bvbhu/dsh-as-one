@@ -793,6 +793,36 @@ export default function SettingsPage(): React.JSX.Element {
     );
   }
 
+  /**
+   * subagent 并发限制（嵌入式组件，代码在 src/components/subagent-limit.ts）。
+   * 按 provider/model 限制同时存在的 subagent 数；超限返回不可重试的 ABORTED。
+   */
+  function subagentLimitCard(): React.JSX.Element | null {
+    const keys = [
+      "subagentLimit.enabled",
+      "subagentLimit.defaultLimit",
+      "subagentLimit.limits",
+      "subagentLimit.countMainAgent",
+    ] as const;
+    const specs = keys.map((k) => specOf(k)).filter((s): s is SettingSpec => s !== undefined);
+    if (specs.length === 0) return null;
+    return (
+      <section key="subagentLimit" id="subagentLimit" className="ui-card">
+        <div className="ui-card-head">
+          <h2 className="ui-card-title">子代理并发限制</h2>
+          <span className="ui-card-sub">按模型限制可同时运行的 subagent 数</span>
+        </div>
+        <p className="ui-field-hint">
+          同一模型同时运行的子代理超过上限时，新的 subagent 调用会被直接拒绝（不可重试）。
+          配额按 <b>provider/model</b> 匹配，可用 <code>*</code> 通配；主会话占用可计入名额但不拦截。
+        </p>
+        <div className="ui-fields">
+          {specs.map((s) => field("subagentLimit", s, s.kind === "json"))}
+        </div>
+      </section>
+    );
+  }
+
   /** 单张设置卡(外部数据刷新 / 重试策略 / 界面)。 */
   function sectionCard(section: "external_refresh" | "retry" | "ui"): React.JSX.Element | null {
     const specs = specsOf(section);
@@ -902,6 +932,7 @@ export default function SettingsPage(): React.JSX.Element {
             {sectionCard("external_refresh")}
             {schedulerPanels()}
             {routingCard()}
+            {subagentLimitCard()}
             {sectionCard("retry")}
             {sectionCard("ui")}
 

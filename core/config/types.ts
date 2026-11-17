@@ -478,6 +478,43 @@ export const RETRY_KEYS = [
 export type RetryKey = (typeof RETRY_KEYS)[number];
 
 // ===========================================================================
+// 组件设置(subagent 并发限制 / 压缩增强)—— 嵌入 as-one 的内部组件
+// ===========================================================================
+
+/**
+ * 内部组件设置键 —— 由 `src/components/*` 读取。
+ *
+ * ⚠️ 与 `panel/constants.ts` 的 `SETTING_FIELDS` 分工:这里定义**键与默认值**
+ * (代码读的单一真源);面板字段表要在对应组件真的读取该键之后才加行 ——
+ * 见 constants.ts 的「先让代码读它」纪律,避免死开关。
+ */
+export const COMPONENT_DEFAULTS = {
+  "subagentLimit.enabled": "true",
+  "subagentLimit.defaultLimit": "4",
+  "subagentLimit.limits": "[]",
+  "subagentLimit.countMainAgent": "true",
+  "compaction.enabled": "true",
+  "compaction.logicalModel": "",
+  "compaction.promptMode": "dsh-default",
+  "compaction.tiers": "[]",
+} as const;
+
+/** 组件设置键全集。 */
+export const COMPONENT_KEYS = Object.keys(COMPONENT_DEFAULTS) as Array<
+  keyof typeof COMPONENT_DEFAULTS
+>;
+
+/** 单条 subagent 配额规则(设置值 `subagentLimit.limits` 的 JSON 元素形态)。 */
+export interface SubagentLimitRule {
+  provider: string;
+  model: string;
+  max: number;
+}
+
+/** 压缩提示词模式。 */
+export type CompactionPromptMode = "dsh-default" | "anchored";
+
+// ===========================================================================
 // 运行期内存态形状参考(约定 D17-D19:不落盘,仅形状镜像)
 // ===========================================================================
 

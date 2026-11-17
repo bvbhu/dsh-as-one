@@ -299,4 +299,34 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     kind: "str",
     label: "会话标题",
   },
+  // ── 嵌入式组件:subagent 并发限制(代码读 src/components/subagent-limit.ts) ──
+  {
+    key: "subagentLimit.enabled",
+    def: "true",
+    kind: "bool",
+    label: "启用 subagent 并发限制",
+    section: "subagentLimit",
+  },
+  {
+    key: "subagentLimit.defaultLimit",
+    def: "4",
+    kind: "int",
+    label: "默认最大 subagent 数(未命中规则时)",
+    min: 1,
+    section: "subagentLimit",
+  },
+  {
+    key: "subagentLimit.limits",
+    def: "[]",
+    kind: "json",
+    label: "按 provider/model 指定上限",
+    section: "subagentLimit",
+  },
+  {
+    key: "subagentLimit.countMainAgent",
+    def: "true",
+    kind: "bool",
+    label: "主会话占用也计入(不拦截主会话)",
+    section: "subagentLimit",
+  },
 ];
