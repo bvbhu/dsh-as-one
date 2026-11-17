@@ -7,10 +7,13 @@
  * - `_inflight` guard 防止我们自己的 chunk/merge 调用递归；
  * - 任何失败都 `next()` 回退宿主原摘要（用户永不因增强而丢压缩）。
  *
- * promptMode:
- * - `dsh-default`：不改宿主压缩提示词，只走路由（quilt 引擎仍产生分块摘要，
- *   但不附加锚点块/恢复指令）；
- * - `anchored`：在压缩结果里附 `<session-search-anchors>` + ANCHOR_PROMPT_INSTRUCTION。
+ * promptMode（三档）:
+ * - `default`：**一次压完**。挑一个上下文窗口装得下整段历史的模型（按调度顺序，
+ *   在够大的模型里随机），用宿主原样提示词一次完成；都不够大则回退宿主原摘要
+ *   （即会话模型兜底）。除"换了个够大的模型"外与 DSH 自带压缩一致。
+ * - `anchored`：quilt 分块摘要 + 归并，结果附 `<session-search-anchors>` 锚点块
+ *   + ANCHOR_PROMPT_INSTRUCTION（配合 session-search 按 seq 区间取回原文）。
+ * - `quilt`：quilt 分块摘要 + 归并，**不**附锚点块（纯降 token 成本）。
  *
  * @module src/components/compaction/intercept
  */
@@ -18,7 +21,7 @@
 import type { Context } from "cordis";
 import type { AsOneRuntime } from "../../setup.js";
 import type { CapacityView } from "../capacity.js";
-import type { CompactionComponentConfig, QuiltConfig } from "./config.js";
+import type { CompactionComponentConfig, QuiltConfig, QuiltPoolModel } from "./config.js";
 import { toQuiltConfig, readCompactionConfig, tiersFromLogicalModel } from "./config.js";
 import { ModelChain, chunkJob, mergeJob, type ChainAgent, type ChainContext } from "./model-chain.js";
 import { MemoryCooldownStore } from "./cooldown.js";
@@ -223,8 +226,7 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
         return next();
       }
       if (!config.enabled || config.tiers.length === 0) return next();
-      return decide(options, next);
-    },
+      return decide(options, next);    },
     { global: true, prepend: true },
   );
 
@@ -236,7 +238,12 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     }
     inflight += 1;
     try {
-      const assembled = await compress(options);
+      // `default` 模式不走分块引擎：挑一个窗口装得下整段历史的模型一次压完。
+      // 其余模式（anchored / quilt）走 quilt 分块 + 归并。
+      const assembled =
+        config.promptMode === "default"
+          ? await compressOnce(options)
+          : await compress(options);
       if (assembled !== undefined) {
         yield* syntheticChunks(assembled, options.signal);
         return;
@@ -248,6 +255,78 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     }
     // 宿主原摘要（dsh-compaction-basic）照常跑。
     yield* next();
+  }
+
+  /**
+   * `default` 模式：**一次压完**。
+   *
+   * 语义是「除了换了个够大的模型，其余与 DSH 自带压缩完全一致」：
+   * - 提示词用**宿主原样**（直接从 options 里取，不替换、不追加）；
+   * - 挑模型：按调度顺序（`scheduler.chain`）遍历压缩逻辑模型的成员，
+   *   在**上下文窗口装得下整段区域**的模型里随机取一个；
+   * - 随机是为了摊平负载：同档位多个够大的模型时，不要每次都压到同一个号上；
+   * - 一个够大的都没有 → 返回 undefined，回退宿主原摘要（即"会话模型兜底"）。
+   *
+   * @returns 摘要文本；`undefined` 表示本模式不接管，交给宿主。
+   */
+  async function compressOnce(options: LlmStreamOptions): Promise<string | undefined> {
+    if (disposed) return undefined;
+    const messages = regionMessages(options);
+    if (messages.length === 0) return undefined;
+
+    // 区域 token 数：用内核精确 DeepSeek 分词器（与上游计费口径一致）。
+    const stage0Lines = runStage0(messages, quilt.preprocessing);
+    if (stage0Lines.length === 0) return undefined;
+    const regionTokens = stage0Lines.reduce((sum, line) => sum + lineTokenCost(line), 0);
+    if (regionTokens <= 0) return undefined;
+
+    // 调度顺序给出候选（成员顺序 = 优先级），过滤掉窗口装不下的与正在冷却的。
+    const candidates: QuiltPoolModel[] = [];
+    for (const tier of quilt.tiers) {
+      for (const model of tier.models) {
+        const info = runtime.registry.getRealModel(model.provider, model.model);
+        const rawWindow = info?.maxInputTokens;
+        const window = typeof rawWindow === "number" && Number.isInteger(rawWindow) && rawWindow > 0 ? rawWindow : 0;
+        if (window <= 0) continue;
+        // 留出输出预算：可用输入 = 窗口 - 预留输出（budget.ts 的口径）。
+        const usable = computeUsableInputTokens(window);
+        if (usable < regionTokens) continue;
+        candidates.push(model);
+      }
+    }
+    if (candidates.length === 0) {
+      ctx.logger?.debug?.(
+        `[as-one compaction] no model can hold ${regionTokens} tokens in one pass; delegating to host summary`,
+      );
+      return undefined;
+    }
+
+    // 在"装得下"的模型里随机（摊平负载）；同 key 只取一次。
+    const unique = new Map<string, QuiltPoolModel>();
+    for (const model of candidates) unique.set(`${model.provider}/${model.model}`, model);
+    const pool = [...unique.values()];
+    const chosen = pool[Math.floor(Math.random() * pool.length)]!;
+
+    // 用**宿主原样的 messages + 原样的提示词**发一次压缩请求。
+    // 关键：直接把 options 里的 messages 传下去，不替换、不加后缀 ——
+    // 这就是"与自带压缩一致"的全部含义。inflight>0 保证不递归。
+    const blocks: Array<{ type: string; text?: string }> = [];
+    const request = { ...options, provider: chosen.provider, model: chosen.model };
+    for await (const chunk of chainCtx.llm.stream(request as never)) {
+      if (chunk.type === "text-delta") {
+        const last = blocks[blocks.length - 1];
+        if (last?.type === "text") last.text = (last.text ?? "") + String(chunk.text ?? "");
+        else blocks.push({ type: "text", text: String(chunk.text ?? "") });
+      } else if (chunk.type === "block-end" && (chunk.block as { type?: string })?.type === "text") {
+        blocks.push({ type: "text", text: String((chunk.block as { text?: unknown }).text ?? "") });
+      }
+    }
+    const text = blocks.map((b) => b.text ?? "").join("").trim();
+    if (text === "") return undefined;
+    ctx.logger?.info?.(
+      `[as-one compaction] one-pass summary via ${chosen.provider}/${chosen.model} (region ~${regionTokens} tok)`,
+    );
+    return text;
   }
 
   function decide(options: LlmStreamOptions, next: NextStream): AsyncIterable<Record<string, unknown>> {

@@ -339,9 +339,9 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
   },
   {
     key: "compaction.promptMode",
-    def: "dsh-default",
+    def: "default",
     kind: "str",
-    label: "压缩提示词模式(dsh-default / anchored)",
+    label: "压缩模式(default 一次压完 / anchored 分块+锚点 / quilt 分块)",
     section: "compaction",
   },
   {

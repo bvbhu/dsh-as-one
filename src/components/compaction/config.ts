@@ -295,7 +295,7 @@ export function resolveConfig(rawConfig: Record<string, unknown> = {}): QuiltCon
 /** 设置键默认值（与 core/config/types.ts COMPONENT_DEFAULTS 同源）。 */
 export const COMPACTION_DEFAULTS = {
   enabled: true,
-  promptMode: "dsh-default" as CompactionPromptMode,
+  promptMode: "default" as CompactionPromptMode,
   logicalModel: "",
   mergeMaxContextTokens: DEFAULT_MERGE_MAX_CONTEXT_TOKENS,
 };
@@ -321,8 +321,11 @@ export function readCompactionConfig(getSetting: (key: string) => string | null)
     }
     tiers = resolveConfig({ tiers: parsed }).tiers as QuiltPoolTier[];
   }
-  const rawMode = getSetting("compaction.promptMode") ?? COMPACTION_DEFAULTS.promptMode;
-  const promptMode: CompactionPromptMode = rawMode === "anchored" ? "anchored" : "dsh-default";
+  const rawMode = (getSetting("compaction.promptMode") ?? COMPACTION_DEFAULTS.promptMode).trim().toLowerCase();
+  // 三档：default（一次压完） / anchored（分块+锚点） / quilt（分块不带锚点）。
+  // 未知值回落到 default —— 它是"最像宿主自带压缩"的那一档，最不会让人意外。
+  const promptMode: CompactionPromptMode =
+    rawMode === "anchored" ? "anchored" : rawMode === "quilt" ? "quilt" : "default";
   const rawMerge = getSetting("compaction.mergeMaxContextTokens");
   const mergeMaxContextTokens = rawMerge !== null && Number.isSafeInteger(Number(rawMerge)) && Number(rawMerge) > 0
     ? Number(rawMerge)

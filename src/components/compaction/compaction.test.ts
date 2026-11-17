@@ -102,11 +102,23 @@ describe("config: 纯函数校验（替代 schemastery/zod）", () => {
     expect(cfg.tiers).toHaveLength(1);
   });
 
-  it("defaults promptMode to dsh-default and disabled when setting says 0", () => {
+  it("defaults promptMode to default and disabled when setting says 0", () => {
     const cfg = readCompactionConfig((k) => (k === "compaction.enabled" ? "0" : null));
     expect(cfg.enabled).toBe(false);
-    expect(cfg.promptMode).toBe("dsh-default");
+    expect(cfg.promptMode).toBe("default");
     expect(cfg.tiers).toEqual([]);
+  });
+
+  it("accepts all three prompt modes and falls back to default on unknown", () => {
+    const read = (mode: string | null) =>
+      readCompactionConfig((k) => (k === "compaction.promptMode" ? mode : null)).promptMode;
+    expect(read("default")).toBe("default");
+    expect(read("anchored")).toBe("anchored");
+    expect(read("quilt")).toBe("quilt");
+    // 大小写与空白容忍
+    expect(read("  ANCHORED ")).toBe("anchored");
+    // 未知值回落 default（最接近宿主自带行为的一档）
+    expect(read("bogus")).toBe("default");
   });
 
   it("toQuiltConfig produces usable engine config", () => {

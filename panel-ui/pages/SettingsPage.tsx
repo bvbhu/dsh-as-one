@@ -840,9 +840,10 @@ export default function SettingsPage(): React.JSX.Element {
           <span className="ui-card-sub">分块摘要 + 归并，可选 session-search 锚点</span>
         </div>
         <p className="ui-field-hint">
-          开启后在宿主压缩摘要时接管 <code>purpose=compaction</code> 请求，按模型池分块摘要再归并；任何失败都回退宿主原摘要。
-          <b>提示词模式</b>：<code>dsh-default</code> 保持宿主提示词；<code>anchored</code> 附加 <code>&lt;session-search-anchors&gt;</code> 锚点块。
-          模型池 <code>tiers</code> 为空时使用 <b>压缩模型（逻辑模型名）</b> 的 members 作为池。
+          <b>default</b>：挑一个上下文装得下整段历史的模型一次压完，提示词与 DSH 自带压缩完全一致，窗口都不够时回退宿主摘要。
+          <b>anchored</b>：分块摘要再归并，结果附 <code>&lt;session-search-anchors&gt;</code> 锚点块，可按 seq 取回原文。
+          <b>quilt</b>：同样分块归并，但不附锚点块（纯降 token 成本）。
+          任何一步失败都回退宿主原摘要。模型池 <code>tiers</code> 为空时用<b>压缩逻辑模型</b>的 members。
         </p>
         <div className="ui-fields">
           {specs.map((s) => field("compaction", s, s.kind === "json"))}

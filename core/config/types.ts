@@ -495,7 +495,7 @@ export const COMPONENT_DEFAULTS = {
   "subagentLimit.countMainAgent": "true",
   "compaction.enabled": "true",
   "compaction.logicalModel": "",
-  "compaction.promptMode": "dsh-default",
+  "compaction.promptMode": "default",
   "compaction.tiers": "[]",
 } as const;
 
@@ -511,8 +511,17 @@ export interface SubagentLimitRule {
   max: number;
 }
 
-/** 压缩提示词模式。 */
-export type CompactionPromptMode = "dsh-default" | "anchored";
+/**
+ * 压缩模式（`compaction.promptMode`）——三档，语义互斥：
+ *
+ * - `default`：**一次压完**。挑一个上下文窗口装得下整段历史的模型（按调度顺序，
+ *   在够大的模型里随机），用宿主原生压缩提示词一次完成；同时允许会话模型兜底。
+ *   除了"换了个够大的模型"，其余与 DSH 自带压缩完全一致。
+ * - `anchored`：quilt 分块摘要 + 归并，结果附 `<session-search-anchors>` 锚点块
+ *   与恢复指令（配合 session-search 插件按 seq 区间取回原文）。
+ * - `quilt`：quilt 分块摘要 + 归并，但**不**附锚点块（纯分块降 token 成本）。
+ */
+export type CompactionPromptMode = "default" | "anchored" | "quilt";
 
 // ===========================================================================
 // 运行期内存态形状参考(约定 D17-D19:不落盘,仅形状镜像)
