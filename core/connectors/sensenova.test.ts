@@ -38,7 +38,7 @@ function fakeJwt(payload: Record<string, unknown>): string {
   return `${b64({ alg: "none" })}.${b64(payload)}.sig`;
 }
 
-/** pool-usage 报文样例(镜像 Nexus collector 实测形状)。 */
+/** pool-usage 报文样例(实测形状)。 */
 function samplePoolUsage(): Record<string, unknown> {
   return {
     plan: { id: "free", name: "Free Plan", type: "PLATFORM_FREE" },

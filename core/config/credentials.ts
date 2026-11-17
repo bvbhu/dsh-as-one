@@ -5,7 +5,7 @@
  * --------
  * 凭据是**唯一允许持有明文密钥**的层:对外只暴露 {@link CredentialSummary}
  * (无密钥)与 {@link CredentialVault.secret} 这一个明文出口
- * (镜像 nexus/db/repo.py L716-721 ``credential_secret`` 的
+ * (镜像 ``credential_secret`` 的
  * 「唯一明文出口」纪律)。
  *
  * **后端可注入**是硬要求(阶段一 = 本地文件,阶段二 = DSH ``ctx.credentials``):
@@ -15,20 +15,20 @@
  *   真实上游令牌**永不出进程**(docs/dsh-plugin-reference-research.md),
  *   由宿主 ``ctx.credentials`` 按 ``credentialRef`` 逐次解析。
  *
- * 热轮换语义(重要,与 Nexus 对齐)
+ * 热轮换语义(重要)
  * ------------------------------
- * ⚠️ **Nexus 没有「旧值宽限期」机制**:``save_tokens``
- * (nexus/credentials.py L260-327)是**立即写透**——刷新成功就覆盖
+ * ⚠️ **没有「旧值宽限期」机制**:``save_tokens``
+ * 是**立即写透**——刷新成功就覆盖
  * ``secret`` 列,下次读到新值;在途请求手里攥着的是**旧令牌的字符串副本**,
  * 自然用到它失效为止。这就是事实上的「宽限」:旧值的可存活范围 =
  * 已发出请求的闭包生命周期,而不是存储层维护的一个时间窗。
  *
- * 因此本层 ``rotate()`` 也**不维护**旧值宽限窗(Nexus 没有,不臆造)。
+ * 因此本层 ``rotate()`` 也**不维护**旧值宽限窗(不臆造)。
  * 阶段二 DSH 若引入宿主侧轮换语义(如 ``ctx.credentials`` 的
  * hot-rotation 事件),再在此扩展 —— 见文件末尾的 DSH sketch。
  *
- * 与 Nexus 的字段/行为对应
- * ------------------------
+ * 字段 / 行为对应
+ * ----------------
  * - 写入:``upsert_credential``(repo.py L657-688)+ ``save_tokens``
  *   (credentials.py L260-327)——空用户名兜底成 provider 名(L675);
  *   ``refresh_token`` 只在拿到新值时覆盖(L267-268);raw 里的到期字段
@@ -92,7 +92,7 @@ export class UnsupportedBackendOperation extends CredentialError {
 
 /**
  * 文件里的凭据行 —— **snake_case 逐字镜像** ``credential`` 表列
- * (schema.sql L117-128),便于与 Nexus DB 导出对表:
+ * (schema.sql L117-128):
  *
  * | 文件键           | 表列            |
  * |------------------|-----------------|
@@ -158,7 +158,7 @@ export interface CredentialBackend {
 }
 
 // ===========================================================================
-// 纯函数工具(与 Nexus 一一对应)
+// 纯函数工具(与参考实现一一对应)
 // ===========================================================================
 
 /** 主键字符串 ``"<provider>/<username>"``(repo.py L186 ``credential_key``)。 */
@@ -169,7 +169,7 @@ export function credentialKey(provider: string, username: string): CredentialId 
 /**
  * 令牌到期时刻(epoch 秒),``null`` = 未知。
  *
- * 镜像 nexus/credentials.py L148-182 ``expires_epoch_seconds``:
+ * 镜像 ``expires_epoch_seconds``:
  * **列优先**于 raw_json(反过来会在刷新后给出错误答案 —— 刷新把新到期
  * 写进列,raw 里还留着旧值,L152-157 实测踩过);``>= 1e11`` 判毫秒;
  * raw 回退键顺序 ``token_expires_at_ms`` → ``expires_at``;字符串数字也认。
@@ -220,9 +220,9 @@ export function fingerprint(value: string | null | undefined): string | null {
 /**
  * raw_json 安全解析(镜像 credentials.py L58-68:坏 JSON → 空对象,不炸)。
  *
- * ⚠️ **`raw_json` 在文件里是 JSON **字符串**,不是对象** —— Nexus 的
- * `credentials.py:_load_json` 走的是 `json.loads(raw)`,而 As One 的凭据文件
- * 落盘形态同样是 `"raw_json": "{\"console_jwt\": \"…\"}"`。
+ * ⚠️ **`raw_json` 在文件里是 JSON **字符串**,不是对象** —— `credentials.py:_load_json`
+ * 走的是 `json.loads(raw)`,而 As One 的凭据文件落盘形态同样是
+ * `"raw_json": "{\"console_jwt\": \"…\"}"`。
  *
  * ⚠️ 以前这里只接受**对象**,于是文件里那串字符串一律被当成「不是对象」→
  * 返回 `{}` → `cred.raw.console_jwt` 永远读不到。症状:SenseNova 刷新恒报
@@ -275,7 +275,7 @@ function toStored(cred: Credential): StoredCredential {
     secret: cred.secret,
     refresh_secret: cred.refreshSecret,
     expires_at: cred.expiresAt,
-    // ⚠️ `raw_json` 落盘成 **JSON 字符串**,与 Nexus 的 DB 列语义一致
+    // ⚠️ `raw_json` 落盘成 **JSON 字符串**,与 DB 列语义一致
     // (`credentials.py` 那一列就是 TEXT,读侧 `json.loads`)。以前这里直接写对象,
     // 于是同一个文件里两种形态并存 —— 读侧只认一种,于是另一种的数据「静默丢失」。
     // 现在写读都用「JSON 字符串」这一种,`parseRaw` 两种都吃(兼容旧文件)。
@@ -425,7 +425,7 @@ export class FileCredentialBackend implements CredentialBackend {
     const next = new Map<string, StoredCredential>();
     for (const row of rows) {
       if (!isStoredCredential(row)) {
-        // 单条坏行跳过 + 出声(与 Nexus「坏条目跳过」哲学一致,但这里
+        // 单条坏行跳过 + 出声(与「坏条目跳过」哲学一致,但这里
         // 通过 console 警告而非 logger —— 本层不引入日志框架)。
         console.warn("[config/credentials] 跳过非法凭据行:", row);
         continue;
@@ -595,7 +595,7 @@ export class CredentialVault {
    * 某 provider 全部凭据的 ``{username: secret}``(镜像 repo.py L723-730
    * ``secrets_for``,面板探测 / 连接器用)。
    *
-   * ⚠️ 与 Nexus 的**有意偏差**:Nexus 的 ``str(r["secret"])`` 会把
+   * ⚠️ **有意偏差**:``str(r["secret"])`` 会把
    * NULL 变成字符串 ``"None"``(Python 语义);TS 侧**跳过** secret 为
    * null 的行 —— 探测结果里出现 "None" 字符串是明确的 bug 特征。
    */
@@ -665,7 +665,7 @@ export class CredentialVault {
   /**
    * 热轮换 —— 刷新结果写回(镜像 ``save_tokens``,credentials.py L260-327):
    *
-   * - ``secret`` 立即覆盖(Nexus 无宽限期,见文件头「热轮换语义」);
+   * - ``secret`` 立即覆盖(无宽限期,见文件头「热轮换语义」);
    * - ``refreshSecret`` **只在拿到新值时覆盖**(上游可能不轮换,L267-268);
    * - ``expiresAt`` 给了就覆盖,并把 ``raw_json`` 里的到期字段
    *   (``token_expires_at_ms`` / ``expires_at``,若存在)同步成**毫秒**

@@ -11,7 +11,7 @@
  */
 
 import { orderRawLevels } from "@as-one/core/src/gateway/reasoning-effort.js";
-import type { NexusDatabase } from "@as-one/core/src/db/database.js";
+import type { AsOneDatabase } from "@as-one/core/src/db/database.js";
 import type { ProviderRegistry } from "@as-one/core/src/config/providers.js";
 
 /** 真实模型视图(注册表为主,db.real_model 行作 overlay)。 */
@@ -100,7 +100,7 @@ export function serializeReasoningEfforts(
 /** 真实模型视图(注册表为主,db.real_model 行作 overlay)。 */
 export function realModelMapOf(
   registry: ProviderRegistry,
-  db: NexusDatabase,
+  db: AsOneDatabase,
   pid?: string,
 ): Map<string, ModelView> {
   const out = new Map<string, ModelView>();

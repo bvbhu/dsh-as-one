@@ -1,5 +1,5 @@
 /**
- * 凭据自动刷新域 —— 从 assembly.ts 拆出(镜像 nexus/refresh.py,只读参照)。
+ * 凭据自动刷新域 —— 从 assembly.ts 拆出(旧实现只读参照)。
  *
  * 内容:刷新常量(REFRESH_*, TRAE_*, WB_*)、刷新错误类型、凭据刷新实现
  * (trae 按 edition 契约 / workbuddy 带 X-User-Id 头集)。
@@ -19,16 +19,16 @@ import {
   parse_refresh_response as parseWbRefreshResponse,
 } from "@as-one/core/src/connectors/workbuddy.js";
 
-// ── 凭据自动刷新:镜像 nexus/refresh.py(只读参照)──────────────────────────
+// ── 凭据自动刷新(旧实现只读参照)──────────────────────────
 
-/** 支持凭据自动刷新的渠道(Nexus REFRESH_PROVIDERS + As One 新增 minimax)。 */
+/** 支持凭据自动刷新的渠道(REFRESH_PROVIDERS,另含 As One 新增的 minimax)。 */
 const REFRESH_PROVIDERS = ["trae", "workbuddy", "minimax"] as const;
-/** 到期判定余量(秒)(Nexus REFRESH_MARGIN_S = 300.0)。 */
+/** 到期判定余量(秒)(REFRESH_MARGIN_S = 300.0)。 */
 export const REFRESH_MARGIN_S = 300;
-/** 刷新请求超时(毫秒;Nexus _post_json timeout=20.0)。 */
+/** 刷新请求超时(毫秒;上游 timeout=20.0)。 */
 const REFRESH_TIMEOUT_MS = 20_000;
 
-// trae 刷新端点常量(Nexus refresh.py L72-85)。
+// trae 刷新端点常量。
 const TRAE_DEFAULT_HOST_CN = "https://api.trae.cn";
 const TRAE_DEFAULT_HOST_AI = "https://api.trae.ai";
 const TRAE_CLOUDIDE_PATH = "/cloudide/api/v3/trae/oauth/ExchangeToken";
@@ -36,17 +36,17 @@ const TRAE_SOLO_PATH = "/trae/api/v3/oauth/ExchangeToken";
 const TRAE_CN_CLIENT_ID = "ono9krqynydwx5";
 const TRAE_SOLO_CLIENT_ID = "en1oxy7wnw8j9n";
 
-// workbuddy 刷新端点常量(Nexus refresh.py L72-85)。
+// workbuddy 刷新端点常量。
 const WB_CN_CHAT_BASE = "https://copilot.tencent.com";
 const WB_REFRESH_PATH = "/v2/plugin/auth/token/refresh";
 const WB_CLIENT_UA = "CLI/2.63.2 CodeBuddy/2.63.2";
 const WB_CN_BILLING_BASE = "https://www.codebuddy.cn";
 const WB_GLOBAL_DOMAINS = ["workbuddy.ai", "codebuddy.ai"];
 
-/** 刷新失败(传输 / 上游拒绝 / 契约不匹配)—— 镜像 Nexus RefreshError。 */
+/** 刷新失败(传输 / 上游拒绝 / 契约不匹配)。 */
 class RefreshError extends Error {}
 
-/** 凭据缺失导致的刷新不可用 —— 镜像 Nexus RefreshCredentialError。 */
+/** 凭据缺失导致的刷新不可用。 */
 class RefreshCredentialError extends RefreshError {}
 
 /** 刷新所需的凭据视图(与 core 的 {@link Credential} 结构兼容)。 */
@@ -69,7 +69,7 @@ export function strOf(raw: Record<string, unknown>, key: string): string | null 
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
 }
 
-/** JWT payload(不解签)—— 镜像 Nexus refresh.py L163-176 的 user_id 回退。 */
+/** JWT payload(不解签)—— user_id 取不到时按同款回退。 */
 function jwtPayloadOf(token: string): Record<string, unknown> | null {
   if (token.split(".").length < 2) return null;
   try {
@@ -95,10 +95,10 @@ function traeRefreshHost(cred: RefreshCred): string {
 }
 
 /**
- * trae 刷新契约:**按 edition 而非区域**(Nexus trae_refresh_contract)。
+ * trae 刷新契约:**按 edition 而非区域**。
  * refresh token 绑定 ClientID,edition 判错上游回 040004
  * "refresh token is not matched to the client"(CN 桌面 SOLO 曾被误归 cn 契约)。
- * core 的 trae_refresh_contract 按区域、与 Nexus 不一致,故此处本地实现;
+ * core 的 trae_refresh_contract 按区域、与此处不一致,故本地实现;
  * 应答解析仍复用 core 的 parse_refresh_response。
  */
 function traeContractOf(cred: RefreshCred): { path: string; clientId: string; deviceInfo: boolean } {
@@ -131,7 +131,7 @@ function traeUserId(cred: RefreshCred): string {
 }
 
 /**
- * trae solo DeviceProof —— 镜像 Nexus _device_proof(L277-298):
+ * trae solo DeviceProof:
  * ECDSA-P256/SHA-256 对 "POST\n{path}\n{client_id}\n{refresh_token}\n{ts}\n{nonce}"
  * 签名,Signature 为标准 base64。core 的 device_proof 消息格式不同,故本地实现。
  */
@@ -150,7 +150,7 @@ function traeDeviceProof(
   return { Signature: signature, Timestamp: timestamp, Nonce: nonce };
 }
 
-/** workbuddy 区域判定(镜像 Nexus _wb_region_of):www. 前缀剥离后按全局域名表。 */
+/** workbuddy 区域判定(www. 前缀剥离后按全局域名表)。 */
 function wbRegionOf(domain: string): "cn" | "global" {
   let d = domain.trim().toLowerCase();
   if (d.startsWith("www.")) d = d.slice(4);
@@ -160,7 +160,7 @@ function wbRegionOf(domain: string): "cn" | "global" {
   return "cn";
 }
 
-/** workbuddy billing origin(镜像 Nexus _wb_billing_base)。 */
+/** workbuddy billing origin。 */
 function wbBillingBase(domain: string): string {
   if (wbRegionOf(domain) !== "global") return WB_CN_BILLING_BASE;
   return domain.toLowerCase().includes("codebuddy.ai")
@@ -168,7 +168,7 @@ function wbBillingBase(domain: string): string {
     : "https://www.workbuddy.ai";
 }
 
-/** workbuddy 刷新 chat base(镜像 Nexus wb_chat_base)。 */
+/** workbuddy 刷新 chat base。 */
 function wbChatBase(domain: string): string {
   if (wbRegionOf(domain) !== "global") return WB_CN_CHAT_BASE;
   return domain.toLowerCase().includes("codebuddy.ai")
@@ -178,7 +178,7 @@ function wbChatBase(domain: string): string {
 
 /**
  * workbuddy 域:raw.domain 优先;其次 raw.region;再退到 token iss 判定
- * (core detect_region_from_token,与 Nexus 解不出时按区域兜底同思路)。
+ * (core detect_region_from_token,解不出时按区域兜底同思路)。
  */
 function wbDomainOf(cred: RefreshCred): string {
   const domain = strOf(cred.raw, "domain");
@@ -188,7 +188,7 @@ function wbDomainOf(cred: RefreshCred): string {
   return region === "cn" ? "copilot.tencent.com" : "https://www.workbuddy.ai";
 }
 
-/** POST JSON 并校验应答 —— 镜像 Nexus _post_json(L182-200)。 */
+/** POST JSON 并校验应答(`_post_json` 同款)。 */
 async function postJson(
   url: string,
   headers: Record<string, string>,
@@ -230,11 +230,11 @@ export interface RefreshOutcome {
   accessToken: string;
   expiresAtMs: number | null;
   refreshToken?: string;
-  /** 写回凭据 raw 的附加字段(Nexus extra_updates,如 trae solo 的 device_keypair)。 */
+  /** 写回凭据 raw 的附加字段(extra_updates,如 trae solo 的 device_keypair)。 */
   extra?: Record<string, unknown>;
 }
 
-/** trae 刷新(镜像 Nexus refresh_trae):契约按 edition;应答解析复用 core。 */
+/** trae 刷新(契约按 edition;应答解析复用 core)。 */
 export async function refreshTraeToken(cred: RefreshCred): Promise<RefreshOutcome> {
   if (!cred.refreshSecret) {
     throw new RefreshCredentialError("无 refresh token,请在客户端重新登录后重新发现");
@@ -289,9 +289,9 @@ export async function refreshTraeToken(cred: RefreshCred): Promise<RefreshOutcom
 }
 
 /**
- * workbuddy 刷新(镜像 Nexus refresh_workbuddy):**不带 Authorization**;
+ * workbuddy 刷新:**不带 Authorization**;
  * X-User-Id 必带(漏了不报 401,只拿到"不属于任何账号"的新令牌);
- * 头集 = core build_refresh_headers + Nexus 要求的 Origin/Referer/UA 等。
+ * 头集 = core build_refresh_headers + 上游额外要求的 Origin/Referer/UA 等。
  */
 export async function refreshWorkbuddyToken(cred: RefreshCred): Promise<RefreshOutcome> {
   if (!cred.refreshSecret) {
@@ -317,7 +317,7 @@ export async function refreshWorkbuddyToken(cred: RefreshCred): Promise<RefreshO
   const parsed = parseWbRefreshResponse(payload);
   return {
     accessToken: parsed.accessToken,
-    // 上游可能不给 expiresIn → core 返回 Infinity;此时保留旧到期(Nexus 语义)。
+    // 上游可能不给 expiresIn → core 返回 Infinity;此时保留旧到期(既有语义)。
     expiresAtMs: Number.isFinite(parsed.expiresAt) ? Math.round(parsed.expiresAt * 1000) : null,
     refreshToken: parsed.refreshToken,
   };

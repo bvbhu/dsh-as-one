@@ -4,7 +4,7 @@
  * 宿主无关:数据经 ./bridge 注入的 invoke 实现取回(Electron 走 preload IPC,DSH
  * 插件 client 走 POST /as-one/api/<method>)。组件不得绕过本接口直接 fetch。
  *
- * 契约:面板页面结构 1:1 照搬 Nexus 面板(用户 m07680),本文件的 RendererApi
+ * 契约:面板页面结构沿用既有面板设计(用户 m07680),本文件的 RendererApi
  * 方法全集与形状以 @as-one/panel/src/types 为准(冻结,勿改)。方法名即
  * method,直达主进程 dispatchPanel(panel, method, args) 的 switch。
  *
@@ -354,7 +354,7 @@ export function createPanelApi(): RendererApi {
     async sensenovaRefresh(force?: boolean, parts?: { catalog?: boolean; quota?: boolean }) {
       return call<ApiResult>("sensenovaRefresh", force, parts);
     },
-    // SenseNova 登录与账号管理(镜像 Nexus /sensenova/login 等路由)
+    // SenseNova 登录与账号管理(镜像 /sensenova/login 等路由)
     async sensenovaLogin(account: string, username: string | null, password: string, fetchKey?: boolean) {
       return call<ApiResult>("sensenovaLogin", account, username, password, fetchKey);
     },

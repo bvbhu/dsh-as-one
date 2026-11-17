@@ -17,15 +17,15 @@
  *
  * ## 写语义
  *
- * - 表里 ``raw_json`` 是 **JSON 字符串**(与 Nexus DB 列语义一致,
- *   ``toStored`` 也这么落盘);本后端读写时原样搬运,不做二次编码;
+ * - 表里 ``raw_json`` 是 **JSON 字符串**(与 ``toStored`` 落盘口径一致);
+ *   本后端读写时原样搬运,不做二次编码;
  * - 写入用 ``INSERT ... ON CONFLICT DO UPDATE``(即 ``credential.insert``
  *   的 upsert 语义),避免「先查后写」的竞态;
  * - ``onChange`` **不实现**:表是本进程独占写的(单实例锁保证),没有
  *   外部编辑器改库的场景,推送事件只会在自己的写路径上自我回环。
  */
 
-import type { NexusDatabase } from "./database.js";
+import type { AsOneDatabase } from "./database.js";
 import type { CredentialBackend, CredentialEvent, StoredCredential } from "../config/credentials.js";
 
 /** ``credential`` 行 → ``StoredCredential``(列名逐字对应,snake_case)。 */
@@ -58,7 +58,7 @@ function storedToRow(record: StoredCredential): {
   raw_json: string | null;
 } {
   // ``StoredCredential.raw_json`` 声明成 ``unknown``(文件后端直接落对象),
-  // 而表列是 **JSON 字符串**(Nexus DB 语义)。这里统一收敛:
+  // 而表列是 **JSON 字符串**。这里统一收敛:
   // 已是字符串就原样,否则序列化;``null``/``undefined`` → NULL。
   let rawJson: string | null = null;
   if (typeof record.raw_json === "string") rawJson = record.raw_json;
@@ -85,7 +85,7 @@ export class DbCredentialBackend implements CredentialBackend {
   readonly writable = true;
   private readonly listeners = new Set<(events: CredentialEvent[]) => void>();
 
-  constructor(private readonly db: NexusDatabase) {}
+  constructor(private readonly db: AsOneDatabase) {}
 
   onChange(listener: (events: CredentialEvent[]) => void): () => void {
     this.listeners.add(listener);
@@ -108,7 +108,7 @@ export class DbCredentialBackend implements CredentialBackend {
   }
 
   async remove(provider: string, username: string): Promise<boolean> {
-    // 先判存在再删:``delete`` 的返回值语义在 Nexus 侧是「删了几行」,
+    // 先判存在再删:``delete`` 的返回值语义是「删了几行」,
     // 而 vault 要的是「原来有没有」。
     if (!this.db.credential.get(provider, username)) return false;
     this.db.credential.delete(provider, username);

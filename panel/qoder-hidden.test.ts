@@ -7,12 +7,12 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { openDatabase, type NexusDatabase } from "@as-one/core/src/db/database.js";
+import { openDatabase, type AsOneDatabase } from "@as-one/core/src/db/database.js";
 import type { QoderCatalogModel } from "@as-one/core/src/connectors/qoder-wire.js";
 
 import { syncSelectedRealModels } from "./qoder.js";
 
-let db: NexusDatabase;
+let db: AsOneDatabase;
 
 beforeEach(() => {
   db = openDatabase(":memory:");

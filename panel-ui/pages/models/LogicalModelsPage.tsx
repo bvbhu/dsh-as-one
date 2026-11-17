@@ -1,7 +1,7 @@
 /**
- * 逻辑模型子页(严格 1:1 复刻 Nexus panel/web/src/LogicalModels.vue,2026-10-12 定案结构)。
+ * 逻辑模型子页(严格 1:1 复刻既有面板,2026-10-12 定案结构)。
  *
- * 结构对照(Nexus 模板 → 本页,DOM/class/文案逐字对齐):
+ * 结构对照(原模板 → 本页,DOM/class/文案逐字对齐):
  *   section.section(max-width 720px,.lm-section)→ 同构
  *   div.err(role=alert) / p.savedNotice(role=status) → 同(错误 / 保存成功通知)
  *   ul.rows > li.rowCard               → 每逻辑模型一张行卡
@@ -12,20 +12,20 @@
  *   li.rowCard 新建卡 → rowName「添加逻辑模型」+ LogicalModelEditor(creating=true)
  *   button.addButton「＋ 添加逻辑模型」(creating 时隐藏)
  *
- * ⚠️ 契约降级说明(panel-types.ts 冻结;Nexus 的运行时数据本页无法完整照搬):
- * 1. Nexus 的「冷却中 / 可用」pill 与「未在运行 Router」取 status.deployments 运行时行
+ * ⚠️ 契约降级说明(panel-types.ts 冻结;原页面的运行时数据本页无法完整照搬):
+ * 1. 原页面的「冷却中 / 可用」pill 与「未在运行 Router」取 status.deployments 运行时行
  *    (按 model_name 索引,配合 fmtDuration 冷却提示)。As One 契约没有 Status 的
  *    逐模型运行时数据 —— GatewayStatus 只有聚合 cooldown_count,RuntimeSnapshot 无任何
  *    冷却字段 → 本页**不渲染** 冷却中/可用 pill,也不渲染「未在运行 Router」(无法判定
- *    运行态,渲染即编造);Nexus 对这些数据的空态即「不显示」,此处语义一致。
- * 2. Nexus 的视觉徽章(全视觉/有视觉)取自运行行 info.supports_vision / all_members_vision;
+ *    运行态,渲染即编造);原页面对这些数据的空态即「不显示」,此处语义一致。
+ * 2. 原页面的视觉徽章(全视觉/有视觉)取自运行行 info.supports_vision / all_members_vision;
  *    As One 用 LogicalModelGroup.deployments[].supports_vision 目录字段做同一判定
- *    (some=有视觉 / every=全视觉,语义与 Nexus tooltip 完全一致),仅在组有视觉成员时显示。
- * 3. 保存/删除的 !r.ok 分支:Nexus 的 api 层在 !ok 时抛错进 catch;As One 契约直接返回
+ *    (some=有视觉 / every=全视觉,语义与 tooltip 完全一致),仅在组有视觉成员时显示。
+ * 3. 保存/删除的 !r.ok 分支:既有 api 层在 !ok 时抛错进 catch;As One 契约直接返回
  *    {ok, message},故这里显式把 !ok 落进 error(等价语义)。
- * 4. members 契约是 "provider/model" 串数组(Nexus 是 {provider,model} 对象数组),
+ * 4. members 契约是 "provider/model" 串数组(原页面是 {provider,model} 对象数组),
  *    回填/提交按首个斜杠拆/拼(裸模型名可能带斜杠,indexOf 取第一个,与
- *    Nexus 编辑器「不做字符串拆分拿 model 字段配对」在 UI 行为上等价)。
+ *    编辑器「不做字符串拆分拿 model 字段配对」在 UI 行为上等价)。
  */
 import React from "react";
 import { rendererApi } from "../../api";
@@ -39,7 +39,7 @@ import {
   type StrategyKey,
 } from "../../components/LogicalModelEditor";
 
-/** 策略键 → 中文名(Nexus labelOf 同款;未知键原样显示)。 */
+/** 策略键 → 中文名(labelOf 同款;未知键原样显示)。 */
 function labelOf(key: string): string {
   return STRATEGY_LABELS[key as StrategyKey] ?? key;
 }
@@ -56,7 +56,7 @@ function msg(e: unknown): string {
 
 export function LogicalModelsPage(): React.JSX.Element {
   const [groups, setGroups] = React.useState<LogicalModelGroup[]>([]);
-  /** 编辑器档位候选(部署行:provider/model —— Nexus 的 deployments 目录)。 */
+  /** 编辑器档位候选(部署行:provider/model —— 原页面的 deployments 目录)。 */
   const [catalog, setCatalog] = React.useState<Array<{ provider: string; model: string }>>([]);
   const [error, setError] = React.useState("");
   const [notice, setNotice] = React.useState("");
@@ -92,7 +92,7 @@ export function LogicalModelsPage(): React.JSX.Element {
   }, []);
 
   /**
-   * 视觉徽章判定(Nexus 语义同源:supports_vision 的 some/every,
+   * 视觉徽章判定(语义同源:supports_vision 的 some/every,
    * 数据源换成目录字段 —— 见文件头降级说明 2)。
    */
   function visionOf(g: LogicalModelGroup): { all: boolean } | null {
@@ -122,7 +122,7 @@ export function LogicalModelsPage(): React.JSX.Element {
     setEditingName(g.model);
     setFormDisplayName(g.display_name ?? "");
     setFormStrategy((g.routing_strategy ?? "random") as StrategyKey);
-    // Nexus 同款:`g.members ?? (g.deployments ?? []).map(...)` —— **空数组不回退**,
+    // 口径:`g.members ?? (g.deployments ?? []).map(...)` —— **空数组不回退**,
     // 只有 null/undefined 才回退到部署行(契约里 members 必填,故这里只做运行时防御)。
     const rawMembers = g.members as string[] | null | undefined;
     const members: LogicalMember[] =
@@ -139,7 +139,7 @@ export function LogicalModelsPage(): React.JSX.Element {
     setCreating(false);
   }
 
-  /** 写入前校验(Nexus validateForm 同规则;错误就地显示,不落盘)。 */
+  /** 写入前校验(validateForm 同规则;错误就地显示,不落盘)。 */
   function validateForm(): string | null {
     if (creating) {
       const name = editingName.trim();

@@ -4,7 +4,7 @@
  * 覆盖:
  * - 内存后端:put / get / list(无密钥)/ describe / secret(唯一明文出口) /
  *   secretsFor / 空用户名兜底 / remove;
- * - rotate:立即覆盖(Nexus 无宽限期)、refreshSecret 不在未提供时覆盖、
+ * - rotate:立即覆盖(无宽限期)、refreshSecret 不在未提供时覆盖、
  *   raw 到期字段同步成毫秒、不存在时抛错;
  * - expiresAtOf:列优先 + 毫秒判定 + raw 回退键;
  * - needsRefresh:无 refresh token / 到期未知 / margin 边界;
@@ -189,7 +189,7 @@ describe("CredentialVault(内存后端)", () => {
 // ===========================================================================
 
 describe("CredentialVault.rotate", () => {
-  it("立即覆盖 secret(Nexus 无宽限期)", async () => {
+  it("立即覆盖 secret(无宽限期)", async () => {
     const vault = new CredentialVault(new MemoryCredentialBackend());
     await vault.put({ provider: "p", username: "u", secret: "old" });
 
@@ -544,7 +544,7 @@ describe("CredentialVault 杂项", () => {
 describe("raw_json 形态兼容", () => {
   /**
    * ⚠️ 凭据文件里 `raw_json` 是 **JSON 字符串**(`"{\"console_jwt\": \"…\"}"`),
-   * Nexus 的 DB 列也是 TEXT(`credentials.py:_load_json` 走 `json.loads`)。
+   * DB 列也是 TEXT(`credentials.py:_load_json` 走 `json.loads`)。
    * 以前 As One 的读侧只认**对象**,于是文件里那串字符串一律被当成「不是对象」
    * → `cred.raw` 恒为 `{}` → `raw.console_jwt` 读不到 → SenseNova 刷新恒报
    * 「没有控制台令牌」(而令牌确实在文件里);trae / workbuddy 账号行的
@@ -604,7 +604,7 @@ describe("raw_json 形态兼容", () => {
     expect(cred?.secret).toBe("k"); // 其余字段不受影响
   });
 
-  it("写出的文件里 raw_json 是 JSON 字符串(与 Nexus 列语义一致)", async () => {
+  it("写出的文件里 raw_json 是 JSON 字符串(与 DB 列语义一致)", async () => {
     const path = join(dir, "creds.json");
     const vault = new CredentialVault(new FileCredentialBackend(path));
     await vault.put({

@@ -154,9 +154,9 @@ export function createChannelsSyncDomain(
     // ── 面板方法 ─────────────────────────────────────────────────────────────
   // ────────────────────────────────────────────────────────────────────────────
   // 渠道额度(trae/workbuddy):按需拉取 + 内存快照 + 冷却闸门。
-  // 镜像 Nexus collector/trae.py、collector/workbuddy.py 的口径:
+  // 逐渠道采集的口径(trae、workbuddy):
   //   - 不落库(D17),重启即空 —— 需要时由 syncChannel(force)/页面拉起;
-  //   - 冷却跟随设置 external_refresh.interval_hours(Nexus _refresh_cooldown_s 同源),
+  //   - 冷却跟随设置 external_refresh.interval_hours(`_refresh_cooldown_s` 同源),
   //     只约束自动刷新,用户点「刷新」用 force 绕过;
   //   - 失败记 QuotaSnapshot.error(真实原因),永不伪造成功。
   // ────────────────────────────────────────────────────────────────────────────
@@ -173,7 +173,7 @@ export function createChannelsSyncDomain(
     if (!CH_QUOTA_PROVIDERS.has(pid)) return null;
     const cred = await ctx.vault.get(pid, username);
     const token = cred?.secret ?? null;
-    if (!token || !cred) return null; // 没有密钥 → 不出现在额度里(镜像 Nexus leftover)
+    if (!token || !cred) return null; // 没有密钥 → 不出现在额度里(leftover 语义)
     const raw = cred.raw ?? {};
     const account: QuotaAccountInput = {
       credentialKey: key,
@@ -254,7 +254,7 @@ export function createChannelsSyncDomain(
       quota_exhausted: null,
     };
   }
-  /** 冷却闸门拉取(单飞);force=true 绕过冷却(镜像 Nexus force 语义)。 */
+  /** 冷却闸门拉取(单飞);force=true 绕过冷却(force 语义)。 */
   const chMaybeFetchQuota = (pid: string, username: string, force = false): void => {
     const key = credentialKey(pid, username);
     const now = Date.now();
@@ -290,7 +290,7 @@ export function createChannelsSyncDomain(
     return p;
   };
   /**
-   * 凭据 → 目录拉取账号上下文(镜像 Nexus `AccountContext`)。
+   * 凭据 → 目录拉取账号上下文(`AccountContext`)。
    *
    * 与 `chQuotaFetch` 的取数完全同源(同一 vault.get / 同一 raw 字段),
    * 保证「读目录」与「读额度」用的是同一份凭据口径。
@@ -318,7 +318,7 @@ export function createChannelsSyncDomain(
    * 渠道模型目录拉取(免额度):trae = wire ∪ remote、workbuddy = /v3/config、
    * sensenova = token/v1/models。失败抛错(调用方转 ApiResult)。
    *
-   * 冷却语义与 Nexus `_refresh_cooldown_s` 对齐:**只约束自动刷新**,
+   * 冷却语义与 `_refresh_cooldown_s` 对齐:**只约束自动刷新**,
    * 用户点「刷新」(force) 绕过 —— 与 chAwaitQuota 同一套闸门。
    */
   const chCatalogCache = new Map<string, { fetchedAtMs: number; result: CatalogResult }>();
@@ -335,7 +335,7 @@ export function createChannelsSyncDomain(
     chCatalogCache.set(`${pid}/${username}`, { fetchedAtMs: Date.now(), result });
     return result;
   };
-  /** 冷却闸门拉取(单飞);force=true 绕过冷却(镜像 Nexus force 语义)。 */
+  /** 冷却闸门拉取(单飞);force=true 绕过冷却(force 语义)。 */
   const chAwaitCatalog = async (pid: string, username: string, force = false): Promise<CatalogResult> => {
     const key = `${pid}/${username}`;
     const now = Date.now();
@@ -359,10 +359,10 @@ export function createChannelsSyncDomain(
    * 上游目录的**进程内缓存**(provider → 裸模型名 → 条目)。
    *
    * 为什么要有它:渠道页的模型表是「上游目录 ∪ 已登记」两边合并出来的
-   * (Nexus `_merge_catalog`),而「上游目录」只存在于这一次拉取的结果里 ——
+   * (`_merge_catalog`),而「上游目录」只存在于这一次拉取的结果里 ——
    * 没登记进 `real_model` 的模型**不能**写库(写了就等于替用户勾了选),
    * 可又必须在表格里显示成**未勾选**(否则用户看不到上游新出了什么)。
-   * Nexus 用 `_CATALOG_CACHE` 做同一件事(内存 + TTL,重启即清),这里同构。
+   * 这里用内存 + TTL 做同一件事(重启即清),结构相同。
    */
   const catalogRows = new Map<string, Map<string, CatalogEntry>>();
   /** 取某渠道的上游目录缓存(没有 → 空表)。 */
@@ -375,7 +375,7 @@ export function createChannelsSyncDomain(
    * `getProviderPage` 读的是 `db.real_model` ∪ 注册表,于是刷新前后表格一模一样
    * (症状:「点刷新,模型目录纹丝不动」)。
    *
-   * ⚠️ **不再把上游模型直接 upsert 进 `real_model`**。Nexus 的口径是
+   * ⚠️ **不再把上游模型直接 upsert 进 `real_model`**。既定口径是
    * 「目录 = 上游有什么,勾选 = 我要用哪些」:没勾的行只活在
    * {@link catalogRows} 里,勾了才由 `setChannelModels` 真正入库。以前靠
    * `hidden = 1` 表达「没勾」,那会把两个不同的概念压成一个位:
@@ -529,13 +529,13 @@ export function createChannelsSyncDomain(
     return entries.length;
   };
   /**
-   * 模型表来源标签(Nexus `_models_source` 的 TS 对应物)。
+   * 模型表来源标签(`_models_source` 的 TS 对应物)。
    *
    * - `router`  这一轮没拉到上游目录(或该渠道没有这条通路),显示已登记清单;
    * - `api`     全是上游目录行;
    * - `mixed`   上游目录 + 已登记(库里多出上游这一轮没有的模型)。
    *
-   * ⚠️ 与 Nexus 同一口径:**全上游才算 `api`**,只要有一行是「纯登记表」来源
+   * ⚠️ 同一口径:**全上游才算 `api`**,只要有一行是「纯登记表」来源
    * (`origin === "router"`)就是 `mixed`。以前用「有没有拉过目录」一个布尔量
    * 代替,于是「上游只回了 3 个、库里有 20 个」也会被标成 `mixed` 之外的值,
    * 页面上的来源说明与表格内容对不上。
@@ -565,7 +565,7 @@ export function createChannelsSyncDomain(
       })),
       expiring_soon: (() => {
         if (snapshot.packs.length === 0) return null;
-        const soonS = wallNow() + 3 * 86400; // 3 天内到期 = 快到期(Nexus SOON_MS 同款)
+        const soonS = wallNow() + 3 * 86400; // 3 天内到期 = 快到期(SOON_MS 同款)
         return snapshot.packs.some((p) => p.expires_at !== null && p.expires_at > 0 && p.expires_at <= soonS && p.counts_for_expiry);
       })(),
       not_applicable: false,
@@ -667,7 +667,7 @@ export function createChannelsSyncDomain(
       }
       return {
         channels,
-        // 配置已入库 —— 与 Nexus 一致,不再暴露 JSON 路径。
+        // 配置已入库 —— 不再暴露 JSON 路径。
         config_file: ctx.dbPath,
       };
     }

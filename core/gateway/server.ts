@@ -1,15 +1,15 @@
 /**
- * 基于 node:http 的 OpenAI 兼容网关服务面 —— 对齐 Nexus 实际暴露的对外端点。
+ * 基于 node:http 的 OpenAI 兼容网关服务面 —— 对齐实际暴露的对外端点。
  *
  * 端点集合(以 inventory §2 为准 —— **只有两个对外端点**,探针已删):
- * - `POST /v1/chat/completions`(nexus/gateway/app.py:720)—— 流式 → SSE 直出,
+ * - `POST /v1/chat/completions` —— 流式 → SSE 直出,
  *   非流式 → JSON;
  * - `GET  /v1/models`(app.py:667)—— 逻辑模型 + 真实模型并列。
  *
- * Nexus **没有**的端点不臆造(test_gateway_e2e §0 钉死 `/health` 与
+ * 上游 **没有**的端点不臆造(test_gateway_e2e §0 钉死 `/health` 与
  * `/api/scheduler` 均已移除,2026-10-12):
  * - ~~POST /v1/completions~~、~~POST /v1/embeddings~~、~~GET /health~~
- *   —— TODO(阶段二 DSH 形态若需要再议,需先在 Nexus 侧补语义)。
+ *   —— TODO(阶段二 DSH 形态若需要再议,需先在参考实现侧补语义)。
  *
  * 请求路径顺序(app.py 模块 docstring「请求路径(顺序是用户定案,不可调换)」):
  * 1. 鉴权(require_key —— 本文件 `requireKey`);
@@ -191,11 +191,11 @@ function sendJson(
 }
 
 // ---------------------------------------------------------------------------
-// 请求 → 上游请求(Nexus `_build_request` / `UpstreamRequest.to_body` 的网关侧)
+// 请求 → 上游请求(`_build_request` / `UpstreamRequest.to_body` 的网关侧)
 // ---------------------------------------------------------------------------
 
 function toUpstreamRequest(body: ChatCompletionRequest, stream: boolean): UpstreamRequest {
-  // ⚠️ `max_completion_tokens` 是 OpenAI 的同义字段,一起收(Nexus O1)。
+  // ⚠️ `max_completion_tokens` 是 OpenAI 的同义字段,一起收(决策 O1)。
   // 0 经 `||` 归 undefined —— 客户端显式发 0 视为「没带」。
   const mtClient = body.max_tokens || body.max_completion_tokens;
   // ⚠️ 字段分类(m09081):**能处理就处理,不能处理就丢弃,绝不拒绝请求**。
@@ -308,7 +308,7 @@ export async function forwardStream(
       res.write(ssePackChunk(chunk));
     }
     if (!headSent) {
-      // 空流:仍以 200 + [DONE] 收尾(与 Nexus「上游没吐块但没报错」一致)
+      // 空流:仍以 200 + [DONE] 收尾(与「上游没吐块但没报错」一致)
       res.writeHead(200, SSE_RESPONSE_HEADERS);
     }
     res.write(ssePackDone());
@@ -357,7 +357,7 @@ async function handleChatCompletions(
 
   const upstream = options.resolveUpstream(model);
   if (!upstream) {
-    // 未知模型 404(含真实模型直连 404;Nexus `_model_exists` 判据:
+    // 未知模型 404(含真实模型直连 404;`_model_exists` 判据:
     // 逻辑模型与真实模型都算 —— 这里由注入方的 resolveUpstream 决定存在性)
     throw new GatewayHttpError(404, { detail: `未知模型: ${model}` });
   }
@@ -493,7 +493,7 @@ function doneFromError(
 }
 
 /**
- * 流式(或普通)usage → Nexus 三键:Nexus cached=prompt_tokens_details.cached_tokens。
+ * 流式(或普通)usage → 三键:cached=prompt_tokens_details.cached_tokens。
  * usage 缺失 → null(逐 token 字段不得捏造 0)。
  */
 function usageToTokens(usage: unknown): RequestDoneInfo["usage"] {
@@ -522,7 +522,7 @@ async function handleModels(res: ServerResponse, options: GatewayOptions): Promi
 // ---------------------------------------------------------------------------
 
 function notFound(res: ServerResponse, method: string, path: string): void {
-  // Nexus 删除探针后,未注册路径就是普通 404(FastAPI `{"detail":"Not Found"}`)。
+  // 删除探针后,未注册路径就是普通 404(FastAPI `{"detail":"Not Found"}`)。
   sendJson(res, 404, { detail: `Not Found: ${method} ${path}` });
 }
 
@@ -572,7 +572,7 @@ async function handleRequest(
     route = "chat";
   } else {
     // TODO(阶段二再议,不在本阶段臆造):POST /v1/completions、POST /v1/embeddings、
-    // /health —— Nexus 均未实现(test_gateway_e2e §0:/health 已移除 404)。
+    // /health —— 上游均未实现(test_gateway_e2e §0:/health 已移除 404)。
     notFound(res, method, path);
     return;
   }

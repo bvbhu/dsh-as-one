@@ -1,6 +1,6 @@
 /**
  * checkin.ts 测试 —— mock fetch,零真实网络。
- * 语义对齐 Nexus `nexus/checkin.py`:
+ * 覆盖要点:
  *   - trae Authorization 是 `Cloud-IDE-JWT`,确认 false 时零写请求;
  *   - HTTP 200 + 非 0 业务 code = 业务拒绝,不算成功;
  *   - 区域门禁(国际版)直接拒绝,不发出任何请求。
@@ -130,7 +130,7 @@ describe("parseTraeStatus(扁平应答)", () => {
     expect(s.message).toBe("ok");
   });
 
-  it("非对象 → Nexus 缺省(enable 缺省开,credits 0)", () => {
+  it("非对象 → 缺省值(enable 缺省开,credits 0)", () => {
     const s = parseTraeStatus(null);
     expect(s).toEqual({
       checked_in: false,
@@ -146,7 +146,7 @@ describe("parseTraeStatus(扁平应答)", () => {
   it("enable 缺失=开;false 才是关;布尔值不当数字;字符串 code 不当数字", () => {
     expect(parseTraeStatus({}).enable).toBe(true);
     expect(parseTraeStatus({ enable: false }).enable).toBe(false);
-    // 布尔 true 不算数字(与 Nexus int/float not bool 一致)
+    // 布尔 true 不算数字(既有实现亦只认 int/float)
     expect(parseTraeStatus({ credits: true }).credits).toBe(0);
     expect(parseTraeStatus({ credits: "12" }).credits).toBe(0);
     // 字符串 code 不算数字 → null
@@ -367,7 +367,7 @@ describe("wbCheckinHeaders", () => {
   });
 });
 
-describe("wbCheckinStatus(状态端点已下线)", () => {
+describe("wbCheckinStatus(只读活动状态)", () => {
   it("全球域名 → CheckinRegionError,零请求", async () => {
     const { fetchFn, calls } = makeFetch(() => STATUS_OK({ code: 0, data: {} }));
     await expect(wbCheckinStatus(wbAccount({ domain: "www.workbuddy.ai" }), { fetchFn })).rejects.toThrow(
@@ -376,14 +376,76 @@ describe("wbCheckinStatus(状态端点已下线)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("不再打失效的 checkin-activity-status;明确返回 unavailable", async () => {
+  it("**必须 POST** 打 checkin-activity-status(GET 会 404,这是曾经的误判根因)", async () => {
     const { fetchFn, calls } = makeFetch(() => STATUS_OK({ code: 0, data: {} }));
-    const st = await wbCheckinStatus(wbAccount(), { baseUrl: "https://www.codebuddy.cn", fetchFn });
-    expect(st.unavailable).toBe(true);
-    expect(st.reason).toContain("已下线");
-    expect(st.today_checked_in).toBe(false);
-    expect(calls).toHaveLength(0);
+    await wbCheckinStatus(wbAccount(), { baseUrl: "https://www.codebuddy.cn", fetchFn });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toBe(`https://www.codebuddy.cn${WB_CHECKIN_STATUS_PATH}`);
     expect(WB_CHECKIN_STATUS_PATH).toBe("/v2/billing/meter/checkin-activity-status");
+  });
+
+  it("解析 today_checked_in / streak_days / daily_credit / checkin_dates / end_time", async () => {
+    const { fetchFn } = makeFetch(() =>
+      STATUS_OK({
+        code: 0,
+        msg: "OK",
+        data: {
+          active: true,
+          today_checked_in: true,
+          streak_days: 17,
+          daily_credit: 100,
+          today_credit: 100,
+          is_streak_day: false,
+          checkin_dates: ["2026-11-17", "2026-11-16"],
+          end_time: "2026-11-30 23:59:59",
+        },
+      }),
+    );
+    const st = await wbCheckinStatus(wbAccount(), { baseUrl: "https://www.codebuddy.cn", fetchFn });
+    expect(st.active).toBe(true);
+    expect(st.today_checked_in).toBe(true);
+    expect(st.streak_days).toBe(17);
+    expect(st.daily_credit).toBe(100);
+    expect(st.checkin_dates).toEqual(["2026-11-17", "2026-11-16"]);
+    expect(st.end_time).toBe("2026-11-30 23:59:59");
+  });
+
+  it("回归:today_credit === daily_credit 时**不得**据此判成已签", async () => {
+    // 上游实测:今天没签也会给 today_credit = daily_credit(它是「今日可得上限」)。
+    const { fetchFn } = makeFetch(() =>
+      STATUS_OK({
+        code: 0,
+        data: {
+          active: true,
+          today_checked_in: false,
+          streak_days: 16,
+          daily_credit: 100,
+          today_credit: 100,
+          checkin_dates: ["2026-11-16"],
+        },
+      }),
+    );
+    const st = await wbCheckinStatus(wbAccount(), { baseUrl: "https://www.codebuddy.cn", fetchFn });
+    expect(st.today_checked_in).toBe(false);
+    expect(st.checkin_dates).not.toContain("2026-11-17");
+  });
+
+  it("业务码非 0 → CheckinError,不伪造未签", async () => {
+    const { fetchFn } = makeFetch(() => STATUS_OK({ code: 50000, msg: "活动未开始", data: {} }));
+    await expect(
+      wbCheckinStatus(wbAccount(), { baseUrl: "https://www.codebuddy.cn", fetchFn }),
+    ).rejects.toThrow(/code=50000/);
+  });
+
+  it("HTTP 404 → WbHttpCheckinError(如实暴露状态码)", async () => {
+    const { fetchFn } = makeFetch(() => ({ status: 404, text: "404 page not found" }));
+    const err = await wbCheckinStatus(wbAccount(), {
+      baseUrl: "https://www.codebuddy.cn",
+      fetchFn,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WbHttpCheckinError);
+    expect((err as WbHttpCheckinError).httpStatus).toBe(404);
   });
 });
 

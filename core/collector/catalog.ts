@@ -1,5 +1,5 @@
 /**
- * 渠道模型目录采集 —— 与 Nexus `nexus/collector/catalog.py` (864 行) 对齐。
+ * 渠道模型目录采集。
  *
  * 支持渠道({@link CATALOG_PROVIDERS}):
  *   - trae      wire(`POST /api/ide/v1/get_detail_param`,chat 端点真正认的名单)
@@ -20,7 +20,7 @@
  *      `model_detail_list.prompt_max_tokens`(那是 function 路径的 prompt 上限,
  *      实测五个 function 全回 168000,与模型真实窗口无关)。
  *
- * 与 Nexus 的刻意差异(顶部声明):
+ * 刻意差异(顶部声明):
  *   - 网络级失败统一包装为 {@link CatalogError}(含超时/非 JSON/连接失败),
  *     与 {@link ../collector/quota.ts} 的 QuotaError、checkin.ts 的 CheckinError
  *     包装约定一致;
@@ -121,7 +121,7 @@ export interface CatalogResult {
   warnings: string[];
 }
 
-/** 目录拉取的账号上下文(与 nexus/collector/base.py `AccountContext` 对应字段)。 */
+/** 目录拉取的账号上下文。 */
 export interface CatalogAccountInput {
   provider: string;
   username: string;

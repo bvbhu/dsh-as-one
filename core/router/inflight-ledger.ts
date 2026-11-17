@@ -1,5 +1,5 @@
 /**
- * InflightLedger —— 真实模型的在途租约账本(从 `nexus/core/router.py:InflightLedger`
+ * InflightLedger —— 真实模型的在途租约账本(从 `router.py:InflightLedger`
  * 移植;测试规格 `tests/test_v4_semantics.py` §1 / §9 / §11)。
  *
  * ⚠️ **容量键是「端点」(`endpointId`,即 `provider/model@username`),不是真实模型**
@@ -31,7 +31,7 @@
  * 而账本还以为有空位。
  *
  * ⚠️ **多 worker 会把并发上限放大 N 倍**:本账本是**进程内**状态,并发上限的
- * 真实性完全依赖「只有一个 worker / 一个事件循环」。Nexus 刻意只绑 loopback +
+ * 真实性完全依赖「只有一个 worker / 一个事件循环」。上游刻意只绑 loopback +
  * 单 worker(inventory §2),TS 侧必须保持同一约束(不要在集群 / 多进程模式下复用)。
  *
  * ⚠️ 线程安全 → **单线程安全**:JS 是单线程事件循环,不存在 Python 那种真正的

@@ -19,7 +19,7 @@ import {
   WB_BAN_CODE,
 } from "./workbuddy-breaker.js";
 
-/** 最小 setting 表替身(只实现 get/set,与 NexusDatabase.setting 同形状)。 */
+/** 最小 setting 表替身(只实现 get/set,与 AsOneDatabase.setting 同形状)。 */
 function fakeDb(): { setting: { get: (k: string) => { v: string } | undefined; set: (k: string, v: string) => void } } {
   const store = new Map<string, string>();
   return {

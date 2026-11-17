@@ -104,7 +104,7 @@ export function round1(x: number): number {
   return Math.round(x * 10) / 10;
 }
 
-/** 百分比(**0..1**,保留 4 位;Nexus `_pct` 口径);total<=0 → null。
+/** 百分比(**0..1**,保留 4 位);total<=0 → null。
  *
  * ⚠️ 单位是 0..1 不是 0..100:前端 `fmtPct` 会再 ×100。以前这里返回 0..100,
  * 于是排名榜/环形图/子行百分比全部放大 100 倍(25% 显示成 2500.0%)。 */

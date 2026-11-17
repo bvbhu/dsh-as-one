@@ -1,5 +1,5 @@
 /**
- * SchedulerRepo 适配层 —— 把 NexusDatabase(分区表)+ ProviderRegistry(配置)
+ * SchedulerRepo 适配层 —— 把 AsOneDatabase(分区表)+ ProviderRegistry(配置)
  * 适配成 @as-one/core 调度器(Scheduler)需要的 SchedulerRepo 接口。
  *
  * 逐字段移植自 apps/electron/src/main/core-repo.ts(本插件包不与 electron 共享
@@ -9,7 +9,7 @@
  * 本文件只 import,绝不编辑 packages/core 的任何文件。
  */
 
-import type { NexusDatabase } from "@as-one/core/src/db/database.js";
+import type { AsOneDatabase } from "@as-one/core/src/db/database.js";
 import type { ProviderRegistry } from "@as-one/core/src/config/providers.js";
 import type {
   QuotaSnapshot,
@@ -42,10 +42,10 @@ function intOr(v: unknown, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : fallback;
 }
 
-/** NexusDatabase + ProviderRegistry → SchedulerRepo。 */
+/** AsOneDatabase + ProviderRegistry → SchedulerRepo。 */
 export class AppSchedulerRepo implements SchedulerRepo {
   constructor(
-    private readonly db: NexusDatabase,
+    private readonly db: AsOneDatabase,
     private readonly registry: ProviderRegistry,
     private readonly env: RepoEnv,
   ) {}

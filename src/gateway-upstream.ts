@@ -106,7 +106,7 @@ export interface UpstreamRuntime {
   routes?: () => RerouteSettings;
   /**
    * 逻辑模型的**最大输出上限** = 成员链中最小的 `max_output_tokens`
-   * (Nexus `_logical_output_cap`)。用于 `max_tokens` 钳制的「逻辑模型级上限」
+   * (原实现 `_logical_output_cap`)。用于 `max_tokens` 钳制的「逻辑模型级上限」
    * 判定 —— 装配层注入(它才拿得到 registry + db)。
    *
    * 缺省 → 不提供(钳制退回保守的 `min(clientMax, memberCap)`)。
@@ -116,7 +116,7 @@ export interface UpstreamRuntime {
    * 本次请求的重试策略(次数上限 + 退避参数 + 可重试白名单)。
    *
    * 装配层注入(它才拿得到 settings 表)。缺省 → 用 {@link DEFAULT_RETRY_POLICY}
-   * 的内置缺省(次数 1/10、退避 base 1s ×2、封顶 15s、抖动 0.2、白名单同 Nexus)。
+   * 的内置缺省(次数 1/10、退避 base 1s ×2、封顶 15s、抖动 0.2、白名单同上)。
    */
   retryPolicy?: (abstract: boolean) => RetryPolicy;
   /**
@@ -197,8 +197,8 @@ export interface UpstreamRuntime {
 }
 
 /**
- * 内置缺省重试策略 —— 与 Nexus `core/backoff.py:RETRY_DEFAULTS` 同值。
- * 装配层没注入 `retryPolicy` 时用它兜底(行为与 Nexus 默认设置一致)。
+ * 内置缺省重试策略 —— 与 `core/backoff.py:RETRY_DEFAULTS` 同值。
+ * 装配层没注入 `retryPolicy` 时用它兜底(行为与默认设置一致)。
  */
 export function DEFAULT_RETRY_POLICY(abstract: boolean): RetryPolicy {
   return new RetryPolicy({
@@ -256,7 +256,7 @@ function sleepMs(ms: number): Promise<void> {
 
 
 /**
- * 按**当轮成员**的输出上限钳制 `max_tokens`（O1，对齐 Nexus `_clamp_max_tokens`）。
+ * 按**当轮成员**的输出上限钳制 `max_tokens`（O1，对齐 `_clamp_max_tokens`）。
  *
  * 规则表：
  * ```
@@ -400,7 +400,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
     runtime.logicalOutputCap?.(logicalName) ?? null;
 
   /**
-   * 本次请求的重试策略 —— **一次读齐**(Nexus `RetryPolicy` 的 immutability 理由):
+   * 本次请求的重试策略 —— **一次读齐**(`RetryPolicy` 的 immutability 理由):
    * 一次请求里退避参数必须前后一致。若每次算延迟都回库读一遍,运维在两次重试
    * 之间改了 `retry.base_backoff_s`,这一次请求的退避序列就变成两段不同斜率的
    * 拼接 —— 那种曲线排查起来毫无头绪。
@@ -469,7 +469,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
       routerChain.length > 0 && routerChain.every((i) => i.direct === true);
 
     /**
-     * 选路失败 → 该抛给客户端的错误 —— 对齐 Nexus `_busy_or_upstream`。
+     * 选路失败 → 该抛给客户端的错误 —— 对齐 `_busy_or_upstream`。
      *
      * ⚠️ 以前两种情况都抛 `UpstreamError(upstream, …)`,而 kind=upstream 的
      * `httpStatus` 是 **502**。于是:
@@ -477,7 +477,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
      *   而真相是他自己把并发打满了;
      * - 「全在冷却」也被压成 502,丢掉了上游原始状态码(429/503 全变成 502)。
      *
-     * Nexus 的口径:
+     * 原口径:
      * - `all_busy`     → **503** + `{"detail":{"error":{"type":"capacity",…}}}`
      *   (**不带 Retry-After** —— 不排队就没有「到点一定腾位置」的承诺);
      * - `all_cooldown` → 把**最后一次上游错误的原始状态码**交出去(换号失败不该
@@ -549,7 +549,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
     };
 
     /**
-     * 请求带图时按需桥接 —— 对齐 Nexus `_try_parse_images` 的调用点判据。
+     * 请求带图时按需桥接 —— 对齐 `_try_parse_images` 的调用点判据。
      *
      * - **链上没有视觉端点** → 桥接(图转成文字证据);
      * - **图片数超过上游硬限**({@link IMAGE_HARD_LIMIT})→ 桥接,**即使链上有
@@ -654,7 +654,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
         // 文字证据再选路 —— 桥接**不阻断**主请求(失败时原样放行)。
         const bridged = await bridgeImagesIfNeeded(req, sessionId ?? "");
         const tried = new Set<string>();
-        // ⏱️ TTFT 起点:客户端请求进网关的时刻(Nexus `req_t0 = time.monotonic()`
+        // ⏱️ TTFT 起点:客户端请求进网关的时刻(`req_t0 = time.monotonic()`
         // 只取一次,不随每档 attempt 重开)。⚠️ 放在 attempt 循环**外**:sensenova
         // 的「429 同号硬等」发生在连接器内部(runWithAccount),那段时间也是
         // 客户端在等首字 —— 用户 m05340 定案「等待的时间也计入 ttft」。
@@ -665,9 +665,9 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
         const preemptedEndpoints = new Set<string>();
         // ⚠️ 次数上限取自 `RetryPolicy`(逻辑模型 `retry.logical_max` / 直连
         // `retry.real_max`),不再是硬编码的 3 —— 直连真实模型换档 = 换账号,
-        // 值得多试几次(Nexus 默认 10)。
+        // 值得多试几次(默认 10)。
         const policy = policyOf(!directRequest);
-        // ⚠️ **逻辑模型的下限是「走完候选链」**(Nexus `app.py:1952` 同款:
+        // ⚠️ **逻辑模型的下限是「走完候选链」**(`app.py:1952` 同款:
         // `max(policy.max_attempts, len(chain))`)。
         //
         // 之前这里用的是 `min(policy.maxAttempts, 链长)`,而 `retry.logical_max`
@@ -675,7 +675,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
         //   · 首个成员 429 就把整个请求判失败(链上明明还有别的成员可用);
         //   · **被直连抢占后无法「切换模型」** —— 换档预算被压成 0 次,
         //     「打断对话并切到另一档」根本无从谈起。
-        // Nexus 的口径是:逻辑模型只要还有成员可用,就不该把错误交回客户端。
+        // 口径是:逻辑模型只要还有成员可用,就不该把错误交回客户端。
         //
         // 直连**不**抬到链长:换档 = 换账号,能换几个取决于该真实模型有几个
         // 凭据(`retry.real_max` 默认 10 已覆盖),链长夹一次更准。
@@ -714,7 +714,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
             // ⚠️ 亲和键 = 缓存路由键优先(m09081):同前缀 → 同端点 → 上游前缀缓存命中。
             sessionId: affinityKey,
             // ⚠️ 桥接后消息里已无图 → needs_vision 自然为 false,
-            // 选路走普通的非视觉池(与 Nexus 同一口径)。
+            // 选路走普通的非视觉池(同一口径)。
             needsVision: hasVision(bridged.messages),
             ignoreCooldown: directRequest,
             // 压缩分块会填:块大小按真实模型窗口算,选路就不许挑装不下它的端点。
@@ -954,7 +954,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
               });
               if (firstChunkEmitted) {
                 // ⚠️ 已发过字节 → **不能换档**(客户端已经拿到了半个流,换模型
-                // 续上会内容重复/错乱,与 Nexus 的「已发字节不改投其它端点」同款)。
+                // 续上会内容重复/错乱,与「已发字节不改投其它端点」同款)。
                 // 只能到此为止:流断在这里。
                 console.warn(
                   `[as-one] stream preempted after first chunk (${model}): ${preemptedBy}`,
@@ -1199,7 +1199,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
         const preemptedEndpoints = new Set<string>();
         // ⚠️ 次数上限取自 `RetryPolicy`(同 stream() 口径)。
         const policy = policyOf(!directRequest);
-        // ⚠️ 逻辑模型下限 = 走完候选链(Nexus 同款,详见 stream() 处的说明):
+        // ⚠️ 逻辑模型下限 = 走完候选链(口径同 stream(),详见那里的说明):
         // 少了它,被直连抢占后就没有「切换模型」的预算了。
         const maxAttempts = directRequest
           ? Math.max(1, Math.min(policy.maxAttempts, MAX_FAILOVER_ATTEMPTS, routerChain.length))
@@ -1230,7 +1230,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
               : routerChain.filter((it) => !preemptedEndpoints.has(it.endpoint.endpointId)),
             sessionId: affinityKey,
             // ⚠️ 桥接后消息里已无图 → needs_vision 自然为 false,
-            // 选路走普通的非视觉池(与 Nexus 同一口径)。
+            // 选路走普通的非视觉池(同一口径)。
             needsVision: hasVision(bridged.messages),
             ignoreCooldown: directRequest,
             // 压缩分块会填:块大小按真实模型窗口算,选路就不许挑装不下它的端点。
@@ -1381,7 +1381,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
               data = (await res.json()) as ChatCompletion;
             } else {
               // trae/workbuddy/sensenova 恒走 SSE(请求体已置 stream:true,
-              // 与 Nexus 一致:非流式在内部聚合同一条解析路径)。
+              // 因此:非流式在内部聚合同一条解析路径)。
               const completionId = completionIdOf();
               const created = createdOf();
               const chunks = iterUpstreamChunks(res.body!, wireProtocolOf(protocol), { completionId, created, model: req.model }, item.endpoint.provider);

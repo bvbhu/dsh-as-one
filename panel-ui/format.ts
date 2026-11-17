@@ -1,5 +1,5 @@
 /**
- * 格式化辅助(与 Nexus panel/web/src/format.ts 对齐;只允许改 CSS,数值口径不动)。
+ * 格式化辅助(与既有面板的 format.ts 对齐;只允许改 CSS,数值口径不动)。
  */
 
 /** 数量缩写:1e9→"B"、1e6→"M"、1e3→"K";null → "N/A"。 */

@@ -1,6 +1,6 @@
 /**
- * 渠道额度探针 —— 与 Nexus `nexus/collector/trae.py` / `workbuddy.py` 对齐
- * (以及 `collector/base.py` 的 `number_of` / `to_epoch_seconds` / `precise_number`)。
+ * 渠道额度探针。
+ * 数值/时间口径:`number_of` / `to_epoch_seconds` / `precise_number`。
  *
  * 支持渠道:
  *   - trae      国内版(cn):`POST /trae/api/v2/pay/web_user_ent_usage`,读
@@ -13,13 +13,13 @@
  *               「最早到期」读 `GET /minimax-cloud/api/v1/credit/details` 的发放
  *               明细 —— 签到接口的成功回执不算到账证据,发放记录才是。
  *
- * 两条业务口径(2026-10-06 Nexsus 实测定案,不可改):
+ * 两条业务口径(2026-10-06 实测定案,不可改):
  *   1. 「最近到期 = 还有余额的包里最早的那个」—— 已用光/免费包不参与,一个都不剩
  *      返回 None(未知),绝不回落到「所有包里最早的那个」;
  *   2. 余量优先取 `*Precise` 字符串(实测 CapacityRemainPrecise='41.02000309' 而
  *      CapacityRemain=41,只读数字字段会把小数整体丢掉)。
  *
- * 与 Nexus 的刻意差异(顶部声明):
+ * 刻意差异(顶部声明):
  *   - 网络级失败统一包装为 QuotaError(含请求失败/超时/非 JSON),不伪造成功 ——
  *     与 As One checkin.ts 的包装约定一致;
  *   - trae 的鉴权失败是 **HTTP 200 + body.code 1001**(不是 401)。以前按成功
@@ -63,7 +63,7 @@ export class QuotaError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// 数值/时间纯函数(Nexus collector/base.py)
+// 数值/时间纯函数
 // ---------------------------------------------------------------------------
 
 /** JSON 数值字段 → number | null。bool 不算数值(True 不是 1 额度)。 */
@@ -113,7 +113,7 @@ export function precise_number(raw: Record<string, unknown> | null | undefined, 
 // ---------------------------------------------------------------------------
 
 export interface QuotaAccountInput {
-  /** `provider/username` 唯一身份(与 Nexus `credential_key` 同构)。 */
+  /** `provider/username` 唯一身份。 */
   credentialKey: string;
   provider: string;
   username: string;
@@ -142,7 +142,7 @@ export interface QuotaPack {
   extra?: Record<string, unknown>;
 }
 
-/** 单个凭据的额度快照 —— 纯内存,不入库(与 Nexus D17 一致)。 */
+/** 单个凭据的额度快照 —— 纯内存,不入库。 */
 export interface QuotaSnapshot {
   credentialKey: string;
   /** 剩余额度。null = 未知(不是 0!);0 = 确实用光。 */

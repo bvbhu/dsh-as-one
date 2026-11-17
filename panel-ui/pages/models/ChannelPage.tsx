@@ -1,5 +1,5 @@
 /**
- * 渠道页(Trae / WorkBuddy)—— 1:1 复刻 Nexus `ProviderCard.vue` 的数据与交互,
+ * 渠道页(Trae / WorkBuddy)—— 1:1 复刻 `ProviderCard.vue` 的数据与交互,
  * 版式按用户 2026-10-30 定案统一(与 Qoder / SenseNova 三处同形):
  *
  * ⭐ 两段式(卡序固定,与 Qoder / SenseNova 同形):
@@ -83,7 +83,7 @@ function fmtNum(v: number | null | undefined): string {
   return Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
-/** 输入框字符串 → 声明值。空 / 0 / 非法一律当「不声明」(与 Nexus num 同义)。 */
+/** 输入框字符串 → 声明值。空 / 0 / 非法一律当「不声明」(与 num 同义)。 */
 function num(v: string): number | null {
   const t = v.trim();
   if (!t) return null;
@@ -91,11 +91,11 @@ function num(v: string): number | null {
   return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
 }
 
-/** 模型目录草稿行:字段与 Nexus ProviderCard.DraftRow / toDraft 逐项对应。
+/** 模型目录草稿行:字段与 ProviderCard.DraftRow / toDraft 逐项对应。
  *
  *  ⚠️ `id` 是**裸模型名**(表格的行键与显示值,也是 `setModelExposure` 的入参),
  *  `fullId` 才是完整对外 id。两者不能合成一个字段:合成之后提交体与表格显示会
- *  互相拖累(与 Nexus ProviderCard 同一条教训)。
+ *  互相拖累(与 ProviderCard 同一条教训)。
  */
 interface DraftRow {
   /** 裸模型名(`glm-5.3-flash`)。 */
@@ -120,7 +120,7 @@ interface DraftRow {
   defaultOutput: number | null;
 }
 
-/** 目录行 → 草稿行(与 Nexus ProviderCard.toDraft 逐字段一致)。 */
+/** 目录行 → 草稿行(与 ProviderCard.toDraft 逐字段一致)。 */
 function toDraft(models: CatalogModel[]): DraftRow[] {
   return models.map((m) => ({
     id: bare(m.id),
@@ -144,15 +144,15 @@ function toDraft(models: CatalogModel[]): DraftRow[] {
 
 export default function ChannelPage({ provider }: ChannelPageProps): React.JSX.Element {
   const [page, setPage] = React.useState<ProviderPage | null>(null);
-  /** 模型目录草稿:保存才生效(与 Nexus ProviderCard.draft 同构)。 */
+  /** 模型目录草稿:保存才生效(与 ProviderCard.draft 同构)。 */
   const [draft, setDraft] = React.useState<DraftRow[]>([]);
   const [error, setError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   /** 「刷新模型列表」在跑(只拉上游目录并落库;不碰额度、不签到)。 */
   const [catalogBusy, setCatalogBusy] = React.useState(false);
 
-  /** 读页面。**不打上游**:凭据与模型目录都来自本地库(与 Nexus load() 同义:
-   *  Nexus 的 load() 也是无条件把草稿同步成后端给的状态)。 */
+  /** 读页面。**不打上游**:凭据与模型目录都来自本地库(与 load() 同义:
+   *  load() 也是无条件把草稿同步成后端给的状态)。 */
   async function load(): Promise<void> {
     try {
       const p = await rendererApi.getProviderPage(provider);
@@ -277,7 +277,7 @@ export default function ChannelPage({ provider }: ChannelPageProps): React.JSX.E
    *  后者是整批替换语义(清单外 = 删行),一次只发一行会把用户没在看的模型全删掉。
    *  ⚠️ 失败要**回滚草稿**:界面上的勾/数字已经变了,而库里没变;不回滚就是
    *  界面在撒谎,用户下次刷新才莫名其妙地跳回去。
-   *  ⚠️ 成功不弹绿字横幅(与 Nexus 2026-10-12 删掉「模型表已更新」同口径)。
+   *  ⚠️ 成功不弹绿字横幅(与 2026-10-12 删掉「模型表已更新」同口径)。
    */
   async function commitEdit(e: ModelTableEdit): Promise<void> {
     const base = draft.find((r) => r.id === e.id);

@@ -1,8 +1,8 @@
 /**
- * 「其他供应商(兼容供应商)」子页 —— 严格 1:1 移植 Nexus panel/web/src/Providers.vue
+ * 「其他供应商(兼容供应商)」子页 —— 严格 1:1 移植既有面板
  * (1261 行;2026-10-12 按 dsh 供应商卡片重排的那一版)。
  *
- * 结构对照(Nexus 模板 → 本页;DOM/class/文案逐字对齐,样式全在 styles.css 尾部
+ * 结构对照(原模板 → 本页;DOM/class/文案逐字对齐,样式全在 styles.css 尾部
  * 的 `.pv-*` 段,颜色/尺寸/间距与 Providers.vue 的 `<style scoped>` 逐字一致):
  *   section.section                              → section.pv-section
  *   div.err(role=alert) / p.savedNotice(role=status) → 同(错误 / 保存成功通知)
@@ -24,41 +24,41 @@
  *   div.mask > div.dialog                        → 「选择要添加的模型」可搜索勾选弹窗
  *
  * ⚠️ 契约降级说明(panel-types.ts / RendererApi 冻结,只有这些方法):
- * 1. **保存是两步**:Nexus 是 `upsert(带 keys/models)` + `exposure(pid, 批量)`。
+ * 1. **保存是两步**:原实现是 `upsert(带 keys/models)` + `exposure(pid, 批量)`。
  *    As One 的 `upsertModelProvider(id, baseUrl, protocol)` **没有 keys / models 参数**
  *    → ① 调 upsertModelProvider(id, base_url, protocol)(不带密钥:密钥由凭据层管理,
  *      API 密钥输入框照画、提交时忽略,卡片内有一行 `.pv-hint` 说明「密钥由凭据层管理」);
  *    ② 契约没有批量 exposure → 对 models 清单里的每一行**逐模型**调
  *      `setModelExposure(provider, 裸模型名, true)`(主进程按 `${provider}/${model}` 存
  *      内存覆盖,与 getModelProviders 的 `exposed` 判定同一口径 —— 所以这里传**裸名**,
- *      Nexus 的 `scopedModelId` 补前缀在 As One 不需要:形参里已经有 provider)。
- * 2. **「目录即清单」删不掉**:Nexus 删掉的行会真从 `real_model` 删;As One 契约没有
+ *      `scopedModelId` 补前缀在 As One 不需要:形参里已经有 provider)。
+ * 2. **「目录即清单」删不掉**:原实现删掉的行会真从 `real_model` 删;As One 契约没有
  *    deleteModel → 被移除的行仍留在库里、重载后会回到页面。保存后把这些模型名写进
  *    notice 并说明「请通过编辑配置文件管理」(元素结构不变,行为诚实降级)。
- * 3. `deployed_models` 契约是**计数**(Nexus 是 id 数组)→ `draftOf` 只按 `p.models` 建草稿
- *    (As One 的 models 就是该 provider 的 real_model 全量,与 Nexus 的
+ * 3. `deployed_models` 契约是**计数**(原实现是 id 数组)→ `draftOf` 只按 `p.models` 建草稿
+ *    (As One 的 models 就是该 provider 的 real_model 全量,与原实现的
  *    `models ∪ deployed_models` 语义等价)。
- * 4. **notice 文案**:Nexus 用 exposure 的 message 覆盖 notice;As One 用 upsert 的 message
+ * 4. **notice 文案**:原实现用 exposure 的 message 覆盖 notice;As One 用 upsert 的 message
  *    (+ 被移除行的说明)。setModelExposure 逐条返回的「已记录(内存覆盖…)」不逐条刷屏。
  * 5. **拉取流程**:fetchModels(带本次表单的地址/协议)→ 结果只进选择器,
  *    勾选「添加所选」才并入草稿(只补空草稿,不覆盖用户已填的值)。契约 fetchModels 的
  *    `models[].id` 是 `provider/模型` 复合 id(主进程 catalogModel 拼的)→ 选择器与目录
  *    一律按**裸模型名**索引(bareModelId 剥前缀)。
- * 6. 校验文案 / 红点判定 / 占位符 / 全角标点与 Nexus 逐字一致。
+ * 6. 校验文案 / 红点判定 / 占位符 / 全角标点与既有实现逐字一致。
  *    `isOverridden` 也逐字照搬(契约里 name 恒非空、input 恒 ≥1 种)→ 目录非空时
- *    「已自定义模型目录」恒显示,与 Nexus 现网行为一致。
+ *    「已自定义模型目录」恒显示,与既有行为一致。
  */
 import React from "react";
 import { rendererApi } from "../../api";
 import type { CatalogModel, ModelProvider } from "../../api";
 
 /**
- * 模型目录一行(Nexus `ProviderModelEntry` 同形;`id` 一律是**裸模型名**)。
+ * 模型目录一行(`ProviderModelEntry` 同形;`id` 一律是**裸模型名**)。
  *
  * ⚠️ 契约里没有这个类型(panel-types.ts 冻结):As One 的目录行由
  * `ModelProvider.models: CatalogModel[]` 派生 —— name/context_window/max_output 是目录
  * 字段,`input` 由 `CatalogModel.vision` 折成 `["text"] | ["text","image"]`
- * (Nexus 列表端点也是同样地从 supports_vision 折)。
+ * (列表端点也是同样地从 supports_vision 折)。
  */
 interface ModelRow {
   id: string;
@@ -68,7 +68,7 @@ interface ModelRow {
   input?: string[];
 }
 
-/** 编辑卡表单(Nexus `form` ref 的 TS 化)。 */
+/** 编辑卡表单(`form` ref 的 TS 化)。 */
 interface ProviderForm {
   id: string;
   base_url: string;
@@ -204,7 +204,7 @@ export default function ProvidersPage(): React.JSX.Element {
   /**
    * 目录草稿 = 该 provider 的 real_model 全量(按**裸模型名**去重,保序)。
    *
-   * ⚠️ Nexus 这里是 `models ∪ deployed_models`;As One 的 `deployed_models` 是计数,
+   * ⚠️ 原实现这里是 `models ∪ deployed_models`;As One 的 `deployed_models` 是计数,
    * `models` 本身已是 real_model 全量(见文件头降级 3)→ 只按 models 建。
    */
   function draftOf(p: ModelProvider): ModelRow[] {
@@ -216,7 +216,7 @@ export default function ProvidersPage(): React.JSX.Element {
     return [...byId.values()];
   }
 
-  /** 某行是否被用户自定义过(有 name / 容量 / 输入类型声明)—— 逐字照搬 Nexus。 */
+  /** 某行是否被用户自定义过(有 name / 容量 / 输入类型声明)—— 逐字照搬既有实现。 */
   function isOverridden(m: ModelRow): boolean {
     return Boolean(
       m.name?.trim() ||
@@ -434,13 +434,13 @@ export default function ProvidersPage(): React.JSX.Element {
         pid,
         form.base_url.trim(),
         proto,
-        // `env_prefix` 在 Nexus 页面上是**只读回显**,没有输入框 → 不提交(undefined
+        // `env_prefix` 在原页面上是**只读回显**,没有输入框 → 不提交(undefined
         // = 不改),后端保留原值 / 落 `ONE_<ID>` 默认。
         undefined,
         keyText === "" ? undefined : [keyText],
       );
       if (!r.ok) throw new FormError(r.message ?? "保存失败");
-      // ② **目录即清单**:勾上的行全部登记进 real_model(整批,与 Nexus
+      // ② **目录即清单**:勾上的行全部登记进 real_model(整批,与原实现
       //    `modelProviders.exposure` 同款),目录里删掉的行 = 从 real_model 删掉
       //    这一行,库里不留残留(409 时后端点名还被档链引用的模型)。
       //    ⚠️ 输入框里是**裸模型名**,这里补回 provider 前缀再提交 ——
@@ -475,7 +475,7 @@ export default function ProvidersPage(): React.JSX.Element {
       });
       const e2 = await rendererApi.setChannelModels(pid, exposure);
       if (!e2.ok) throw new FormError(e2.message ?? "设置模型暴露失败");
-      // ③ 回执取 exposure 的 message(Nexus:`notice = e2.message ?? notice`)。
+      // ③ 回执取 exposure 的 message(口径:`notice = e2.message ?? notice`)。
       let text = e2.message ?? r.message ?? "已保存";
       setNotice(text);
       // 这次提交通过了 → 撤掉红点(还缺什么,重载后由 dotState 按库里状态再判)。
@@ -582,7 +582,7 @@ export default function ProvidersPage(): React.JSX.Element {
       // 看到的还是打开卡片时的空值,一保存又把空值写回去。
       // 只补空草稿,不覆盖用户已填的值。
       // ⚠️ 索引必须从**本次响应**现建:React 的 state 更新是异步的,fetchedCatalog
-      // 这个闭包变量此刻还是上一次渲染的值(Vue 的 ref 赋值是同步的,Nexus 直接
+      // 这个闭包变量此刻还是上一次渲染的值(Vue 的 ref 赋值是同步的,原实现直接
       // 用 ref 索引不会踩到)。
       const fetched = r.models ?? [];
       setFetchedCatalog(fetched);
@@ -874,7 +874,7 @@ export default function ProvidersPage(): React.JSX.Element {
   }
 
   /**
-   * 供应商字段面板(编辑卡 / 新建卡共用,DOM 与 Nexus 两块 panel 一致)。
+   * 供应商字段面板(编辑卡 / 新建卡共用,DOM 与原实现两块 panel 一致)。
    * `withId=false` 传被编辑的 provider(标题用它的 id、密钥框占位符按它的凭据状态)。
    */
   function providerFields(withId: boolean, p?: ModelProvider): React.JSX.Element {

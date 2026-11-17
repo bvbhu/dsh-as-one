@@ -11,7 +11,7 @@
  * --------------------------------------
  * 直接 ``writeFileSync(path, …)`` 在写到一半时被杀进程(崩溃 / Ctrl+C /
  * 断电)会留下**半文件**——下次读直接 ``JSON.parse`` 炸,而且是在
- * 「凭据文件」这种关键路径上。正确姿势(Nexus 的 dsh-atomic-write 研究
+ * 「凭据文件」这种关键路径上。正确姿势(dsh-atomic-write 研究
  * 结论,docs/dsh-plugin-reference-research.md):
  *
  * 1. 序列化**先**在内存完成(``JSON.stringify`` 失败时还没碰过磁盘);
@@ -282,7 +282,7 @@ function fsyncFile(path: string): void {
       closeSync(fd);
     }
   } catch {
-    // fsync 失败不阻断写入:Nexus 侧(dsh-atomic-write)同样把 fsync 当
+    // fsync 失败不阻断写入:dsh-atomic-write 同样把 fsync 当
     // 加固而非硬失败 —— 真丢了页缓存,回读校验也会兜住大部分场景。
   }
 }
@@ -349,8 +349,8 @@ function toLongPath(p: string): string {
  * - 目标文件**不存在**时(首次创建前)也照常 watch 父目录 —— 文件出现
  *   的瞬间会触发一次读取回调;
  * - 读取失败(半文件 / 权限)默认**保留上次好内容**并静默 —— 热重载的
- *   铁律是「坏文件不炸运行中的系统」(Nexus 配置缓存同哲学,
- *   engine.py L1641-1713:坏 JSON 回落默认,绝不抛)。
+ *   铁律是「坏文件不炸运行中的系统」(配置缓存同哲学:
+ *   坏 JSON 回落默认,绝不抛)。
  *
  * @param onChange 回调拿到**完整文件文本**(调用方自己 ``JSON.parse``,
  *   这样 store 层不需要知道 schema;解析错误在 readJsonFile 里)。

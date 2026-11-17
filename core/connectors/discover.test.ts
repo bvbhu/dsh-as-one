@@ -193,7 +193,7 @@ describe("parseTraeCliToken", () => {
     writeFileSync(path, JSON.stringify({ token: jwt }), "utf8");
     const acc = parseTraeCliToken(path, "sg");
     expect(acc.username).toBe("env-user");
-    // host 固定 api.trae.cn → 恒 cn(Nexus 语义)
+    // host 固定 api.trae.cn → 恒 cn
     expect(acc.region).toBe("cn");
   });
 
@@ -305,11 +305,11 @@ describe("traeRegionOf", () => {
 });
 
 // ---------------------------------------------------------------------------
-// workbuddy:Nexus 无 discover
+// workbuddy:无 discover
 // ---------------------------------------------------------------------------
 
 describe("discoverWorkbuddyAccounts", () => {
-  it("恒 [] —— Nexus connectors/workbuddy.py 无 discover_local_accounts", () => {
+  it("恒 [] —— 无 discover_local_accounts", () => {
     expect(discoverWorkbuddyAccounts()).toEqual([]);
   });
 });

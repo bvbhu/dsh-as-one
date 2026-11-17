@@ -1,9 +1,9 @@
 /**
- * 模型总览(部署)子页(移植 Nexus panel/web/src/Deployments.vue,2026-10-12 定案;
+ * 模型总览(部署)子页(移植自既有面板,2026-10-12 定案;
  * 2026-10-25 m14379 重新设计布局:headActions 从右侧竖排改为顶部工具条,
  * 分组列表占满全宽;2026-10-25 m14922 再改:去掉收起/展开,改为多列卡片式布局)。
  *
- * 结构对照(Nexus 模板 → 本页):
+ * 结构对照(原模板 → 本页):
  *   section.section                  → section.section.dep-section
  *   div.err / p.savedNotice          → 同(错误 / 保存成功)
  *   p.hint.na(无部署)                → 同文案
@@ -13,11 +13,11 @@
  *                                     + depChips 徽章串 + 并发输入 + /v1/models 复选框)
  *
  * ⚠️ 契约说明(panel-types.ts):
- * 1. Nexus 的行/组级「冷却」取 status.deployments 运行时行(runtimeOf(d));As One 契约把
+ * 1. 原实现的行/组级「冷却」取 status.deployments 运行时行(runtimeOf(d));As One 契约把
  *    in_cooldown / cooldown_remaining_s 直接放在 DeploymentItem 上 → 本页直接用这两个字段,
- *    不再需要 /status。Nexus fmtCooldown 的 cooldown.status_code 后缀(HTTP n)契约没有
+ *    不再需要 /status。fmtCooldown 的 cooldown.status_code 后缀(HTTP n)契约没有
  *    → 只显示时长(fmtDuration)。
- * 2. Nexus anomalyOf 的 ②运行态分支(last_kind: auth/auth_challenge/bad_request)契约无
+ * 2. anomalyOf 的 ②运行态分支(last_kind: auth/auth_challenge/bad_request)契约无
  *    对应字段 → 只保留 ①usable_endpoint_count === 0 的缺配置判定。
  * 3. 并发上限输入即存:setDeploymentExposure(id, kind, listed, concurrency) 第 4 参
  *    真写 db.real_model.concurrency(1~2^20 = 1048576),调度端点并发即时生效(core-repo 读 db 覆盖)。
@@ -25,7 +25,7 @@
  *    N 个凭据 = N × 该值(并发填 1、三个凭据就是三并发),不再按真实模型共享一个桶。
  * 4. toggleDirect 调 setDeploymentExposure(id, "direct", !listed) → 真写 db.real_model.hidden
  *    (面板 listed 即时生效;网关 /v1/models 走配置注册表,重启后一致)。
- * 5. 保存的 !r.ok 分支:Nexus 的 api 层在 !ok 时抛错进 catch;As One 契约直接返回
+ * 5. 保存的 !r.ok 分支:既有 api 层在 !ok 时抛错进 catch;As One 契约直接返回
  *    {ok, message},故这里显式把 !ok 落进 error(等价语义)。
  */
 import React from "react";
@@ -191,7 +191,7 @@ function providerLabel(key: string): string {
 }
 
 export interface DeploymentsPageProps {
-  /** 预留:无外部入参(与 Nexus 页面一致)。 */
+  /** 预留:无外部入参。 */
 }
 
 export function DeploymentsPage(_props: DeploymentsPageProps): React.JSX.Element {

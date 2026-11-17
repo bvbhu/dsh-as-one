@@ -1,5 +1,5 @@
 /**
- * backoff_delay 纯函数与 RetryPolicy —— 移植自 nexus/core/backoff.py(439 行)。
+ * backoff_delay 纯函数与 RetryPolicy —— 移植自 `backoff.py`。
  * 公式/常数逐字保留;唯一差异是随机源抽象为注入的 {@link Rng}。
  */
 import type {
@@ -27,7 +27,7 @@ export const RETRY_KEYS: readonly string[] = [
   "retry.logical_cooldown",
 ];
 
-/** 缺省值(与 Nexus RETRY_DEFAULTS 逐字一致)。 */
+/** 缺省值(与上游 RETRY_DEFAULTS 逐字一致)。 */
 export const RETRY_DEFAULTS: Record<string, number | string> = {
   "retry.base_backoff_s": 1.0,
   "retry.max_backoff_s": 15.0,

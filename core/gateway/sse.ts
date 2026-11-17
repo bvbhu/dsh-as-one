@@ -1,12 +1,12 @@
 /**
  * SSE 帧编码与解析 —— OpenAI 兼容流(`text/event-stream`)。
  *
- * 对齐 Nexus:
- * - `nexus/connectors/base.py:sse_pack` —— `b"data: " + json.dumps(chunk,
+ * 对齐上游实现:
+ * - `sse_pack` —— `b"data: " + json.dumps(chunk,
  *   ensure_ascii=False).encode("utf-8") + b"\n\n"`;
- * - `nexus/connectors/base.py:SSE_DONE` —— `b"data: [DONE]\n\n"`;
- * - `nexus/gateway/app.py:_pack`(app.py:2323)—— 同 sse_pack;
- * - `nexus/gateway/app.py:_stream_with_retry`(app.py:2031)—— 流正常收尾时
+ * - `SSE_DONE` —— `b"data: [DONE]\n\n"`;
+ * - `_pack` —— 同 sse_pack;
+ * - `_stream_with_retry` —— 流正常收尾时
  *   追加 `[DONE]` 帧;`StreamingResponse` 响应头
  *   `Content-Type: text/event-stream` / `Cache-Control: no-cache` /
  *   `X-Accel-Buffering: no`(app.py:856-857)。
@@ -23,7 +23,7 @@ import type { ChatCompletionChunk } from "./types.js";
 /** SSE 流结束标记(base.py:SSE_DONE 的字节形态)。 */
 export const SSE_DONE = "data: [DONE]\n\n";
 
-/** 流式响应头(Nexus `StreamingResponse` 的 media_type + headers)。 */
+/** 流式响应头(`StreamingResponse` 的 media_type + headers)。 */
 export const SSE_RESPONSE_HEADERS: Readonly<Record<string, string>> = {
   "Content-Type": "text/event-stream",
   "Cache-Control": "no-cache",
@@ -57,7 +57,7 @@ export function ssePackAll(frames: readonly (Uint8Array | string)[]): Buffer {
 }
 
 // ---------------------------------------------------------------------------
-// 入站解析(测试/上游响应共用;Nexus e2e 的 sse_parse 对应物)
+// 入站解析(测试/上游响应共用;对应 e2e 的 sse_parse)
 // ---------------------------------------------------------------------------
 
 export interface SseEvent {
@@ -97,7 +97,7 @@ export function parseSseEvents(text: string): SseEvent[] {
 }
 
 /**
- * 流文本 → JSON 对象序列。**按行解析,一行 data 即一个事件**(对齐 Nexus
+ * 流文本 → JSON 对象序列。**按行解析,一行 data 即一个事件**(对齐
  * test_gateway_e2e.py:sse_parse:215-223 的行式语义;OpenAI 上游也是一行一个
  * chunk):`[DONE]` → 哨兵 `{"__done__":true}`;心跳变体 `data: : heartbeat`
  * (FakeUpstream 会把心跳行塞进与 JSON 同一个块,e2e:72-81)与坏 JSON 丢弃不抛。

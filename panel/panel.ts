@@ -128,13 +128,13 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
   
   /**
    * 从所有逻辑模型的 `members` 里摘掉 `targetRealModelId`(`"provider/model"`),
-   * 返回摘掉的**成员条数**(跨逻辑模型累加)。对齐 Nexus
+   * 返回摘掉的**成员条数**(跨逻辑模型累加)。对齐
    * `api.py:_strip_member_from_logical_models`。
    *
    * ⭐ 为什么必须连锁摘: `logical_model.members` 是 JSON 数组,**没有**
    * `ON DELETE CASCADE` —— 直接删 `real_model` 行会让引用它的档链留下一档
    * 指向空气(调度时 `endpointChain` 展开出 0 个端点,整条链静默少一档)。
-   * Nexus 2026-10-18(m04740)把旧的「409 拦下来让用户先去手动摘」改成
+   * 2026-10-18(m04740)把旧的「409 拦下来让用户先去手动摘」改成
    * 「删除即连锁摘除」。
    *
    * ⚠️ **摘除时保持原数组顺序** —— `members` 的有序性就是 priority(D13),
@@ -160,7 +160,7 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
     return removed;
   };/**
    * 该 (provider, model) **自己最近一个有可用计时数据的那天**的全部原料
-   * (Nexus `_deployments_list` 的 `valid/ranked` 窗口查询,2026-10-14 用户定)。
+   * (valid/ranked 窗口查询,2026-10-14 用户定)。
    *
    * ⭐ 三条口径,一条都不能改:
    * 1. **逐模型各自取最近一天**,不取全库同一天 —— 不同模型的流量分布差得远
@@ -175,7 +175,7 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
    *
    * ⚠️ `latency_day` 是**选中那天的日期字符串**(「这条数字是哪天的」),
    * 不是平均延迟毫秒数。以前它返回 `latencySum / requests`,前端
-   * `latencyTitle` 按 Nexus 口径当日期渲染,于是把一个毫秒数当天,
+   * `latencyTitle` 按同一口径当日期渲染,于是把一个毫秒数当天,
    * tooltip 里出现「2026-10-19 记录 · 1234 ms」之外的第三处错位。
    * 从来没有有效计时行 → `latency_day = null`,两个徽章都不显示。
    */

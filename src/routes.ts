@@ -58,7 +58,7 @@ export interface GatewayRouteOptions {
   warmup?: { wait(): Promise<unknown> };
 }
 
-/** 上游 usage → 统计三键(Nexus 口径:prompt / cached / completion)。 */
+/** 上游 usage → 统计三键(prompt / cached / completion)。 */
 function usageOf(usage: Record<string, unknown> | undefined): RequestDoneInfo["usage"] {
   if (!usage) return null;
   const details = (usage.prompt_tokens_details ?? {}) as Record<string, unknown>;

@@ -71,7 +71,7 @@ export function formatLocal(epoch: number): string {
 }
 
 // ===========================================================================
-// 纯函数(Nexus 模块级 helper)
+// 纯函数(模块级 helper)
 // ===========================================================================
 
 export function isRecord(v: unknown): v is Record<string, unknown> {
@@ -356,7 +356,7 @@ export function isAbstractModel(repo: SchedulerRepo, model: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 配置解析(Nexus _valid_rules / _legacy_sections_to_rules / _read_config)
+// 配置解析(`_valid_rules` / `_legacy_sections_to_rules` / `_read_config`)
 // ---------------------------------------------------------------------------
 
 export function jsonSetting(raw: string | null, defaultJson: string): unknown {

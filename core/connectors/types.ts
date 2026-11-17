@@ -1,7 +1,7 @@
 /**
  * 认证连接器契约 —— 框架无关的 TS 模块。
  *
- * 设计目标：把 Nexus 各家上游的认证流（取 token / 刷新 / 请求装饰 / 错误分类）
+ * 设计目标：把各家上游的认证流（取 token / 刷新 / 请求装饰 / 错误分类）
  * 逐条复刻为独立模块，不依赖 fastapi / dsh / electron。
  *
  * 所有连接器实现 {@link AuthConnector} 接口，由 {@link ./index.ts} 注册表按 vendor id 查找。
@@ -18,7 +18,7 @@ export type { UpstreamRawResponse };
 // ---------------------------------------------------------------------------
 
 /**
- * 上游错误分类 —— 与 Nexus `UpstreamErrorKind` 对齐。
+ * 上游错误分类。
  *
  * 关键语义：
  * - `rate_limit`：429 或流内 code=429 —— **可重试**（换号 / 退避）
@@ -43,7 +43,7 @@ export type UpstreamErrorKind =
 /**
  * 上游错误 —— 携带分类、可重试性、HTTP 状态码与 Retry-After。
  *
- * 与 Nexus `UpstreamError` 对齐：kind 决定 http_status 与 retryable 的默认派生，
+ * kind 决定 http_status 与 retryable 的默认派生，
  * 子类可覆写。
  */
 export class UpstreamError extends Error {
@@ -124,7 +124,7 @@ export function upstreamRawResponse(status: number, body: unknown): UpstreamRawR
 /**
  * Token 状态 —— 认证连接器的输出。
  *
- * `expiresAt` 使用 **Unix 秒**（非毫秒），与 Nexus `parse_ms` 统一后的单位一致。
+ * `expiresAt` 使用 **Unix 秒**（非毫秒），与 `parse_expiry` 的单位一致。
  * 连接器内部若遇到毫秒值（如 trae 的 `TokenExpireAt`），必须转换为秒。
  */
 export interface TokenState {
@@ -167,7 +167,7 @@ export interface ConnectorCredentials {
 /**
  * 请求装饰 —— 连接器注入到出站请求的 header / query。
  *
- * 与 Nexus 的 `build_headers` / `build_upstream_body` 对应，但只负责
+ * 与连接器的 `build_headers` / `build_upstream_body` 对应，但只负责
  * **认证与身份相关**的 header，不碰请求体。
  */
 export interface RequestDecoration {

@@ -1,5 +1,5 @@
 /**
- * 网关层测试 —— 对齐 Nexus 测试语义(test_gateway_e2e / test_gateway_auth_env /
+ * 网关层测试 —— 对齐参考实现的测试语义(test_gateway_e2e / test_gateway_auth_env /
  * test_stream_interrupt),全部走真实 node:http 临时端口(loopback + 随机端口,
  * **零真实网络调用** —— 上游是注入的内存 FakeUpstream)。
  *
@@ -448,7 +448,7 @@ describe("POST /v1/chat/completions (non-stream) + errors", () => {
       expect(resp.headers.get("retry-after")).toBe("12");
       const body = (await resp.json()) as { detail: { error: { type: string } } };
       expect(body.detail.error.type).toBe("rate_limit");
-      // 与 Nexus _as_http 一致:错误只进 detail.error,FastAPI 形状,无顶层 error。
+      // 与 `_as_http` 一致:错误只进 detail.error,FastAPI 形状,无顶层 error。
       expect((body as { error?: unknown }).error).toBeUndefined();
     });
   });

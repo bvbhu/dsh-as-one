@@ -1,7 +1,7 @@
 /**
  * WorkBuddy 真实上游线层(core 层,纯函数零网络)。
  *
- * 移植自 Nexus 的 connectors/workbuddy.py —— 覆盖「请求体构建 + SSE 行解析 +
+ * 覆盖「请求体构建 + SSE 行解析 +
  * XML 工具调用副本过滤」整条链路,与 workbuddy.ts(区域检测/头构建/错误分类)
  * 分工:workbuddy.ts 管「连接器」(getToken/decorateRequest/classifyError),
  * 本文件管「线」(wire):端点 URL、报文体、流式协议。两者都不做网络 IO。

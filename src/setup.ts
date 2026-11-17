@@ -15,7 +15,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { openDatabase, type NexusDatabase } from "@as-one/core/src/db/database.js";
+import { openDatabase, type AsOneDatabase } from "@as-one/core/src/db/database.js";
 import { ProviderRegistry } from "@as-one/core/src/config/providers.js";
 import { CredentialVault } from "@as-one/core/src/config/credentials.js";
 import { DbCredentialBackend } from "@as-one/core/src/db/credential-backend.js";
@@ -85,7 +85,7 @@ export interface AsOneRuntime {
   dataDir: string;
   dbPath: string;
   logDir: string;
-  db: NexusDatabase;
+  db: AsOneDatabase;
   registry: ProviderRegistry;
   vault: CredentialVault;
   repo: AppSchedulerRepo;
@@ -138,7 +138,7 @@ export interface AsOneRuntime {
 }
 
 /**
- * sensenova 连接器账号池的**进程级单例**(Nexus `sensenova.py` 的 AccountPool)。
+ * sensenova 连接器账号池的**进程级单例**(`sensenova.py` 的 AccountPool)。
  *
  * ⚠️ 池是运行态(冷却/健康/滚动记账)不可序列化,必须进程内唯一 —— 所以放模块级。
  * 注册表按 vendorId 覆盖:这个带账号池的实例替掉 defaultConnectors 里的无参实例。
@@ -198,7 +198,7 @@ function overlayKeyOf(ref: string): string {
  * 实例(比如还没升级的 qqbot / web profile),它会继续写整份 JSON。吸收式
  * 迁移让那些写入落到逐键上,`account.enabled` 不再是并存真源。
  */
-function absorbLegacyAccountOverlay(db: NexusDatabase, into: Map<string, boolean>): void {
+function absorbLegacyAccountOverlay(db: AsOneDatabase, into: Map<string, boolean>): void {
   const raw = settingOf(db, ACCOUNT_OVERLAY_LEGACY_KEY);
   if (raw === null || raw === "") return;
   try {
@@ -232,7 +232,7 @@ function absorbLegacyAccountOverlay(db: NexusDatabase, into: Map<string, boolean
 class LiveAccountOverlay extends Map<string, boolean> {
   private version: number;
 
-  constructor(private readonly db: NexusDatabase) {
+  constructor(private readonly db: AsOneDatabase) {
     super();
     this.version = db.dataVersion();
     this.reload();
@@ -303,13 +303,13 @@ class LiveAccountOverlay extends Map<string, boolean> {
   }
 }
 
-function settingOf(db: NexusDatabase, key: string): string | null {
+function settingOf(db: AsOneDatabase, key: string): string | null {
   const row = db.setting.get(key);
   return row ? row.v : null;
 }
 
 /** 数字设置:缺失/空串/NaN → 缺省;`floor` 给下限。 */
-function numSetting(db: NexusDatabase, key: string, def: number, min = 0): number {
+function numSetting(db: AsOneDatabase, key: string, def: number, min = 0): number {
   const raw = settingOf(db, key);
   if (raw === null || raw === "") return def;
   const n = Number(raw);

@@ -47,7 +47,7 @@ describe("normalizeStrategy", () => {
   });
 
   it("大写机器键不认(别名表没有大写键)→ 缺省 random", () => {
-    // Nexus 同口径:STRATEGIES 大小写敏感,别名表只查原值与小写。
+    // 同口径:STRATEGIES 大小写敏感,别名表只查原值与小写。
     expect(normalizeStrategy("RANDOM").strategy).toBe("random");
   });
 
@@ -119,7 +119,7 @@ describe("常量导出", () => {
     expect(DEFAULT_SCHEDULER_STRATEGY).toBe("random");
   });
 
-  it("别名表与 Nexus 一致(21 条)", () => {
+  it("别名表条目固定", () => {
     expect(Object.keys(STRATEGY_ALIASES)).toHaveLength(17);
   });
 

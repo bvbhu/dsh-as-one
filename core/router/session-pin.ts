@@ -1,6 +1,6 @@
 /**
  * SessionPinTable —— `sessionId -> endpointId` 的内存表
- * (从 `nexus/core/router.py:SessionPinTable` 移植,取代已删的 `session_pin` 表)。
+ * (从 `router.py:SessionPinTable` 移植,取代已删的 `session_pin` 表)。
  *
  * 用**单调钟**计时:会话租期是纯进程内计时,不受 NTP 校时影响。
  *

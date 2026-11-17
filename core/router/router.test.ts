@@ -1,7 +1,7 @@
 /**
  * Router 移植测试 —— 对应 `tests/test_v4_semantics.py` 的:
  *
- * | 用例 | Nexus 位置 |
+ * | 用例 | 参考实现位置 |
  * |---|---|
  * | 并发按**凭据(端点)**计:单凭据 concurrency=1 仍会 all_busy;3 凭据 = 3 并发 | `test_concurrency_one_returns_all_busy_without_failure` / 三凭据用例 |
  * | 负载感知按**凭据**分桶,3 凭据 × 2 = 6 个并发位不误报 all_busy | 负载感知分桶用例 |
@@ -648,7 +648,7 @@ describe("冷却的三层优先级(上游 until > 供应商覆盖 > 全局)", ()
   });
 
   it("配置里没有 retry.logical_cooldown → 用**播种的缺省值** 15 分钟(900s)", () => {
-    // ⚠️ 这里不是「不熔断」:Nexus 的 retry_setting() 在键缺失时会**播种**
+    // ⚠️ 这里不是「不熔断」:上游的 retry_setting() 在键缺失时会**播种**
     // RETRY_DEFAULTS["retry.logical_cooldown"] = 15 后回读,值非法时「写回缺省值再回读」,
     // 所以它永远返回一个数,Router 拿到的是 900s。只有「读不动」(repo 抛错)才退回
     // None = 不熔断 —— 见下一条。
@@ -663,7 +663,7 @@ describe("冷却的三层优先级(上游 until > 供应商覆盖 > 全局)", ()
   });
 
   it("设置源读不动(repo 抛错)→ 不熔断(只记账)", () => {
-    // 对应 Nexus `_cooldown_policy` 的 except 分支:拿不到策略时宁可只记失败,
+    // 对应 `_cooldown_policy` 的 except 分支:拿不到策略时宁可只记失败,
     // 也不要用一个猜出来的时长把端点雪藏。
     const { clock } = makeRouter();
     const throwing: SettingSource = {
@@ -678,7 +678,7 @@ describe("冷却的三层优先级(上游 until > 供应商覆盖 > 全局)", ()
     const ch = chain([{ model: "m0" }]);
     const rec = failOnce(router, ch, "s");
     expect(rec.fails).toBe(1); // 记账照旧
-    // ⚠️ 落的是 `now + 0`(**不是** 0):Nexus `note_failure` 的
+    // ⚠️ 落的是 `now + 0`(**不是** 0):`note_failure` 的
     // `floor = 0.0 if policy is None else policy.cooldown_floor_s` /
     // `self.cooldown_until = now + floor`。`now > now` 为假 → 实际不冷却,
     // 所以「不熔断」体现在 `cooled()` 为空,而不是字段等于 0。

@@ -248,9 +248,9 @@ export function createOverviewDomain(ctx: PanelContext, deps: OverviewDomainDeps
   /**
    * 时间范围 → [from, to]。
    *
-   * ⚠️ **N 天/月档要把 `from` 夹到库内首日**(Nexus L946-947):选 365 而库里只有
+   * ⚠️ **N 天/月档要把 `from` 夹到库内首日**:选 365 而库里只有
    * 60 天数据时,直接 `to - 364` 会多画 ~305 根**空柱** —— 横轴被「没有数据的
-   * 日子」撑开,趋势图看起来像用量断崖式下跌。Nexus 明确反对这种画法。
+   * 日子」撑开,趋势图看起来像用量断崖式下跌。这种画法必须避免。
    */
   const usageWindow = (
     range: UsageRange,
@@ -376,11 +376,11 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       // ⚠️ `deployments` / `healthy_count` / `cooldown_count` 三个数必须**同一
       // 分母**,否则页面上「N 个部署 / M 可用 / K 冷却」自相矛盾。
       //
-      // Nexus `/status.deployments` 是**一行一条**:
+      // `/status.deployments` 是**一行一条**:
       // - 每个逻辑模型一行(它的档 = 各成员的端点并集);
       // - 每个「不在任何逻辑模型里」的真实模型再单独一行(直通行)。
       // 以前这里 `deployments: ready ? 1 : 0` 是占位数字,而 healthy/cooldown
-      // 按**端点**算 —— 三个数各说各话。现在按 Nexus 的行口径统一算:
+      // 按**端点**算 —— 三个数各说各话。现在按同一行口径统一算:
       // 一行里的端点有任一在冷却 → 这一行算「冷却」,否则算「可用」。
       const nowS = wallNow();
       // 逻辑模型唯一真源 = db.logical_model(不读 registry 快照)。
@@ -563,14 +563,14 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         from !== null && to !== null ? allRows.filter((r) => r.day >= from && r.day <= to) : [];
 
       // ⚠️ **tokens 合计 = prompt + completion**,cached 是 prompt 的**子集**、
-      // 单独一列(Nexus `_RAW_KEYS` 口径)。以前这里写成
+      // 单独一列(`_RAW_KEYS` 口径)。以前这里写成
       // `prompt + completion + cached`,于是 cached 被双计,全页数值虚高,而且与
       // 同一行里的 `cache_miss = prompt - cached` 自相矛盾。
       const tokensOf = (row: UsageStatRow): number => row.prompt + row.completion;
 
       // ⚠️ **group=logical 时 `logical_model` 为空的行整行跳过**(S9 定案,
       // 2026-10-14):直连真实模型的用量没有逻辑名,落进「按逻辑模型」视图会把
-      // 一个 `provider/model` 伪键塞进榜/趋势/供应商环/KPI。Nexus 的口径是
+      // 一个 `provider/model` 伪键塞进榜/趋势/供应商环/KPI。既定口径是
       // **没有「其他」桶、直接跳过**(直连 ≠ 逻辑模型)。
       // 只对**网关行**跳过没有逻辑名的行(S9 定案)。外部表本来就没有逻辑模型,
       // 对它们也跳过的话,「仅网关外 + 按逻辑模型」会整页空白。
@@ -601,7 +601,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       const provAgg = new Map<string, RowAgg & { models: Map<string, RowAgg> }>();
       const bucketTotals = new Map<string, RowAgg>();
       // ⚠️ active_days 只数**真有用量**的日子(tokens>0 或 requests>0),
-      // 不是「有行就算」—— 全零行会把活跃天数灌水(Nexus L1065-1066 同口径)。
+      // 不是「有行就算」—— 全零行会把活跃天数灌水(同一口径)。
       const activeDays = new Set<string>();
       const totals: RowAgg = { tokens: 0, requests: 0, fails: 0, prompt: 0, completion: 0, cached: 0 };
 
@@ -642,7 +642,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         addTo(bt, row, tokens);
       }
 
-      // ⚠️ 并列名次 tie-break = `(-tokens, key)` 字典序(Nexus L1074/L1196-1197):
+      // ⚠️ 并列名次 tie-break = `(-tokens, key)` 字典序:
       // 同分时次序必须稳定,否则每次刷新榜单都在换位。
       const byTokensThenKey = (
         a: [string, { tokens: number }],
@@ -656,14 +656,14 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         .filter(([, agg]) => agg.tokens > 0)
         .sort(byTokensThenKey);
       // 前 10 名各自成条,尾部聚合成「其他」哨兵行(可展开成明细)——
-      // 与 Nexus `_TOP_MODELS=10` 同值。以前是前 5 且尾部静默丢弃,
+      // 上限沿用 `_TOP_MODELS=10`。以前是前 5 且尾部静默丢弃,
       // 于是「第 6 名以后的用量」从榜上、环上、图上一起消失,总量对不齐。
       const TOP_MODELS = 10;
       const TOP_PROVIDERS = 5;
       const topSeries = sortedSeries.slice(0, TOP_MODELS);
       const displayKeys = new Set(topSeries.map(([k]) => k));
       // 「其他」哨兵键:NUL 开头,真实模型引用是 `provider/model`、逻辑模型是
-      // 名字,都不可能以 NUL 开头 → 不会撞键(Nexus `_OTHER_MODEL` 同值)。
+      // 名字,都不可能以 NUL 开头 → 不会撞键(`_OTHER_MODEL` 同值)。
       const OTHER_MODEL_KEY = "\u0000other";
 
       const subModels = (seriesKey: string, aggTokens: number): UsageSeriesModel[] => {
@@ -759,21 +759,21 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
           fails: bt.fails,
           cache_hit: bt.cached,
           cache_miss: Math.max(0, bt.prompt - bt.cached),
-          // Nexus `_pct(cached, prompt)` 口径:round 4 位、prompt=0 → null。
+          // `_pct(cached, prompt)` 口径:round 4 位、prompt=0 → null。
           cache_hit_rate: bt.prompt > 0 ? Math.round((bt.cached / bt.prompt) * 1e4) / 1e4 : null,
           by_series: bySeries,
           other: Math.max(0, bt.tokens - bySum),
         };
       });
 
-      // 供应商排名(对齐 Nexus api_pages.py _metrics_history_page 的 providers 聚合):
+      // 供应商排名(`providers` 聚合口径):
       // 按 (-tokens, 键) 排序,前 5 名(_TOP_PROVIDERS)各自成条,排名尾部的供应商
-      // 聚合成「其他」行 —— is_other=true、机器键 "\u0000pother"(与 Nexus
+      // 聚合成「其他」行 —— is_other=true、机器键 "\u0000pother"(与
       // _OTHER_PROVIDER 同值)、tokens/requests 为被聚合供应商之和、percent
-      // 分母同 Nexus(区间总量 totals.tokens)。folded 填被聚合供应商明细
+      // 分母取区间总量 totals.tokens。folded 填被聚合供应商明细
       // (provider/key/name/tokens/requests/percent/models)。仅当确实有被聚合
       // 的供应商时才追加「其他」行。
-      // ⚠️ **tokens=0 的供应商不进榜**(Nexus L1199/L1210):只发过请求、一个 token
+      // ⚠️ **tokens=0 的供应商不进榜**:只发过请求、一个 token
       // 都没回报的供应商会占一个榜位,把有量用的挤下去。
       const providerRanked = [...provAgg.entries()]
         .filter(([, agg]) => agg.tokens > 0)
@@ -863,7 +863,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
     },
 
     /**
-     * 指标页数据(对齐 Nexus `GET /metrics` → `_metrics_page`)。
+     * 指标页数据(对齐 `GET /metrics` → `_metrics_page`)。
      *
      * 数据源是 `stats_daily`(按天聚合,D20/D21);TTFT / TPS / 缓存命中率**一律
      * 从原料现算**。
@@ -1097,7 +1097,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
           ctx.db.setting.set(spec.key, seed);
           value = seed;
         }
-        // 段名默认按键前缀推导,`section` 可覆盖(Nexus 把 `real.wait_budget_s`
+        // 段名默认按键前缀推导,`section` 可覆盖(`real.wait_budget_s`
         // 摆在 retry 段,见 SETTING_FIELDS 那条注释)。
         const dot = spec.key.indexOf(".");
         const section = spec.section ?? (dot > 0 ? spec.key.slice(0, dot) : spec.key);
@@ -1122,7 +1122,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
     },
 
     /**
-     * 写设置 —— **逐项按规格校验**(对齐 Nexus `_settings_save`):
+     * 写设置 —— **逐项按规格校验**(`_settings_save` 同款):
      * 未知键拒绝、越界拒绝、JSON 形状不合法拒绝。
      *
      * ⚠️ 为什么必须**先验再落库**:所有这些都是「存进去也不生效」的形状 ——
@@ -1236,7 +1236,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
     },
 
     async getRequestLog(): Promise<RequestLogStatus> {
-      // Nexus api_pages.py `_request_log_status`(L5255-5292) 对齐:
+      // 请求日志状态(`_request_log_status`)对齐:
       // enabled 只看 setting 是否就是 "1";content_mode 默认 "off";path 恒为
       // logs 目录;size_bytes 最近 30 个日志文件求和;counters 是 stats_daily 规模。
       const rawEnabled = ctx.db.setting.get("request_log.enabled")?.v ?? "1";
@@ -1247,7 +1247,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       try {
         logFiles = readdirSync(logsDir).filter((f) => /^requests-\d{8}\.jsonl$/.test(f)).sort();
       } catch {
-        // logs 目录尚不存在(Nexus:files 空,path 照常返回)
+        // logs 目录尚不存在(files 空,path 照常返回)
       }
       const recent = logFiles.slice(-30);
       let sizeBytes = 0;
@@ -1264,7 +1264,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       return {
         enabled: rawEnabled === "1",
         content_mode: mode,
-        // 逐字对齐 Nexus `api_pages.py` L5284-5289 的中文说明。
+        // 逐字对齐既有的中文说明。
         content_modes: REQUEST_LOG_CONTENT_MODES,
         path: logsDir,
         size_bytes: sizeBytes,
@@ -1278,7 +1278,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
     },
 
     async setRequestLog(patch: { enabled?: boolean; content_mode?: import("./types.js").RequestLogContentMode }): Promise<ApiResult> {
-      // Nexus api_pages.py `_request_log_set`(L5294-5308) 对齐:
+      // 请求日志设置(`_request_log_set`)对齐:
       // 非法 content_mode 报错文案逐字对齐(400);enabled bool → "1"/"0"。
       const mode = patch?.content_mode;
       if (mode !== undefined) {
@@ -1310,7 +1310,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
      */
 
 
-    // ── SenseNova 登录与账号管理(镜像 Nexus /sensenova/login、/refetch-key、/accounts) ──
+    // ── SenseNova 登录与账号管理(/sensenova/login、/refetch-key、/accounts) ──
 
 
     // ── 数据目录 ────────────────────────────────────────────────────────────

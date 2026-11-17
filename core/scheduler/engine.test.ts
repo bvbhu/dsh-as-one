@@ -1,5 +1,5 @@
 /**
- * 调度核心测试 —— 移植自 D:\projects\nexus\tests:
+ * 调度核心测试 —— 移植自参考实现的测试:
  *  - test_scheduler.py(1365 行):六档排序、分桶、时段规则、记忆化、配额刷新;
  *  - test_backoff.py(24073B):backoff_delay 数值语义;
  *  - test_v4_semantics.py:InflightLedger 聚合 / 租约句柄 / 负载感知分桶。
@@ -91,7 +91,7 @@ function chainItem(
   });
 }
 
-function seedNexusFlash(repo: InMemoryRepo): void {
+function seedFreeFlash(repo: InMemoryRepo): void {
   const members: Array<[string, string]> = [
     ["workbuddy", "hy4-preview"],
     ["tokenrhythm", "tr-alpha-channel"],
@@ -358,9 +358,9 @@ describe("helpers", () => {
 // ---------------------------------------------------------------------------
 
 describe("Scheduler.due-first 档位排序", () => {
-  it("夜间:免费档 T1 居首,T3 到期升序,未知到期排末(sec_nexus_flash)", () => {
+  it("夜间:免费档 T1 居首,T3 到期升序,未知到期排末", () => {
     const repo = new InMemoryRepo();
-    seedNexusFlash(repo);
+    seedFreeFlash(repo);
     seedLegacyRules(repo);
     const sched = new Scheduler(repo);
     const plan = sched.planMembers("as-one-flash", { now: at(3, 0) });
@@ -387,7 +387,7 @@ describe("Scheduler.due-first 档位排序", () => {
 
   it("排除规则:命中时段剔除(chain 与 plan_members 视角不同),时段外恢复", () => {
     const repo = new InMemoryRepo();
-    seedNexusFlash(repo);
+    seedFreeFlash(repo);
     seedLegacyRules(repo);
     const sched = new Scheduler(repo);
     // 09:00:hy4 的禁用规则 [08:00,23:00) 命中 → chain 剔除,plan_members 仍列首位
@@ -719,7 +719,7 @@ describe("Scheduler.策略选择", () => {
       "bbb/m",
       "ccc/m",
     ]);
-    // 倒序成员 → 倒序档链(force 绕过同分钟记忆化,同 Nexus force=True)
+    // 倒序成员 → 倒序档链(force 绕过同分钟记忆化,同上游 force=True)
     repo.setMembers("m", [
       { provider: "ccc", model: "m" },
       { provider: "bbb", model: "m" },
@@ -922,7 +922,7 @@ describe("Scheduler.策略选择", () => {
     repo.setQuota("workbuddy/石英的石英块", { fetched_at: now });
     expect(sched.pendingQuotaRefresh("deepseek-flash", now)).toEqual([]);
     // 过期快照 → 预取 trae+workbuddy(排序、只含 QUOTA_REFRESH_PROVIDERS)
-    // ⚠️ 额度映射有 TTL 缓存:invalidate 强制重读(等价 Nexus 每步换新 Scheduler)
+    // ⚠️ 额度映射有 TTL 缓存:invalidate 强制重读(等价上游每步换新 Scheduler)
     repo.setQuota("trae/bvbhu", { fetched_at: now - 3600 });
     repo.setQuota("workbuddy/石英的石英块", { fetched_at: now - 7200 });
     sched.invalidate();

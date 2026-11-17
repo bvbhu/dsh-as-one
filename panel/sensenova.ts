@@ -10,7 +10,7 @@
  */
 
 import type { CredentialVault } from "@as-one/core/src/config/credentials.js";
-import type { NexusDatabase } from "@as-one/core/src/db/database.js";
+import type { AsOneDatabase } from "@as-one/core/src/db/database.js";
 import type { ProviderRegistry } from "@as-one/core/src/config/providers.js";
 import type { InflightLedger as RouterLedger } from "@as-one/core/src/router/inflight-ledger.js";
 import type { HealthRegistry as RouterHealthRegistry } from "@as-one/core/src/router/health.js";
@@ -140,7 +140,7 @@ export function snPoolRatiosTable(): Map<string, { w5: number | null; w7: number
 }
 
 export function createSensenovaDomain(ctx: PanelContext, deps: SensenovaDomainDeps): SensenovaDomain {
-/** 归一 SenseNova 用户名(Nexus _sensenova_username_of 同款):
+/** 归一 SenseNova 用户名(`_sensenova_username_of` 同款):
  *  「sensenova/user」取第一个斜杠后段;「sensenova-user」剥前缀;裸名原样。 */
 const snUserOf = (name: string): string => {
   const s = String(name ?? "").trim();
@@ -149,7 +149,7 @@ const snUserOf = (name: string): string => {
   return sensenova_username(s);
 };
 
-/** 串行登录闸门(Nexus _SN_LOGIN_STATE:锁 + wait_s=2.0 间隔,避免平台风控)。
+/** 串行登录闸门(锁 + wait_s=2.0 间隔,避免平台风控)。
  *  链式 Promise 实现「同一时刻至多一个登录;上一个完成后等 2s 才放行下一个」;
  *  失败不打断链条(running 在 finally 归零)。 */
 const snLoginState = {
@@ -195,7 +195,7 @@ const snLedger = {
 /** 凭据行读写(密码 → refreshSecret 槽,key → secret 槽,JWT → raw.console_jwt)。 */
 const snCred = (username: string) => ctx.vault.get("sensenova", username);
 const snStorePassword = async (username: string, password: string): Promise<void> => {
-  if (!password) return; // 空密码不清除(Nexus 同款)
+  if (!password) return; // 空密码不清除
   await ctx.vault.put({ provider: "sensenova", username, refreshSecret: password });
 };
 const snStoreKey = async (username: string, apiKey: string): Promise<void> => {
@@ -487,15 +487,15 @@ const snStoreConsoleJwt = async (username: string, jwt: string): Promise<void> =
 
 /**
  * 积分池冷却毫秒 —— 读设置 `external_refresh.interval_hours`(与 channels-sync.ts 的
- * `chQuotaCooldownMs()` 同形),源头是 Nexus `_refresh_cooldown_s`(api.py:3114-3137)。
+ * `chQuotaCooldownMs()` 同形),源头是 `_refresh_cooldown_s`。
  *
  * ⚠️ 它**只闸自动刷新**:status 轮询发现缓存缺失/过期才按这个间隔补拉。
  * 用户点「刷新」走的是 sensenovaRefresh 里的 `snQuotaGate.delete(username)` +
- * 直接 snQuotaFetch —— 等价 Nexus 的 force=True,先清闸门再拉,**完全绕过**本函数。
+ * 直接 snQuotaFetch —— 等价 force=True,先清闸门再拉,**完全绕过**本函数。
  * 别把清闸门那两行删了,否则「点刷新没反应」会回来。
  *
  * ⚠️ 回退值取 5h,不取 channels-sync.ts 的 24h:constants.ts 给这个键登记的
- * `def` 就是 "5"(Nexus 文档口径),键缺失/非法时保持本域既有行为不变。
+ * `def` 就是 "5"(既有文档口径),键缺失/非法时保持本域既有行为不变。
  */
 const snQuotaCooldownMs = (): number => {
   const raw = ctx.db.setting.get("external_refresh.interval_hours")?.v ?? "5";
@@ -559,7 +559,7 @@ const snQuotaFetch = async (username: string): Promise<SensenovaQuota | null> =>
         void err; // 回落密码重登,那里的报错更有信息量
       }
     }
-    // ② 回落「用密码重新登录」(Nexus 同款路径)
+    // ② 回落「用密码重新登录」(同款路径)
     if (!jwt) {
       const pwd = cred?.refreshSecret ?? null;
       if (!pwd) {
@@ -647,7 +647,7 @@ const snMaybeFetchQuota = (username: string): void => {
   }
 };
 
-/** 登录(镜像 Nexus _sensenova_login):密码为空 → 400 文案;登录 401 →「登录失败:…」;
+/** 登录:密码为空 → 400 文案;登录 401 →「登录失败:…」;
  *  其他 →「登录异常:Type: …」;登录成功才存密码(输错不覆盖);
  *  fetchKey=true 时抓 key,JWT 尽力落库(失败不阻断)。串行化,不并发登录。 */
 const snLogin = async (
@@ -687,7 +687,7 @@ const snLogin = async (
       try {
         await snStoreConsoleJwt(user, jwt);
       } catch {
-        /* 仅警告,不让登录失败(Nexus 同款) */
+        /* 仅警告,不让登录失败 */
       }
     }
     // refresh_token 一并落库:控制台 JWT 只有约 3 小时有效期,有了它就能
@@ -740,9 +740,9 @@ const snLogin = async (
 };
 
   const methods = {
-    // ── SenseNova 登录与账号管理(镜像 Nexus /sensenova/login、/refetch-key、/accounts)──
+    // ── SenseNova 登录与账号管理(/sensenova/login、/refetch-key、/accounts)──
     /**
-     * SenseNova 账号列表(对齐 Nexus `GET /sensenova/accounts` → `_sensenova_accounts`)。
+     * SenseNova 账号列表(对齐 `GET /sensenova/accounts`)。
      *
      * 凭据投影,**无明文**。
      */
@@ -994,7 +994,7 @@ const snLogin = async (
               catalogErrs.push(`${username}:${detail}`);
             }
           }
-          // ② 积分池(force:绕过冷却闸门)—— 对应 Nexus force=True 的语义:
+          // ② 积分池(force:绕过冷却闸门)—— force=True 的语义:
           // 用户点了刷新,冷却只该约束自动刷新,不能拦手动的。
           // ⚠️ 同样逐账号兜住:`snQuotaFetch` 自己承诺不抛,但它的**调用方**(落库、
           //    读凭据)会;一个账号炸掉不该连累剩下的账号与整轮回执。
@@ -1102,7 +1102,7 @@ const snLogin = async (
     async sensenovaSavePassword(account: string, username: string, password: string): Promise<ApiResult> {
       const user = snUserOf(String(username || account || ""));
       if (!user) return { ok: false, message: "账号与密码均为必填(密码不回显)" };
-      // 保证有一行(Nexus INSERT ON CONFLICT DO NOTHING 语义)
+      // 保证有一行(INSERT ON CONFLICT DO NOTHING 语义)
       await ctx.vault.put({ provider: "sensenova", username: user });
       await snStorePassword(user, String(password ?? ""));
       await deps.syncSensenovaPool(ctx.vault);
@@ -1156,7 +1156,7 @@ const snLogin = async (
       if (!user) return { ok: false, message: "缺少用户名" };
       const key = String(apiKey ?? "").trim();
       const pwd = String(password ?? "");
-      // 建行 + 存 key/密码(Nexus _sensenova_account_upsert 语义)。
+      // 建行 + 存 key/密码(账号 upsert 语义)。
       await ctx.vault.put({
         provider: "sensenova",
         username: user,
@@ -1173,7 +1173,7 @@ const snLogin = async (
         has_key: Boolean(key),
         key_hint: key ? fpOf(key) : null,
       };
-      // 给了密码就顺带登录并抓 key(Nexus 路由 payload.login===True 语义);
+      // 给了密码就顺带登录并抓 key(payload.login===True 的语义);
       // 登录失败不整单失败:「账号已保存,但登录失败:…」。
       if (pwd) {
         const login = await snLogin(`sensenova/${user}`, user, pwd, true);

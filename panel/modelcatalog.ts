@@ -20,7 +20,7 @@
  * `id` 永远不变(它是调用串),所以显示层怎么改都不影响请求路由。
  */
 
-import type { NexusDatabase } from "@as-one/core/src/db/database.js";
+import type { AsOneDatabase } from "@as-one/core/src/db/database.js";
 import type { ProviderRegistry } from "@as-one/core/src/config/providers.js";
 import type { ModelEntry } from "@as-one/core/src/gateway/types.js";
 import { realModelMapOf } from "./modelview.js";
@@ -100,7 +100,7 @@ const LOGICAL_REASONING_EFFORTS: string[] = ["low", "medium", "high", "max"];
  *   {@link LOGICAL_REASONING_EFFORTS}),真实模型 = 自己库里的能力表;
  * - `reasoning_allows_off` = 逻辑模型恒为 `true`,真实模型 = 自己库里的列。
  *
- * ⚠️ 去重口径与 Nexus 一致:真实模型的 id 若已被某个逻辑模型名占用,跳过
+ * ⚠️ 去重口径一致:真实模型的 id 若已被某个逻辑模型名占用,跳过
  * (同一名字不能既是抽象模型又是真实模型)。
  *
  * ⚠️ 逻辑模型唯一真源 = `db.logical_model`(不读 registry —— 否则面板删掉的
@@ -108,7 +108,7 @@ const LOGICAL_REASONING_EFFORTS: string[] = ["low", "medium", "high", "max"];
  */
 export function listModelEntries(
   registry: ProviderRegistry,
-  db: NexusDatabase,
+  db: AsOneDatabase,
   providersWithCredentials: ReadonlySet<string>,
 ): ModelEntry[] {
   // 各真实模型的窗口/视觉能力事实(独立取一次,供逻辑模型聚合复用)。
@@ -135,7 +135,7 @@ export function listModelEntries(
     logical.push({ row, members, base: (row.display_name ?? "").trim() || row.name });
   }
 
-  // ── 2. 真实模型:藏起来的不给、没有凭据的不给(与 Nexus `EXISTS (credential)` 同义)──
+  // ── 2. 真实模型:藏起来的不给、没有凭据的不给(与 `EXISTS (credential)` 同义)──
   const reals = [...realModelMapOf(registry, db).values()]
     .filter((mv) => !mv.hidden && providersWithCredentials.has(mv.provider))
     .sort((a, b) =>
@@ -220,7 +220,7 @@ export function listModelEntries(
   return out;
 }
 
-/** 凭据库里**至少有一条凭据**的 provider 集合(Nexus `EXISTS (credential)` 同义判据)。 */
+/** 凭据库里**至少有一条凭据**的 provider 集合(`EXISTS (credential)` 同义判据)。 */
 export async function providersWithCredentials(
   registry: ProviderRegistry,
   vault: { list(provider: string): Promise<unknown[]> },

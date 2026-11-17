@@ -31,7 +31,7 @@ import { dayKey } from "@as-one/core/src/request-log/index.js";
  * - `as-one`   当前插件注册名(`src/llm-adapter.ts` 的 `AS_ONE_PROVIDER`);
  * - `one`      上一个插件版本的注册名,11-01 同日与 `as-one` 交替出现,
  *              两者用的是同一套逻辑模型名(`sensenova/deepseek-flash` 等);
- * - `nexus`    更早的注册名(项目原名),逻辑模型名与上面完全一致;
+ * - `nexus`    更早的注册名,逻辑模型名与上面完全一致;
  * - `litenexus` 同期精简版,同样是 `workbuddy/hy4-preview` 这种 `provider/model` 形态。
  *
  * 只有这 4 个是核对过的。不要按"看起来像"往里加 —— 少记一条只是数字小,

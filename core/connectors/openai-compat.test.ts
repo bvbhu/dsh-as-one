@@ -75,7 +75,7 @@ describe("classify_openai_error", () => {
     expect(err.retryable).toBe(false);
   });
 
-  it("504 → upstream(与 Nexus classify_status 对齐:500-599 全走 upstream;timeout 只来自传输层异常)", () => {
+  it("504 → upstream(500-599 全走 upstream;timeout 只来自传输层异常)", () => {
     const err = classify_openai_error(504, {});
     expect(err.kind).toBe("upstream");
     expect(err.retryable).toBe(true);

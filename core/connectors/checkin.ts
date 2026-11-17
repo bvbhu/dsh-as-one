@@ -1,21 +1,21 @@
 /**
- * 渠道签到能力 —— 与 Nexus `nexus/checkin.py` 对齐。
+ * 渠道签到能力。
  *
- * 支持渠道(与 Nexus CHECKIN_PROVIDERS 一致)：
+ * 支持渠道：
  *   - trae      国内版(区域 cn),Authorization 为 `Cloud-IDE-JWT {token}`
  *   - workbuddy 国内版(domain=codebuddy.cn 等),Authorization 为 `Bearer {token}`
  *
- * 三条红线(与 Nexus 一致)：
+ * 三条红线：
  *   1. trae 的 Authorization 是 `Cloud-IDE-JWT {token}`,不是 Bearer;
  *   2. HTTP 200 + 非 0 业务 code = 业务拒绝,不算成功
  *      (trae: 9004 = 缺 x-device-id;9095 = 本设备今日已签);
  *   3. claim 必须先 status 短路;confirm=false 时零写请求,confirm=true 才 POST 领取。
  *
- * 与 Nexus 的刻意差异(均在本文件顶部注释声明,供后续对账)：
+ * 刻意差异(均在本文件顶部注释声明,供后续对账)：
  *   - trae 缺 device_id 时不报错拒绝,而是用 `resolve_identity(token)` 确定性派生
- *     (与 As One trae 连接器登录时使用的身份一致;Nexus 直接抛凭据错误);
+ *     (与 As One trae 连接器登录时使用的身份一致;既有实现直接抛凭据错误);
  *   - 网络级失败(fetch 拒绝/超时/应答流中断)统一包装为 CheckinError
- *     (Nexus 会原样冒泡成 500;按"As One 不伪造成功、失败要带原因"的约定包装)。
+ *     (既有实现会原样冒泡成 500;按"As One 不伪造成功、失败要带原因"的约定包装)。
  */
 
 import { resolve_identity } from "./trae.js";
@@ -212,7 +212,7 @@ export interface TraeCheckinAccount {
   extra?: Record<string, unknown>;
 }
 
-/** trae 签到请求头:Nexus 用 `Cloud-IDE-JWT`,不是 Bearer。 */
+/** trae 签到请求头:用 `Cloud-IDE-JWT`,不是 Bearer。 */
 export function traeCheckinHeaders(token: string, device_id?: string): Record<string, string> {
   const headers: Record<string, string> = {
     Authorization: `Cloud-IDE-JWT ${token}`,
@@ -221,7 +221,7 @@ export function traeCheckinHeaders(token: string, device_id?: string): Record<st
     Origin: "https://www.trae.cn",
     Referer: "https://www.trae.cn/",
   };
-  // 缺 device_id 时**不发** x-device-id 头(缺失 ≠ 空串;Nexus 同样只在校验通过后发)。
+  // 缺 device_id 时**不发** x-device-id 头(缺失 ≠ 空串;只在校验通过后才发)。
   if (device_id && device_id.length > 0) {
     headers["x-device-id"] = device_id;
   }
@@ -588,8 +588,10 @@ export async function traeCheckinClaim(
 
 export const WB_CN_BILLING_BASE = "https://www.codebuddy.cn";
 /**
- * 旧状态端点 `/v2/billing/meter/checkin-activity-status` 已下线（实测 GET 404）。
- * 保留导出仅为兼容旧调用方；生产逻辑不再打它。
+ * 签到活动状态（只读）：`POST /v2/billing/meter/checkin-activity-status`。
+ *
+ * ⚠️ **必须 POST** —— 同一路径 GET 会 404，只有 POST 返回业务体。此前用 GET
+ * 探测得出「端点已下线」的结论是错的（详见 {@link wbCheckinStatus}）。
  */
 export const WB_CHECKIN_STATUS_PATH = "/v2/billing/meter/checkin-activity-status";
 export const WB_CHECKIN_CLAIM_PATH = "/v2/billing/meter/daily-checkin";
@@ -603,7 +605,7 @@ const GLOBAL_DOMAINS = ["workbuddy.ai", "codebuddy.ai"];
 
 export type WbRegion = "cn" | "global";
 
-/** 由 domain 判区域:Nexus 同款(剥 www.;精确/后缀命中全球域名 → global)。 */
+/** 由 domain 判区域(剥 www.;精确/后缀命中全球域名 → global)。 */
 export function wbRegionOf(domain?: string | null): WbRegion {
   let d = (domain ?? "").toString().trim().toLowerCase();
   if (d.startsWith("www.")) d = d.slice(4);
@@ -728,39 +730,60 @@ async function wbPost(
 export type WbCheckinOptions = CheckinHttpOptions;
 
 export interface WbStatus {
-  /** 状态端点已下线,恒 false —— 不要把「不知道」伪装成「未启用」。 */
+  /** 签到活动是否在有效期内（false = 已结束 / 未开始）。 */
   active: boolean;
-  /** 旧字段保留兼容,恒 null 语义(false 但配合 active=false = 未知)。 */
+  /** **今天是否已签到** —— 上游权威口径（`today_checked_in`），判断签到只认它或 `checkin_dates`。 */
   today_checked_in: boolean;
+  /** 当前连续签到天数。 */
   streak_days: number;
+  /** 每日签到可得积分（活动固定值，不是「已到账」）。 */
   daily_credit: number;
+  /**
+   * ⚠️ 上游的 `today_credit` **不代表今天已到账**：实测未签到账号也返回
+   * `today_credit === daily_credit`（它是「今日可得上限」）。拿它反推签到会
+   * 一直得出「已签」。判断是否签到请用 `today_checked_in` / `checkin_dates`。
+   */
   today_credit: number;
   is_streak_day: boolean;
-  claim_button_text: string | null;
-  /** true = 上游已无預查端点,唯一可靠途径是直接领取(claim)。 */
-  unavailable: boolean;
-  /** 给面板显示的原因(不再谎称 HTTP 401/404)。 */
-  reason: string;
+  /** 逐日签到记录，首元素 = 最近一次签到日期（`"YYYY-MM-DD"`）。 */
+  checkin_dates: string[];
+  /** 活动截止时刻（`"YYYY-MM-DD HH:mm:ss"`，上游无时区）；null = 未给。 */
+  end_time: string | null;
 }
 
 /**
- * workbuddy 签到状态:旧 status 端点已下线,这里**不发任何网络请求**,
- * 明确告知调用方「状态不可预查」(避免把 404 错报成 401,也避免假装未签)。
+ * workbuddy 签到**活动状态**（只读，无副作用）。
+ *
+ * ⚠️ 必须 POST：同一路径 GET 返回 404（`404 page not found`），只有 POST 才回
+ * 业务体。2026-11-17 实测 POST 200 且带完整 data —— 据此纠正此前「端点已下线」
+ * 的误判（当时用 GET 探测，把 404 当成下线，状态查询于是被硬编码成不可用）。
+ *
+ * 失败一律抛出（网络 / HTTP / 业务码），由调用方按各自语义呈现 —— 不在这里
+ * 把「不知道」伪装成「未签」或「已签」。
  */
-export async function wbCheckinStatus(account: WbCheckinAccount, _opts: WbCheckinOptions = {}): Promise<WbStatus> {
+export async function wbCheckinStatus(account: WbCheckinAccount, opts: WbCheckinOptions = {}): Promise<WbStatus> {
   if (wbRegionOf(account.domain) !== "cn") {
     throw new CheckinRegionError("国际版无签到(订阅制,额度走 payStatus)");
   }
+  const res = await wbPost(opts, WB_CHECKIN_STATUS_PATH, account);
+  if (res.code !== null && res.code !== 0) {
+    throw new CheckinError(
+      `workbuddy 签到状态业务失败 code=${res.code}${res.message.length > 0 ? `: ${res.message}` : ""}`,
+    );
+  }
+  const d = res.data;
+  const dates = d["checkin_dates"];
   return {
-    active: false,
-    today_checked_in: false,
-    streak_days: 0,
-    daily_credit: 0,
-    today_credit: 0,
-    is_streak_day: false,
-    claim_button_text: null,
-    unavailable: true,
-    reason: "workbuddy 签到状态接口已下线,无法预查;直接签到即可(已签会原样返回上游提示)",
+    active: d["active"] === true,
+    today_checked_in: d["today_checked_in"] === true,
+    streak_days: num(d["streak_days"]),
+    daily_credit: num(d["daily_credit"]),
+    today_credit: num(d["today_credit"]),
+    is_streak_day: d["is_streak_day"] === true,
+    checkin_dates: Array.isArray(dates)
+      ? dates.filter((x): x is string => typeof x === "string" && x.length > 0)
+      : [],
+    end_time: typeof d["end_time"] === "string" && d["end_time"].length > 0 ? d["end_time"] : null,
   };
 }
 

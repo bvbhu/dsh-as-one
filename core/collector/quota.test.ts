@@ -1,5 +1,5 @@
 /**
- * collector/quota 探针的纯函数测试 —— 数据形状对齐 Nexus 采集器实测口径。
+ * collector/quota 探针的纯函数测试 —— 数据形状对齐采集器实测口径。
  */
 import { describe, expect, it } from "vitest";
 import {

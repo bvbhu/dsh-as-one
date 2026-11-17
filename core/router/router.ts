@@ -1,5 +1,5 @@
 /**
- * Router —— 选路引擎(从 `nexus/core/router.py:Router` / `HealthRegistry` /
+ * Router —— 选路引擎(从 `router.py:Router` / `HealthRegistry` /
  * `SessionPinTable` 移植;测试规格 `tests/test_v4_semantics.py`)。
  *
  * 选择顺序(2026-10-10 用户定案,**不可调换**):
@@ -71,7 +71,7 @@ export type {
 
 export { PLAN_FAILURE_REASONS, LOAD_AWARE_STRATEGIES };
 
-/** 设置读取(等价于 Nexus 的 `repo.get_setting("<字面量键>")`)。 */
+/** 设置读取(等价于 `repo.get_setting("<字面量键>")`)。 */
 export interface SettingSource {
   /** 读一个设置;缺失 / 抛错都按「没有」处理(调用方各自回落)。 */
   getSetting(key: string): string | null | undefined;
@@ -316,7 +316,7 @@ export class Router {
     this.pinSeconds = Number(options.pinSeconds ?? DEFAULT_PIN_SECONDS);
     this.pinSecondsOf = options.pinSecondsOf ?? null;
     this.pins = options.pins ?? new SessionPinTable(this.pinSeconds, this.clock);
-    // ⚠️ 默认健康表必须挂在**注入的时钟**上:Nexus 里 `EndpointHealth` 的
+    // ⚠️ 默认健康表必须挂在**注入的时钟**上:上游 `EndpointHealth` 的
     // `in_cooldown()` 直接读墙钟,而 Router 与它同源;若这里退回真实 `Date.now()`,
     // 注入时钟的测试就会出现「刚写完冷却就被判已过期」的假象(冷却截止是 epoch 秒)。
     this.health =
@@ -819,13 +819,13 @@ export class Router {
   /**
    * 全局冷却时长(秒)= `retry.logical_cooldown`(分钟)× 60。
    *
-   * ⚠️ **键缺失 / 值坏了 → 900 秒,不是 0**:Nexus 走
+   * ⚠️ **键缺失 / 值坏了 → 900 秒,不是 0**:上游走
    * `RetryPolicy.of(repo, abstract=False)` → `retry_setting()` → 键缺失时
    * **播种** `RETRY_DEFAULTS["retry.logical_cooldown"] = 15` 后回读,值非法时
    * 「写回默认值再回读」。所以那个函数永远返回一个数,Router 侧拿到的就是
    * 默认的 15 分钟。本方法用 {@link coerceRetryNumber} 等价地做到这点。
    *
-   * 只有**读不动**(没有 repo / `get_setting` 抛错)才返回 `null` —— 对应 Nexus
+   * 只有**读不动**(没有 repo / `get_setting` 抛错)才返回 `null` —— 对应
    * `_cooldown_policy` 的 `except` 分支,语义是「本次不熔断」。
    */
   private globalCooldownFloorS(): number | null {
@@ -893,7 +893,7 @@ export class Router {
    *
    * ⚠️ 读失败 / 没配 / 值非法 → 回落默认 50(观测不该因为设置读不到而把整个视图拖垮)。
    *
-   * ⚠️ 解析口径照抄 Nexus 的 `int(raw or default)`:`"3.9"` / `"1e3"` 在 Python 里
+   * ⚠️ 解析口径照抄上游的 `int(raw or default)`:`"3.9"` / `"1e3"` 在 Python 里
    * 会抛 `ValueError` → 回落 50,而不是被截成 3 —— 见 {@link parseStrictInt}。
    */
   recentLimit(): number {
@@ -948,7 +948,7 @@ export class Router {
   }
 }
 
-/** 排障快照形状(与 Nexus 的 `Router.snapshot()` 一致)。 */
+/** 排障快照形状(与 `Router.snapshot()` 一致)。 */
 export interface RouterSnapshot {
   /** `{realModelId: 在途数}` */
   inflight: Record<string, number>;
@@ -1042,5 +1042,5 @@ export function endpointCooldownSeconds(deps: RouterDeps | SettingSource | null)
   return policy === null ? null : policy.cooldownFloorS;
 }
 
-/** 现拼标识符 / 领域类型 / 常量的一并再导出(与 `nexus/core/router.py` 同口径)。 */
+/** 现拼标识符 / 领域类型 / 常量的一并再导出(与 `router.py` 同口径)。 */
 export * from "./types.js";

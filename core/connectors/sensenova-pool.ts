@@ -20,23 +20,23 @@ import { UpstreamError } from "./types.js";
 // ---------------------------------------------------------------------------
 
 /**
- * 可计费滚动窗口长度(秒)—— Nexus `BILLABLE_WINDOW_S`。
+ * 可计费滚动窗口长度(秒)。
  *
  * TPM/RPM 是**分钟级**窗口:上游按最近 60s 的消耗判定限流,所以本地记账也
  * 必须按 60s 滚动窗口记。记成累计值会在长连接上误判「这个号烧了很多」。
  */
 export const BILLABLE_WINDOW_S = 60;
 /**
- * 429 时的**同号重试间隔**(秒)—— Nexus `COOLDOWN_ON_HOLD`。
+ * 429 时的**同号重试间隔**(秒)。
  *
  * 单账号策略下不再换号(用户 m23215):粘性期内 429 → 等这么久后打**同一个**
  * 账号。同时给 (账号,模型) 冷却表记一笔,供面板看到「这个号的这个模型在限流」
  * (纯展示,不参与选号)。
  */
 export const COOLDOWN_ON_HOLD = 5;
-/** 单账号累计等待预算(秒)—— Nexus `ACCOUNT_WAIT_BUDGET_S`。 */
+/** 单账号累计等待预算(秒)。 */
 export const ACCOUNT_WAIT_BUDGET_S = 100;
-/** 健康度滚动窗口(秒)—— Nexus `HEALTH_WINDOW_S`。 */
+/** 健康度滚动窗口(秒)。 */
 export const HEALTH_WINDOW_S = 300;
 /**
  * 日志纪律阈值(窗口内可计费 token)—— 用户 m05751 定案。
@@ -70,7 +70,7 @@ export interface SensenovaApiKey {
 /**
  * 单账号运行态 —— 每账号一份,**跨请求存活**(账号池挂在适配器实例上)。
  *
- * 对应 Nexus `AccountRuntime`。三样东西:
+ * 三样东西:
  * - `spend`:60s 滚动可计费窗口(只记账 / 诊断,**不再**参与换号判据);
  * - `health`:成功/失败计数 + 最近 TTFT(供面板展示,不参与选路);
  * - `cooldown`:按 (账号, 模型) 分格的冷却表 —— 模型格只作展示;账号格
@@ -102,15 +102,15 @@ export class SensenovaAccountRuntime {
   key = "";
 
   /**
-   * 该账号的**钉连接**池(对应 Nexus `AccountRuntime._clients`)。
+   * 该账号的**钉连接**池。
    *
    * ⚠️ **前缀缓存亲和的关键**(2026-10-24 用户定案,m06730② 真根因之一):
    * 上游的前缀缓存按 1024-token 块存放在**推理节点本地**,而请求落到哪个节点
    * 由 TCP 连接决定。用 Node 默认的 `fetch`(undici 全局连接池)时,每账号的
    * 请求会在池里的多条连接间轮转 → 落到不同节点 → 缓存块丢一半。
    *
-   * Nexus `sensenova.py` 的解法:每账号一条
-   * `httpx.Limits(max_connections=1, max_keepalive_connections=1)` 的 client,
+   * 解法:每账号一条 keep-alive client,且**限制到单条连接**
+   * (等价于 `httpx` 的 `Limits(max_connections=1, max_keepalive_connections=1)`),
    * 单条 keep-alive 连接顺序请求 → 稳定命中同一个节点。
    *
    * 这里用 `node:https.Agent({ keepAlive: true, maxSockets: 1 })` 达到同样效果
@@ -129,7 +129,7 @@ export class SensenovaAccountRuntime {
         keepAlive: true,
         maxSockets: 1, // 单账号单并发:一条连接串行,节点亲和
         maxFreeSockets: 1,
-        timeout: 900_000, // 对齐 Nexus read_timeout=900s(长回答)
+        timeout: 900_000, // 900s:长回答留足时间
       });
     }
     return this.pinnedAgent;
@@ -237,7 +237,7 @@ export class SensenovaAccountRuntime {
 /**
  * SenseNova 账号池 —— 整池替换 + 运行态保留 + 按 api_key 反查。
  *
- * 对应 Nexus `AccountPool`。**同名账号加 `#2`/`#3` 后缀**去重(绝不静默
+ * **同名账号加 `#2`/`#3` 后缀**去重(绝不静默
  * 覆盖);已存在账号**保留运行态**(冷却/健康/滚动计数是运行事实,不能因
  * 凭据刷新归零)。
  */

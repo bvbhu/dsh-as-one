@@ -47,7 +47,7 @@ describe("trae-wire: convertContent", () => {
   });
 
   it("未知 part → 占位符;空结果 → 空文本块", () => {
-    // url 字段会被当作图片 URL 透传(与 Nexus 一致)
+    // url 字段会被当作图片 URL 透传(与既有实现一致)
     expect(convertContent([{ type: "audio", url: "x" }])).toEqual([
       { type: "image_url", image_url: { url: "x" } },
     ]);

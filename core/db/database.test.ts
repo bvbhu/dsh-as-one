@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDatabase, type NexusDatabase } from "./database.js";
+import { openDatabase, type AsOneDatabase } from "./database.js";
 
-let db: NexusDatabase;
+let db: AsOneDatabase;
 
 beforeEach(() => {
 	db = openDatabase(":memory:");
@@ -344,7 +344,7 @@ describe("stats_daily", () => {
 		const a = openDatabase(file);
 		const b = openDatabase(file);
 		const day2 = "2026-04-29";
-		const write = (handle: NexusDatabase, requests: number) =>
+		const write = (handle: AsOneDatabase, requests: number) =>
 			handle.statsDaily.record({ day: day2, logical_model: null, provider: "p1", model: "m1", requests });
 		// 两个连接各写一次同一 NULL 键:老实现是 UPDATE→INSERT 两步,窗口内可能双插。
 		write(b, 2);

@@ -1,13 +1,12 @@
 /**
  * 通用 OpenAI chunk 流 → chat.completion 聚合(core 层,纯函数零网络)。
  *
- * 移植自 Nexus 的 connectors/trae.py L751-830(`_merge_tool_call` /
- * `_normalize_usage_ints` / `aggregate_completion`),供 workbuddy / sensenova /
+ * 合并路径见本文件的 {@link mergeToolCall} / {@link normalizeUsageInts} /
+ * {@link aggregateCompletion},供 workbuddy / sensenova /
  * trae 等「上游恒走 SSE、非流式在内部聚流」的通道复用同一条解析路径 ——
- * 避免每处各写一遍聚合导致「流式能出工具调用、非流式丢字段」这类不一致
- * (workbuddy.py L424-426 / sensenova.py L1087-1089 注释里的历史教训)。
+ * 避免每处各写一遍聚合导致「流式能出工具调用、非流式丢字段」这类不一致。
  *
- * 语义要点(与 Nexus 逐条对齐):
+ * 语义要点:
  * - tool_calls 按 index 合并(不能按到达顺序 —— 多工具并发时张冠李戴);
  * - usage 取流内最后一块;finish_reason 取最后非空值;
  * - content / reasoning_content 逐段拼接;

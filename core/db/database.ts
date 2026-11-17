@@ -1,17 +1,17 @@
 /**
- * Nexus 持久层 — node:sqlite (DatabaseSync) 访问层。
+ * SQLite 持久层 — node:sqlite (DatabaseSync) 访问层。
  *
  * 用法:
  *   const db = openDatabase(":memory:");            // 测试
- *   const db = openDatabase("/path/to/nexus.db");   // 磁盘文件 → WAL
+ *   const db = openDatabase("/path/to/as-one.db");  // 磁盘文件 → WAL
  *
  * 只依赖 Node 内建 node:sqlite(node >= 22.5),同步 API 是预期行为。
- * 参照 D:\projects\nexus 的访问层(repo.py)实际操作面:
+ * 操作面(每张表一组方法):
  *   - provider: get/list/insert/update/delete
  *   - credential: get(provider, username)/listByProvider/secretsFor/insert/update/delete
  *   - real_model: get/list/insert-upsert/update/delete
  *   - logical_model: get/list/insert/update/delete
- *   - stats_daily: upsert(增量累加,同 repo.py _UPSERT_STATS)/range(按日范围 query)
+ *   - stats_daily: upsert(增量累加)/range(按日范围 query)
  *   - setting: get/set
  */
 
@@ -68,7 +68,7 @@ export type StatsExternalDelta = Pick<StatsExternalRow, "day" | "provider" | "mo
 	>;
 
 /** openDatabase 返回的数据库封装。 */
-export interface NexusDatabase {
+export interface AsOneDatabase {
 	/** 底层 DatabaseSync 句柄(需要原生能力时使用)。 */
 	raw: DatabaseSync;
 	/** 关闭连接。 */
@@ -111,11 +111,11 @@ export interface NexusDatabase {
 		 *
 		 * `insert` 是纯 INSERT,重复主键会抛 UNIQUE constraint;而凭据的日常
 		 * 写路径(面板保存、令牌轮换、迁移脚本补密钥)**必然是覆盖已有行**,
-		 * 所以这些地方都该走 `set`(镜像 Nexus `upsert_credential`)。
+		 * 所以这些地方都该走 `set`(upsert 语义)。
 		 */
 		set(row: Partial<CredentialRow> & Pick<CredentialRow, "provider" | "username">): void;
 		delete(provider: string, username: string): void;
-		/** 某 provider 下 username → secret 的映射(同 repo.py secrets_for)。 */
+		/** 某 provider 下 username → secret 的映射。 */
 		secretsFor(provider: string): Record<string, string | null>;
 	};
 
@@ -124,7 +124,7 @@ export interface NexusDatabase {
 		get(provider: string, model: string): RealModelRow | undefined;
 		list(): RealModelRow[];
 		listByProvider(provider: string): RealModelRow[];
-		/** ON CONFLICT DO UPDATE —— real_model 以 (provider, model) 为键,Nexus 用 upsert 语义。 */
+		/** ON CONFLICT DO UPDATE —— real_model 以 (provider, model) 为键,用 upsert 语义。 */
 		set(row: RealModelRow): void;
 		/** 只更新提供的字段,键 provider+model 必须给出。 */
 		update(
@@ -152,11 +152,11 @@ export interface NexusDatabase {
 			dayTo: string,
 			logicalModel?: string | null,
 		): StatsDailyRow[];
-		/** 同 repo.py _UPSERT_STATS:当日该键存在则各计数列累加增量,否则插入。 */
+		/** 当日该键存在则各计数列累加增量,否则插入。 */
 		record(delta: StatsDelta): void;
 		insert(row: StatsDailyRow): void;
 		/**
-		 * 聚合表整体规模(面板「请求日志」counters,Nexus api_pages.py L5264-5269 同款 SQL):
+		 * 聚合表整体规模(面板「请求日志」counters):
 		 * stats_rows(COUNT) / last_24h(day >= 传入边界日) / errors(SUM(fails))。
 		 * 边界日由调用方按 dayKey(now - 86400s) 传入,保持本层零时间依赖。
 		 */
@@ -220,13 +220,13 @@ function toBind(v: unknown): BindValue {
  *
  * @param target ':memory:' 或磁盘路径
  */
-export function openDatabase(target: string | ":memory:"): NexusDatabase {
+export function openDatabase(target: string | ":memory:"): AsOneDatabase {
 	const raw = new DatabaseSync(target);
 	// 磁盘文件开启 WAL;:memory: 无日志模式概念,跳过。
 	if (target !== ":memory:") {
 		raw.exec("PRAGMA journal_mode = WAL;");
 	}
-	// 外键约束与 Nexus Python sqlite3 层默认一致(Nexus 表间有 REFERENCES ... ON DELETE CASCADE)。
+	// 外键约束:表间声明了 REFERENCES ... ON DELETE CASCADE,SQLite 默认关闭,须显式开启。
 	raw.exec("PRAGMA foreign_keys = ON;");
 	// 忙等待:SQLite 默认 busy_timeout=0,并发写(WAL checkpoint / 插件与 Electron 双进程)会
 	// 立刻抛 SQLITE_BUSY。5s 足够覆盖本项目的写冲突窗口,且不掩盖真正的死锁。
@@ -238,7 +238,7 @@ export function openDatabase(target: string | ":memory:"): NexusDatabase {
 	 * `CREATE TABLE IF NOT EXISTS` 对**已存在**的表是空操作 —— 老库长不出新增列。
 	 * 这里按 `PRAGMA table_info` 查一次,缺列才 `ALTER TABLE ... ADD COLUMN`。
 	 *
-	 * 为什么不跟 v5→v6→v7 那条迁移链:那套脚本是 Nexus 的,本项目约定是
+	 * 为什么不跟 v5→v6→v7 那条迁移链:本项目约定是
 	 * 「直接建终态库,不跑迁移链」(schema.ts 头部)。对**新增可选列**而言,
 	 * 一条幂等 ALTER 比维护版本链简单得多:缺了就加,存在就跳过。
 	 */
@@ -294,7 +294,7 @@ export function openDatabase(target: string | ":memory:"): NexusDatabase {
 	}
 
 	// ---------- 表级 API ----------
-	const db: NexusDatabase = {
+	const db: AsOneDatabase = {
 		raw,
 		close() {
 			raw.close();
@@ -576,7 +576,7 @@ export function openDatabase(target: string | ":memory:"): NexusDatabase {
 				insertRow("stats_daily", row as unknown as RowLike);
 			},
 			/**
-			 * 聚合表整体规模(面板「请求日志」counters,Nexus api_pages.py L5264-5269 同款 SQL):
+			 * 聚合表整体规模(面板「请求日志」counters):
 			 * - stats_rows:stats_daily 总行数(COUNT(*));
 			 * - last_24h:近 24h 请求数(day >= 传入的边界日,即 dayKey(now-86400s));
 			 * - errors:累计失败数(SUM(fails))。

@@ -52,7 +52,7 @@ export async function* rawLines(stream: ReadableStream<Uint8Array>): AsyncGenera
         yield line;
         // ⚠️ 见到 `data: [DONE]` **立刻收连接**:上游说完之后 socket 可能还
         // 挂着 keep-alive,继续 read() 会一直等到读超时才返回 —— 实测模型
-        // 1s 就答完、整轮却记到 183s。Nexus `_attempt` 同款:
+        // 1s 就答完、整轮却记到 183s。`_attempt` 同款:
         // 「上游说完:立刻收连接,不空等到超时」。
         if (isSseDoneLine(line)) {
           await reader.cancel().catch(() => {});

@@ -10,7 +10,7 @@
  * 字段全部来自 `@as-one/core`,只有 `GatewayState` 是面板自己定义的可变状态对象
  * (重启网关后要能被面板看到,所以是引用不是快照)。
  */
-import type { NexusDatabase } from "@as-one/core/src/db/database.js";
+import type { AsOneDatabase } from "@as-one/core/src/db/database.js";
 import type { ProviderRegistry } from "@as-one/core/src/config/providers.js";
 import type { CredentialVault } from "@as-one/core/src/config/credentials.js";
 import type { Scheduler } from "@as-one/core/src/scheduler/engine.js";
@@ -32,7 +32,7 @@ export interface GatewayState {
 }
 
 export interface PanelContext {
-  db: NexusDatabase;
+  db: AsOneDatabase;
   registry: ProviderRegistry;
   vault: CredentialVault;
   scheduler: Scheduler;

@@ -113,7 +113,7 @@ export function toRouterChain(chain: readonly ChainItem[]): RouterChainItem[] {
   });
 }
 
-/** 每次请求新生成 completion id / created(与 Nexus 的 chatcmpl-{ts:x} 同款)。 */
+/** 每次请求新生成 completion id / created(与 chatcmpl-{ts:x} 同款)。 */
 export function completionIdOf(): string {
   return `chatcmpl-${Math.floor(performance.now()).toString(16)}`;
 }
@@ -190,7 +190,7 @@ export function bodyForProtocol(
   if (isWorkbuddyWire(protocol) || protocol === "sensenova") {
     // ⚠️ sensenova 也必须走这个构造器:**恒 stream:true**(网关侧 complete()
     // 走 SSE 聚合,若发 stream:false 上游回 JSON,聚合器会解析失败)——
-    // 与 Nexus sensenova.py `_build_body` 的 `body["stream"] = True` 同款。
+    // 与 sensenova.py `_build_body` 的 `body["stream"] = True` 同款。
     // 它顺带带上 stream_options.include_usage(tpm 记账的载体)。
     //
     // ⚠️ 2026-10-29:只有 `protocol === "workbuddy"` 走这里。provider 名里带
@@ -224,7 +224,7 @@ export function bodyFor(req: UpstreamRequest): Record<string, unknown> {
     messages: req.messages as unknown[],
     stream: req.stream,
   };
-  // ⚠️ **流式必须向客户端要 usage**(对齐 Nexus `base.py` to_body:
+  // ⚠️ **流式必须向客户端要 usage**(对齐 `base.py` to_body:
   // `if self.stream: body["stream_options"] = {"include_usage": True}`):
   // 上游默认**不在流尾发 usage 块**,于是 forwardStream 收不到
   // completion_tokens → 请求日志与统计的 token 数全空、tps 无从计算

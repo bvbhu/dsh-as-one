@@ -1,8 +1,8 @@
 /**
  * As One 管理面板共享契约(renderer / preload / main 三端 type-only)。
  *
- * 契约目标:页面结构 1:1 对齐 Nexus 面板(用户 m07680),因此本文件的数据形状
- * 全部以 Nexus 面板后端 api 形状为准镜像命名与结构;As One 主进程装配层
+ * 契约目标:页面结构需与面板前端一致(用户 m07680),因此本文件的数据形状
+ * 全部以面板前端 api 形状为准镜像命名与结构;As One 主进程装配层
  * (src/main/assembly.ts)按本契约返回数据 —— 核心层真实可算的字段给真实值,
  * 核心层不具备的子系统的字段给诚实的"不支持/空"形状(如 credits.not_applicable、
  * checkin.supported=false),页面仍渲染相同元素。
@@ -189,7 +189,7 @@ export interface UsageSeriesModel {
   provider: string | null;
   tokens: number;
   percent: number | null;
-  /** 被折叠序列的机器键(Nexus `_folded` 行;仅「其他」行的 folded 有条目)。 */
+  /** 被折叠序列的机器键(`_folded` 行;仅「其他」行的 folded 有条目)。 */
   key?: string;
 }
 
@@ -232,9 +232,9 @@ export interface UsageProvider {
   is_other: boolean;
   models: UsageSeriesModel[];
   /**
-   * folded 为对齐 Nexus is_other 行新增,2026-10-20。
+   * folded 为对齐 is_other 行而新增,2026-10-20。
    *
-   * 「其他」供应商行(is_other=true)展开后的被聚合供应商明细,形状照 Nexus
+   * 「其他」供应商行(is_other=true)展开后的被聚合供应商明细,形状同
    * 后端 api_pages.py `providers[].folded[]`:每项含 provider / key / name /
    * tokens / requests / percent / models。仅当排名尾部确实有被聚合的供应商
    * 时出现;普通供应商行恒为 undefined。
@@ -271,7 +271,7 @@ export interface UsageHistory {
 
 // ─────────────────────────── 逻辑模型 ───────────────────────────
 
-/** 逻辑模型的一员(真实模型)名下的一枚凭据端点(Nexus `_logical_list` 的 `accounts[]`)。 */
+/** 逻辑模型的一员(真实模型)名下的一枚凭据端点(逻辑模型列表的 `accounts[]`)。 */
 export interface LogicalDeploymentAccount {
   /** `"<provider>/<username>"`(凭据身份,D24)。 */
   account_id: string;
@@ -319,11 +319,11 @@ export interface LogicalDeployment {
   endpoint_count: number;
   accounts: LogicalDeploymentAccount[];
   blackout: boolean | null;
-  /** 时段规则由调度器管(面板只展示,Nexus 同名字段)。 */
+  /** 时段规则由调度器管(面板只展示,同名字段)。 */
   blackout_managed_by?: string;
 }
 
-/** 策略分组(Nexus `strategy_groups[]`;页面当前不渲染,契约形状要对齐)。 */
+/** 策略分组(`strategy_groups[]`;页面当前不渲染,契约形状要对齐)。 */
 export interface LogicalStrategyGroup {
   group_name: string;
   model_name: string;
@@ -350,9 +350,9 @@ export interface LogicalModelGroup {
   order_respected: boolean | null;
   /** 成员清单(`"provider/model"`,保序 = priority 序)。 */
   members: string[];
-  /** D14:`hidden` 列已删,恒 false(Nexus 同口径)。 */
+  /** D14:`hidden` 列已删,恒 false(同一口径)。 */
   reserved: boolean;
-  /** v3 残留,恒 `[]`(Nexus 同口径)。 */
+  /** v3 残留,恒 `[]`(同一口径)。 */
   fallback_chain: string[];
   entry_alias: string | null;
   hidden: boolean;
@@ -370,7 +370,7 @@ export interface LogicalModelGroup {
    * (`effectiveReasoningEffort`),所以链里换一档仍可能发出不同的档位。
    */
   reasoning_efforts: string[] | null;
-  /** Nexus `strategy_groups`(每个逻辑模型一条,Nexus 恒单元素数组)。 */
+  /** `strategy_groups`(每个逻辑模型一条,恒单元素数组)。 */
   strategy_groups: LogicalStrategyGroup[];
 }
 
@@ -447,7 +447,7 @@ export interface DeploymentItem {
   avg_ttft_ms: number | null;
   avg_tps: number | null;
   /**
-   * 这两个数字**取自哪天**(`"YYYY-MMD"` 日期串;Nexus 同名字段同义)。
+   * 这两个数字**取自哪天**(`"YYYY-MMD"` 日期串;同名字段同义)。
    * ⚠️ 不是平均延迟毫秒数 —— 那会让人以为它是第三个指标。从来没有有效计时行
    * (三列任一为 0 的日子都跳过)时为 `null`,前端据此隐藏两个徽章。
    */
@@ -505,9 +505,9 @@ export interface CatalogModel {
 export interface ModelProvider {
   id: string;
   base_url: string | null;
-  /** Nexus D4 已删 `credential_provider`;As One 保留但恒填 id(面板不渲染)。 */
+  /** D4 已删 `credential_provider`;As One 保留但恒填 id(面板不渲染)。 */
   credential_provider: string | null;
-  /** 凭据文件路径。凭据已入库(credential 表),故与 Nexus 一致恒 `null`。 */
+  /** 凭据文件路径。凭据已入库(credential 表),故恒 `null`。 */
   credential_file: string | null;
   protocol: string;
   env_prefix: string | null;
@@ -520,11 +520,11 @@ export interface ModelProvider {
   key_fingerprints: Array<string | null>;
   has_plaintext_keys: boolean;
   models: CatalogModel[];
-  /** 已登记的模型 id 列表(`provider/model`;Nexus 同名同型)。 */
+  /** 已登记的模型 id 列表(`provider/model`;同名同型)。 */
   deployed_models: string[];
   /** 列入 `/v1/models` 的模型 id 列表(= `hidden = 0` 的那些)。 */
   exposed: string[];
-  /** 同 {@link exposed}(Nexus 两个字段同值,保留兼容旧前端)。 */
+  /** 同 {@link exposed}(两个字段同值,保留兼容旧前端)。 */
   listed: string[];
   is_channel: boolean;
 }
@@ -600,7 +600,7 @@ export interface ChannelCredits {
 }
 
 /**
- * 模型目录整批保存里的一行(对齐 Nexus `ExposeModelSpec` + `name`)。
+ * 模型目录整批保存里的一行(对齐 `ExposeModelSpec` + `name`)。
  *
  * ⚠️ `context_window` / `max_output` 为 `null`(或省略)= **不声明**,
  * 不能与「声明了 0」混为一谈 —— 后者是荒谬的窗口值。
@@ -638,7 +638,7 @@ export interface ChannelCheckin {
   streak_days: number | null;
   reason: string | null;
   error: string | null;
-  // ── 可选字段:渠道上游签名透传(Nexus 面板同样展示;As One 尽力而为)──
+  // ── 可选字段:渠道上游签名透传(面板同样展示;As One 尽力而为)──
   /** trae 上游业务码(0=成功;9004=缺 device_id;9095=本设备今日已签)。 */
   code?: number | null;
   /** 上游返回的提示文案(trae status/claim 的 message)。 */
@@ -771,7 +771,7 @@ export interface AutoRefreshInfo {
 /**
  * 凭据自动刷新状态。``running`` / ``last_run_*`` 为旧面板聚合契约(保留不动);
  * ``count`` / ``accounts`` / ``last_run_accounts`` 为装配层扩展(2025):
- * Nexus ``refresh_status`` / ``refresh_run`` 返回逐账号结构化行
+ * ``refresh_status`` / ``refresh_run`` 返回逐账号结构化行
  * (``has_refresh_token`` / ``needs_refresh`` / 逐账号结果),这里如实带出,
  * 渲染层可展示每个账户的刷新能力与最近一次刷新的逐账户结果。
  * 全部可选,旧调用方不受影响。
@@ -788,16 +788,16 @@ export interface ChannelRefreshStatus {
   last_ok: boolean | null;
   last_error: string | null;
   result: string | null;
-  /** 扩展:该渠道凭据行数(镜像 Nexus refresh_status.count)。 */
+  /** 扩展:该渠道凭据行数(`refresh_status.count`)。 */
   count?: number;
-  /** 扩展:逐账号刷新能力行(镜像 Nexus refresh_status.accounts)。 */
+  /** 扩展:逐账号刷新能力行(`refresh_status.accounts`)。 */
   accounts?: RefreshAccountRow[];
-  /** 扩展:最近一次 refreshRun 的逐账号结果(镜像 Nexus refresh_run.accounts)。 */
+  /** 扩展:最近一次 refreshRun 的逐账号结果(`refresh_run.accounts`)。 */
   last_run_accounts?: RefreshAccountRow[];
 }
 
 /**
- * 单账号刷新行(镜像 Nexus nexus/refresh.py 的 status 行形状)。
+ * 单账号刷新行(`refresh.py` 的 status 行形状)。
  * ``status`` 仅在 ``refreshRun`` 结果 / ``last_run_accounts`` 中出现,
  * 取值 failed / skipped / dry_run / refreshed / refreshed_unsaved。
  */
@@ -811,7 +811,7 @@ export interface RefreshAccountRow {
   has_refresh_token: boolean;
   /** epoch 毫秒;无到期信息为 null。 */
   token_expires_at_ms: number | null;
-  /** 有 refresh_token 时按 margin=300s 判定;无 refresh_token 恒 false(Nexus 语义)。 */
+  /** 有 refresh_token 时按 margin=300s 判定;无 refresh_token 恒 false(既有语义)。 */
   needs_refresh: boolean;
   status?: string;
   message?: string;
@@ -826,11 +826,11 @@ export interface ClientPathRow {
   detected_path: string | null;
   effective_path: string | null;
   exists: boolean;
-  /** "saved" | "detected" | null(镜像 Nexus _client_paths_list 的 source)。 */
+  /** "saved" | "detected" | null(`_client_paths_list` 的 source)。 */
   source: string | null;
   /** 保存值被「读路径自愈」顺手改写为 true(页面据此显示「已自动规整」)。 */
   repaired?: boolean;
-  /** 自愈/推导说明(Nexus _client_paths_list 的 note;null 无说明)。 */
+  /** 自愈/推导说明(`_client_paths_list` 的 note;null 无说明)。 */
   note?: string | null;
 }
 
@@ -901,7 +901,7 @@ export interface MetricsRow {
   latency_day: string | null;
 }
 
-/** 指标页快照(对齐 Nexus `GET /metrics` → `_metrics_page`)。 */
+/** 指标页快照(对齐 `GET /metrics` → `_metrics_page`)。 */
 export interface MetricsSnapshot {
   enabled: boolean;
   generated_at: string;
@@ -933,7 +933,7 @@ export interface SensenovaAccountRow {
   has_password: boolean;
 }
 
-/** 额度只读面(对齐 Nexus `GET /api/quota`)。 */
+/** 额度只读面(对齐 `GET /api/quota`)。 */
 export interface QuotaRead {
   providers: Array<{
     provider: string;
@@ -1059,7 +1059,7 @@ export type RequestLogContentMode = "off" | "structure" | "full" | "edges";
 /**
  * 记录档位的一个选项。
  *
- * Nexus `_request_log_status` 给的是 **{value, label}** 对象数组(`api_pages.py`
+ * `_request_log_status` 给的是 **{value, label}** 对象数组(`api_pages.py`
  * L5284-5289),label 是中文说明 —— 直接把 value 摆进下拉框会显示成
  * `off` / `structure` 这种机器值,那是凭空丢掉的一层信息。
  */
@@ -1075,11 +1075,11 @@ export interface RequestLogStatus {
   path: string | null;
   size_bytes: number | null;
   /**
-   * `stats_rows` / `last_24h` / `errors` = `stats_daily` 规模(Nexus 同款);
+   * `stats_rows` / `last_24h` / `errors` = `stats_daily` 规模(同款);
    * **`written` = 日志文件里的真实条目数**(D20:逐请求明细不入库,只能从文件数)。
    */
   counters: Record<string, number> | null;
-  /** 参与上面 size/条数统计的日志文件名(最近 30 个,Nexus 同名键)。 */
+  /** 参与上面 size/条数统计的日志文件名(最近 30 个,同名键)。 */
   log_files: string[] | null;
   last_error: string | null;
 }
@@ -1100,7 +1100,7 @@ export interface SettingSpec {
   /**
    * 展示分组覆盖。缺省时按键名前缀(`retry.x` → `retry`)推导。
    *
-   * Nexus 的 `real.wait_budget_s` 键前缀是 `real`,但被放进 **retry 段**渲染 ——
+   * `real.wait_budget_s` 的键前缀是 `real`,但被放进 **retry 段**渲染 ——
    * 它管的是「重试之前单次上游调用愿意等多久」,与 `retry.*` 同一决策语境。
    * 没有这个字段,前端按前缀推导就会凭空多出一个 `real` 段。
    */
@@ -1196,7 +1196,7 @@ export interface RendererApi {
   // 供应商(其他供应商)
   getModelProviders(): Promise<ModelProvider[]>;
   /**
-   * 新增/更新一个兼容供应商(Nexus `POST /providers`)。
+   * 新增/更新一个兼容供应商(`POST /providers`)。
    *
    * @param envPrefix 环境变量前缀;`undefined` / 空串 = 不改(保留现值)。
    * @param keys 凭据池(**数组即整池,按位置对齐座位**;空串座位不删也不改,
@@ -1224,13 +1224,13 @@ export interface RendererApi {
   ): Promise<ApiResult>;
   setModelExposure(provider: string, model: string, exposed: boolean): Promise<ApiResult>;
   checkModels(id?: string): Promise<ApiResult>;
-  /** 指标页快照(对齐 Nexus `GET /metrics`)。 */
+  /** 指标页快照(对齐 `GET /metrics`)。 */
   getMetrics(days?: number): Promise<MetricsSnapshot>;
-  /** 单模型检测(对齐 Nexus `POST /providers/{id}/check-model`)。 */
+  /** 单模型检测(对齐 `POST /providers/{id}/check-model`)。 */
   checkModel(provider: string, model: string): Promise<ApiResult>;
-  /** SenseNova 账号行列表(对齐 Nexus `GET /sensenova/accounts`)。 */
+  /** SenseNova 账号行列表(对齐 `GET /sensenova/accounts`)。 */
   getSensenovaAccounts(): Promise<{ accounts: SensenovaAccountRow[]; count: number }>;
-  /** 额度只读面(对齐 Nexus `GET /api/quota`)。 */
+  /** 额度只读面(对齐 `GET /api/quota`)。 */
   getQuota(): Promise<QuotaRead>;
   // 渠道页(Trae / WorkBuddy)
   getProviderPage(provider: string, fresh?: boolean): Promise<ProviderPage>;
@@ -1296,7 +1296,7 @@ export interface RendererApi {
    */
   syncAllQuota(force?: boolean): Promise<ApiResult>;
   /**
-   * 模型目录**整批保存**(1:1 对齐 Nexus `POST /providers/{id}/exposure`
+   * 模型目录**整批保存**(对齐 `POST /providers/{id}/exposure`
    * 与 `/sensenova/expose`)。
    *
    * 语义(**提交清单 = 模型表成员名单**):
@@ -1321,10 +1321,10 @@ export interface RendererApi {
   getClientPaths(): Promise<ClientPathsResult>;
   saveClientPath(channel: string, path: string): Promise<ApiResult>;
   detectClientPath(channel: string): Promise<ApiResult>;
-  // 自动发现 / 接入(镜像 Nexus POST /providers/{id}/discover、/adopt)
+  // 自动发现 / 接入(POST /providers/{id}/discover、/adopt)
   /** 扫描本机已登录态(经 discover.ts;workbuddy 恒 found:false,见文案)。 */
   discoverChannelAccounts(provider: string): Promise<DiscoverChannelResult>;
-  /** 把一条发现的登录态写入 vault(镜像 Nexus adopt:只新增、按 username 合并)。 */
+  /** 把一条发现的登录态写入 vault(adopt:只新增、按 username 合并)。 */
   adoptChannelAccount(
     provider: string,
     username: string,
@@ -1356,9 +1356,9 @@ export interface RendererApi {
    * 都不传 = 两段都做(旧调用方/CLI 语义不变)。
    */
   sensenovaRefresh(force?: boolean, parts?: { catalog?: boolean; quota?: boolean }): Promise<ApiResult>;
-  // SenseNova 登录与账号管理(与 Nexus 路由一一对应:POST /sensenova/login、
+  // SenseNova 登录与账号管理(路由一一对应:POST /sensenova/login、
   // POST /sensenova/refetch-key、POST/DELETE /sensenova/accounts)。
-  // 返回值带 Nexus 同名字段:ok/account/username/logged_in/key_updated/total_keys/
+  // 返回值带同名字段:ok/account/username/logged_in/key_updated/total_keys/
   // has_password/created/login_ok/message(经 ApiResult 扩展槽透传)。
   /**
    * 账号密码登录(串行队列 + 间隔,避免平台风控)。

@@ -1,7 +1,7 @@
 /**
  * Trae 连接器 —— Cloud-IDE-JWT 认证 + storage.json AES-128-CBC 解密。
  *
- * 协议要点（来自 Nexus `trae.py` / `refresh.py`）：
+ * 协议要点：
  *
  * ## 认证
  * - 头：`Authorization: Cloud-IDE-JWT <token>`（**非 Bearer**）
@@ -106,7 +106,7 @@ export const HEADER_AES = Buffer.from([0x74, 0x63, 0x05, 0x10, 0x00, 0x00]);
 export const HEADER_AES_PRIVATE = Buffer.from([18, 57, 32, 32, 2, 3]);
 
 // ---------------------------------------------------------------------------
-// 盐值（来自 Nexus trae.py）
+// 盐值
 // ---------------------------------------------------------------------------
 
 const SALT_A = Buffer.from([
@@ -174,7 +174,7 @@ export function resolve_api_base(
 /**
  * 从 api_key 确定性派生 machine_id / device_id。
  *
- * 与 Nexus `resolve_identity` 对齐：
+ * 规则：
  * - machine_id = sha256("trae-machine\0" + api_key)
  * - device_id = sha256("trae-device\0" + api_key)[:32]
  * - user_id = extra.user_id(计费/签到接口的 x-uid 需要真实 user_id,
@@ -203,8 +203,6 @@ export function resolve_identity(
 
 /**
  * 构建出站请求头。
- *
- * 与 Nexus `build_headers` 对齐。
  */
 export function build_headers(
   api_key: string,
@@ -248,8 +246,6 @@ export function build_headers(
 /**
  * 解密 storage.json 中的认证值（AES-128-CBC）。
  *
- * 与 Nexus `decrypt_storage_value` 对齐。
- *
  * @param encoded base64 编码的密文
  * @returns 解密后的明文字符串
  * @throws {UpstreamError} 密文过短、未知加密头、完整性校验失败
@@ -289,7 +285,7 @@ export function decrypt_storage_value(encoded: string): string {
   const key = derived.subarray(0, 16);
   const iv = derived.subarray(16, 32);
 
-  // 关闭自动填充，手动处理 PKCS7（与 Nexus 对齐）
+  // 关闭自动填充，手动处理 PKCS7
   const decipher = createDecipheriv("aes-128-cbc", key, iv);
   decipher.setAutoPadding(false);
   let padded: Buffer;
@@ -418,8 +414,6 @@ export function build_refresh_body(
 
 /**
  * 生成 DeviceProof（ECDSA-P256/SHA-256 签名后 base64）。
- *
- * 与 Nexus `_device_proof` 对齐。
  */
 export function device_proof(
   private_key_pem: string,
@@ -458,8 +452,6 @@ export function parse_refresh_response(body: unknown): TokenState {
 
 /**
  * 解析过期时间（毫秒或 ISO 字符串）→ Unix 秒。
- *
- * 与 Nexus `parse_ms` 对齐。
  */
 export function parse_expiry(value: unknown): number {
   if (typeof value === "number") {
@@ -487,8 +479,6 @@ export function parse_expiry(value: unknown): number {
 
 /**
  * Trae 流内错误分类（HTTP 永远 200）。
- *
- * 与 Nexus `classify_solo_error` 对齐。
  *
  * ⚠️ **`4017` 是「账号临时限制」**(2026-11-11,来自 `docs/ban-watch.md` 当日巡检:
  * 上游插件 PR #84 把 SOLO `4008` 映射 402/hard_credit、把 **`4017` 映射
@@ -560,7 +550,7 @@ export class TraeAdapter implements AuthConnector {
     creds?: ConnectorCredentials,
   ): RequestDecoration {
     // 身份覆盖(machine_id/device_id)只从凭据 raw 取 —— 不传 creds 时回退
-    // 由 api_key 确定性派生(与 Nexus resolve_identity 口径一致)
+    // 由 api_key 确定性派生
     const identity = resolve_identity(token.accessToken, creds);
     return {
       ...base,

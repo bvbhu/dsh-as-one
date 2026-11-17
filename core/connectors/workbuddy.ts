@@ -1,7 +1,7 @@
 /**
  * WorkBuddy 连接器 —— X-Refresh-Token 头 + expiresIn / JWT exp。
  *
- * 协议要点（原始来源 Nexus `workbuddy.py` / `refresh.py`；身份标头已于
+ * 协议要点（身份标头已于
  * 2026-11 对齐公开反代样本 `workbuddy2api-hub`/`workbuddy2api-panel` 的
  * 5.8.x 桌面端抓包）：
  *
@@ -197,8 +197,6 @@ export function jwtClaimNumber(token: string, key: string): number | undefined {
 
 /**
  * uid + 加盐 md5 单向派生稳定的伪设备标识。
- *
- * 与 Nexus `_derive_id` 对齐：
  * - 幂等，多账号天然隔离
  * - 同一台机器换账号不该被看成同一设备
  *
@@ -437,7 +435,7 @@ export function build_refresh_headers(
 /**
  * 解析刷新应答。
  *
- * 与 Nexus workbuddy 刷新对齐：code=0 + data.accessToken + expiresIn（秒）+ refreshToken
+ * 刷新应答要点：code=0 + data.accessToken + expiresIn（秒）+ refreshToken
  */
 export function parse_refresh_response(body: unknown): TokenState {
   if (!body || typeof body !== "object") {
@@ -481,8 +479,6 @@ export function parse_refresh_response(body: unknown): TokenState {
 
 /**
  * WorkBuddy 错误分类。
- *
- * 与 Nexus `raise_for_status` 对齐：
  * - 401 → auth（不可重试）
  * - 429 → rate_limit（可重试）
  * - 5xx → upstream（可重试）
@@ -648,7 +644,7 @@ export class WorkbuddyAdapter implements AuthConnector {
     token: TokenState,
     creds?: ConnectorCredentials,
   ): RequestDecoration {
-    // 区域:凭据显式 region 优先,否则从 token 探测(与 Nexus _resolve 口径一致)
+    // 区域:凭据显式 region 优先,否则从 token 探测
     const region =
       (creds?.region && creds.region.trim() ? creds.region : undefined) ??
       detect_region_from_token(token.accessToken);

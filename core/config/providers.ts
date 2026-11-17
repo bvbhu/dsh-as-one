@@ -4,26 +4,26 @@
  *
  * 设计目标
  * --------
- * - **文件即配置**:Nexus 用 SQLite 表(provider / credential / real_model /
+ * - **文件即配置**:参考实现用 SQLite 表(provider / credential / real_model /
  *   logical_model / setting)当唯一真源;as-one 阶段一用**单个 JSON 文件**
  *   (``as-one.providers.json``)承载**非机密**部分 —— provider 定义、
  *   账户配置(启用/停用、冷却/亲和参数)、逻辑模型、调度规则。
  *   **凭据(secret)不进这个文件**,由 {@link CredentialVault} 持有
  *   (见 credentials.ts 的文件格式说明)。两边用
- *   ``credentialRef = "<provider>/<username>"`` 对齐(Nexus 的
+ *   ``credentialRef = "<provider>/<username>"`` 对齐(共用的
  *   ``credential_key`` 字符串形态)。
  * - **校验哲学**(镜像 engine.py L934-1033 ``_valid_rules`):坏条目
  *   **跳过 + 大声 warning(issue),绝不因单条坏规则回滚整份配置**;
  *   但**版本号不认识 / 根节点不是对象**这类「整份都读不了」的错误
  *   必须**抛 {@link ConfigValidationError}** —— 静默丢配置比报错危险。
  * - **热重载**:``fs.watch`` 防抖 → 重新加载 → 成功则原子换快照;
- *   失败**保留上次好快照**并发射 ``error`` 事件(Nexus 配置缓存同哲学:
- *   engine.py L1641-1713 坏 JSON 回落默认,绝不抛)。
+ *   失败**保留上次好快照**并发射 ``error`` 事件(配置缓存同哲学:
+ *   坏 JSON 回落默认,绝不抛)。
  *
- * 与 Nexus 的字段对应
- * ------------------
+ * 字段对应
+ * --------
  * - provider 定义      —— provider 表(schema.sql L97-102);
- * - 账户配置           —— ⚠️ Nexus 无独立账户表:账户 = credential 行,
+ * - 账户配置           —— ⚠️ 参考实现无独立账户表:账户 = credential 行,
  *   启用/停用/配额/冷却/pin 全是运行期内存态(D17-D19,repo.py L1334-1429)。
  *   本文件的 ``accounts`` 段是**静态配置视图**,字段语义见
  *   ``AccountConfig``(types.ts);
@@ -761,7 +761,7 @@ export class ProviderRegistry {
       .sort((a, b) => (a.credentialRef < b.credentialRef ? -1 : a.credentialRef > b.credentialRef ? 1 : 0));
   }
 
-  /** 已启用的账户(``enabled: false`` 的停用账户;Nexus 无此维度 —— 见 AccountConfig 注释)。 */
+  /** 已启用的账户(``enabled: false`` 的停用账户;参考实现无此维度 —— 见 AccountConfig 注释)。 */
   listEnabledAccounts(provider?: string): AccountConfig[] {
     return this.listAccounts(provider).filter((a) => a.enabled);
   }

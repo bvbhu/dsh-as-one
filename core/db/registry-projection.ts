@@ -4,7 +4,7 @@
  * ## 为什么有这个文件
  *
  * 阶段一 / 迁移期,provider / real_model / logical_model / scheduler.rules
- * 同时存在于 **JSON 文件**与 **SQLite 表**里,于是出现「删了 nexus-flash
+ * 同时存在于 **JSON 文件**与 **SQLite 表**里,于是出现「表里删了的逻辑模型
  * 页面还显示」「面板新建的逻辑模型调度看不见」这类双源错位。
  *
  * 用户裁定(m28134 / m28051):**数据库是唯一真源**,JSON 退化为
@@ -30,7 +30,7 @@
  * - ``scheduler.rules`` 走 ``validRules`` 清洗(与 engine 同一套口径)。
  */
 
-import type { NexusDatabase } from "./database.js";
+import type { AsOneDatabase } from "./database.js";
 import type { LogicalModelRow, RealModelRow } from "./types.js";
 import type { RegistrySnapshot } from "../config/providers.js";
 import type {
@@ -53,7 +53,7 @@ function toProtocol(value: unknown): ProviderProtocol {
     : "openai";
 }
 
-/** ``"<provider>/<model>"`` —— repo.py L181 ``real_model_id`` 的字符串形态。 */
+/** ``"<provider>/<model>"`` —— 真实模型的字符串形态键。 */
 function realModelKey(provider: string, model: string): string {
   return `${provider}/${model}`;
 }
@@ -61,7 +61,7 @@ function realModelKey(provider: string, model: string): string {
 /**
  * ``logical_model.members`` 解析。
  *
- * 兼容两种历史形态(Nexus 侧 ``normalize_members`` repo.py L287-312 同义):
+ * 兼容两种历史形态(``normalize_members`` 同义):
  * - ``{provider, model}`` 对象数组(当前写库形态);
  * - ``"provider/model"`` 字符串数组(早期手写数据)。
  * 完全重复的成员只保留第一次出现(顺序即优先级)。
@@ -100,7 +100,7 @@ export function parseMembersColumn(raw: string | null | undefined): ChainMember[
 }
 
 /** ``setting.scheduler.rules_p<priority>`` 各键的 ``v`` 列 → 合并规则数组(键名即档位)。 */
-export function parseSchedulerRulesFromDb(db: NexusDatabase): SchedulerRule[] {
+export function parseSchedulerRulesFromDb(db: AsOneDatabase): SchedulerRule[] {
   const out: SchedulerRule[] = [];
   let any = false;
   for (const p of RULES_PRIORITY_KEYS) {
@@ -133,7 +133,7 @@ export function parseSchedulerRulesColumn(raw: string | null | undefined): Sched
   } catch {
     return [];
   }
-  // 落库形态是 ``{"rules": [...]}``(与 Nexus setting 一致);也容忍裸数组。
+  // 落库形态是 ``{"rules": [...]}``(setting 表形态);也容忍裸数组。
   const container = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === "object" && Array.isArray((parsed as { rules?: unknown }).rules)
@@ -176,7 +176,7 @@ function toLogicalModel(row: LogicalModelRow): LogicalModelDefinition {
  * @param db 已打开的数据库。
  * @returns 快照 + 解析期问题(目前只有 rules 的清洗丢弃项,便于面板提示)。
  */
-export function snapshotFromDb(db: NexusDatabase): {
+export function snapshotFromDb(db: AsOneDatabase): {
   snapshot: RegistrySnapshot;
   issues: readonly { path: string; message: string }[];
 } {
@@ -200,7 +200,7 @@ export function snapshotFromDb(db: NexusDatabase): {
     logicalModels.set(row.name, toLogicalModel(row));
   }
 
-  // 账户:表里没有独立的账户行(Nexus 语义:账户 = credential 行)。
+  // 账户:表里没有独立的账户行(账户 = credential 行)。
   // 用 credential 表造账户视图,enabled 恒 true(用户 m28134 不新增列,
   // 运行期启用态由装配层 overlay 维护,重启重置)。
   const accounts = new Map<string, AccountConfig>();

@@ -1,11 +1,11 @@
 /**
- * 客户端路径行(1:1 移植 Nexus ClientPaths.vue)。
+ * 客户端路径行。
  *
  * 行为:输入即存(change/回车落盘);留空保存 = 清除设置、退回自动探测。
  * 只对 provider 自己的行生效(trae 是云端 IDE,无本机客户端,整段不渲染)。
  *
  * ⚠️ 契约:saveClientPath(channel, path) 落盘并返回 ApiResult;检测按钮在
- * Nexus 当前版本没有(输入即存),若页面需要「自动检测」,用 rendererApi.detectClientPath。
+ * 当前版本没有(输入即存),若页面需要「自动检测」,用 rendererApi.detectClientPath。
  *
  * ⚠️ 2026-11-08:**渠道页已不再渲染本组件**(用户定案「账号接入一律由 Agent
  * 写库,面板不留入口」)。此文件保留只为 `index.ts` 的公共导出与 Agent 侧脚本

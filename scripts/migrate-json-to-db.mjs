@@ -64,7 +64,7 @@ function splitRef(ref) {
   return [s.slice(0, i), s.slice(i + 1)];
 }
 
-/** raw_json 统一成 JSON 字符串(Nexus DB 列语义)。 */
+/** raw_json 统一成 JSON 字符串(库表列语义)。 */
 function rawJsonText(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "string") return value;
@@ -188,7 +188,7 @@ async function main() {
     const logicalModels = Array.isArray(providersDoc?.logicalModels) ? providersDoc.logicalModels : [];
     // ⚠️ 逻辑模型**只在库表为空时**才从 JSON 播种。
     //
-    // 这是 bug1 的直接教训:用户在面板删了 `nexus-flash`(删的是库行),
+    // 这是 bug1 的直接教训:用户在面板删了一个逻辑模型(删的是库行),
     // 而 JSON 里那一份还在。如果迁移脚本逐条 upsert,删掉的模型会在下次
     // 迁移时复活 —— 「删除永不生效」。库里有行 = 用户已在库里做过决定,
     // 一切以库为准(--force 也不改这条:JSON 不是逻辑模型的有效来源)。

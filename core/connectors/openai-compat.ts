@@ -2,7 +2,7 @@
  * OpenAI 兼容连接器 —— 覆盖 tokenrhythm / longcat / openrouter / stepfun 等
  * baseURL + API key 形态的上游。
  *
- * 协议要点（来自 Nexus `openai_compat.py`）：
+ * 协议要点：
  * - 认证：`Authorization: Bearer <api_key>`
  * - 端点：`{base_url}/chat/completions`
  * - 渠道特定头：openrouter → `x-title: As One`, `http-referer: https://as-one.local`
@@ -59,7 +59,7 @@ export function extra_headers_for(vendor: string): Record<string, string> {
 /**
  * 归一推理字段 —— 将 `reasoning` 搬进 `reasoning_content`。
  *
- * 规则（与 Nexus `normalize_reasoning` 对齐）：
+ * 规则：
  * - 只有 `reasoning` → 补出 `reasoning_content`
  * - 两者都有 → **规范名优先**，不被覆盖
  * - 没有推理字段 → 不动它
@@ -82,7 +82,7 @@ export function normalize_reasoning(delta: Record<string, unknown>): void {
 /**
  * 归一 chunk —— 把 `reasoning` 搬进 `delta`。
  *
- * 与 Nexus `normalize_chunk` 对齐：不改写顶层自定义字段（provider / service_tier 保留）。
+ * 不改写顶层自定义字段（provider / service_tier 保留）。
  *
  * @param chunk 原始 chunk
  * @param completion_id completion id
@@ -119,7 +119,6 @@ export function normalize_chunk(
  * 流式不可用渠道登记表。
  *
  * 这些渠道 stream=true 恒返回单块空 delta，而同一端点非流式是正常的。
- * 与 Nexus `stream_unsupported` 对齐。
  */
 const STREAM_UNSUPPORTED: Record<string, string> = {
   clawbrain: "clawbrain 上游 SSE 已坏,降级为非流式",
@@ -198,8 +197,6 @@ export class OpenAICompatAdapter implements AuthConnector {
 
 /**
  * 构建 OpenAI 兼容请求头。
- *
- * 与 Nexus `_headers` 对齐。
  */
 export function build_openai_headers(
   api_key: string,
@@ -294,7 +291,7 @@ function numberFrom(body: unknown): number | undefined {
 /**
  * 上游错误体里的人话理由(取第一个读得出的)。
  *
- * 顺序与 Nexus `_error_detail` 对齐:`error.message` → `message` → `detail`
+ * 顺序:`error.message` → `message` → `detail`
  * → `msg` → `error`(字符串)。读不出 → 空串(调用方退回自己的类别标签)。
  */
 export function upstreamDetailOf(body: unknown): string {
@@ -315,7 +312,7 @@ export function upstreamDetailOf(body: unknown): string {
 /**
  * OpenAI 兼容上游错误分类。
  *
- * 规则（与 Nexus `raise_for_status` 对齐）：
+ * 规则：
  * - 429 → rate_limit（可重试）
  * - 401 / 403 → auth（不可重试）
  * - 5xx → upstream（可重试）

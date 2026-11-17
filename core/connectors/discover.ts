@@ -1,14 +1,13 @@
 /**
- * 本机登录态自动发现(「自动发现并接入」)—— 镜像 Nexus connectors 的
- * ``discover_local_accounts`` 语义,完全容错:任何候选缺失 / 未登录 / 损坏 /
+ * 本机登录态自动发现(「自动发现并接入」)—— 完全容错:任何候选缺失 / 未登录 / 损坏 /
  * 未知加密都跳过,绝不抛错(失败只意味着这条来源没扫到)。
  *
- * 覆盖矩阵(Nexus 参照,``grep discover`` 确认):
+ * 覆盖矩阵(``grep discover`` 确认):
  * - trae:CLI token 文件(``~/.trae-cn/trae-jwt-token``、``~/.trae/trae-jwt-token``)
  *   + 桌面版 ``User/globalStorage/storage.json``(Trae CN / Trae / TRAE SOLO CN /
  *   TRAE SOLO 四个 edition,密文为 "tc" AES-CBC,解密复用 trae.ts 的
  *   ``decrypt_storage_value``,不重写)。
- * - workbuddy:**Nexus 没有** discover_local_accounts(仅 trae.py 有),
+ * - workbuddy:无 discover_local_accounts(仅 trae 有),
  *   As One 亦不伪造 —— 恒返回 ``[]``,由装配层给出文案。
  */
 
@@ -31,7 +30,7 @@ import {
 export type DiscoverSource = "cli" | "desktop" | "credentials";
 
 /**
- * 一条被发现的账号态(镜像 Nexus ``discover_local_accounts`` 返回的 dict 项)。
+ * 一条被发现的账号态。
  * ``token`` 为原始登录令牌(调用方展示时必须脱敏;adopt 用同一对象回传)。
  */
 export interface DiscoveredAccount {
@@ -67,7 +66,7 @@ export interface TraeDiscoverOptions {
   cli?: boolean;
 }
 
-/** Nexus trae.py ``_cli_candidates``:CLI token 文件候选。 */
+/** CLI token 文件候选。 */
 export function traeCliCandidates(home?: string): Array<{ edition: string; path: string }> {
   const h = home ?? homedir() ?? "";
   return [
@@ -76,7 +75,7 @@ export function traeCliCandidates(home?: string): Array<{ edition: string; path:
   ];
 }
 
-/** Nexus trae.py ``_desktop_candidates`` 的 edition → 应用名表。 */
+/** edition → 应用名表。 */
 export const TRAE_DESKTOP_EDITION_NAMES: Record<string, string[]> = {
   cn: ["Trae CN", "trae-cn"],
   sg: ["Trae"],
@@ -84,7 +83,7 @@ export const TRAE_DESKTOP_EDITION_NAMES: Record<string, string[]> = {
   "solo-sg": ["TRAE SOLO"],
 };
 
-/** Nexus trae.py ``_desktop_candidates``:平台根目录。 */
+/** 平台根目录。 */
 export function traeDesktopRoot(platformName: string = platform()): string | null {
   switch (platformName) {
     case "win32": {
@@ -108,7 +107,7 @@ export function traeDesktopRoot(platformName: string = platform()): string | nul
   }
 }
 
-/** Nexus trae.py ``_desktop_candidates``:4 个 edition × 应用名的 storage.json 候选。 */
+/** 4 个 edition × 应用名的 storage.json 候选。 */
 export function traeDesktopCandidates(
   home?: string,
   platformName: string = platform(),
@@ -139,7 +138,6 @@ function userRegionOf(value: unknown): string | null {
 }
 
 /**
- * Nexus trae.py ``region_of_credential``:
  * userRegion > host 域名 > edition 默认(国际 edition → ai,其余 → cn)。
  */
 export function traeRegionOf(
@@ -328,7 +326,7 @@ export function parseTraeCliToken(path: string, edition: string): DiscoveredAcco
   const user_id =
     data && typeof data === "object" && typeof data.user_id === "string" ? data.user_id : null;
   if (!user_id) throw new Error(`JWT 无 data.user_id: ${path}`);
-  // Nexus:CLI token 的 host 固定 api.trae.cn → region 走 host 规则 = cn。
+  // CLI token 的 host 固定 api.trae.cn → region 走 host 规则 = cn。
   const host = "https://api.trae.cn";
   return {
     provider: "trae",
@@ -356,7 +354,7 @@ function hashToken(token: string | null): string {
 
 /**
  * 扫描 trae 本机登录态。任何候选损坏都单独跳过;同 (edition, user_id|token哈希)
- * 去重(镜像 Nexus 的 ``edition\0(user_id or sha256(token)[:12])``)。
+ * 去重(``edition\0(user_id or sha256(token)[:12])``)。
  */
 export function discoverTraeAccounts(options: TraeDiscoverOptions = {}): DiscoveredAccount[] {
   const out: DiscoveredAccount[] = [];
@@ -368,7 +366,7 @@ export function discoverTraeAccounts(options: TraeDiscoverOptions = {}): Discove
     seen.add(key);
     out.push(acc);
   };
-  // 桌面版优先(镜像 Nexus discover_local_accounts:candidates = desktop + cli,
+  // 桌面版优先(candidates = desktop + cli,
   // desktop 在前) —— 且去重键必须是「edition + 来源 + user_id」三要素:
   // CN 版桌面 storage 与 CLI token 同 user_id 同 edition,只按 edition\0user_id
   // 去重会让先扫到的 cli 挡掉 desktop(桌面版 token 才是计费/签到认的)。
@@ -396,12 +394,11 @@ export function discoverTraeAccounts(options: TraeDiscoverOptions = {}): Discove
 }
 
 // ---------------------------------------------------------------------------
-// workbuddy:Nexus 无 discover
+// workbuddy:无 discover
 // ---------------------------------------------------------------------------
 
 /**
- * Nexus connectors/workbuddy.py **没有** discover_local_accounts(grep 确认,仅
- * trae.py 有)。As One 不伪造 —— 恒返回 [](
+ * 无 discover_local_accounts(grep 确认,仅 trae 有)。As One 不伪造 —— 恒返回 [](
  * 装配层据此给「无此渠道自动发现」文案)。
  */
 export function discoverWorkbuddyAccounts(): DiscoveredAccount[] {

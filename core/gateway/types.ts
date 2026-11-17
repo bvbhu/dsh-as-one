@@ -1,12 +1,12 @@
 /**
  * OpenAI 兼容线格式 DTO —— As One 网关对外 /v1/* 契约。
  *
- * 形状来源(冲突时以 Nexus 源码为准):
- * - `nexus/gateway/app.py`(/v1/chat/completions 与 /v1/models 的请求路径);
- * - `nexus/connectors/base.py` `UpstreamRequest`(上游请求对象)与 `Adapter`
+ * 形状来源(冲突时以参考实现为准):
+ * - `/v1/chat/completions` 与 `/v1/models` 的请求路径;
+ * - `UpstreamRequest`(上游请求对象)与 `Adapter`
  *   协议(`stream` 产 OpenAI chunk dict、`complete` 产完整 chat.completion dict
  *   —— 网关只加 SSE 帧,不做内部自有格式,见 base.py 模块 docstring);
- * - `nexus/core/errors.py` `UpstreamErrorKind` / `_KIND_SPEC`(错误体形状与
+ * - `UpstreamErrorKind` / `_KIND_SPEC`(错误体形状与
  *   kind→HTTP 状态码映射);
  * - OpenAI 官方 chat/completions 线格式(id/object/created/model/choices/usage)。
  *
@@ -68,7 +68,7 @@ export interface ChatToolDefinition {
 // ---------------------------------------------------------------------------
 
 /**
- * chat/completions 请求。Nexus 对 body 的处理是宽松的:
+ * chat/completions 请求。对 body 的处理是宽松的:
  * `app.py:chat_completions` 只强看 `model`(缺 → 400「缺少 model」)与
  * `stream`(真值判断),其余字段按 OpenAI 兼容形状透传给上游构造器
  * (`connectors/base.py UpstreamRequest.to_body()`)。
@@ -77,18 +77,18 @@ export interface ChatCompletionRequest {
   /** 对外模型名:逻辑模型名(如 "deepseek-flash")或 `provider/model` 直连。 */
   model: string;
   messages: ChatMessage[];
-  /** 真值判断(Nexus `bool(body.get("stream"))`);缺省=false。 */
+  /** 真值判断(`bool(body.get("stream"))`);缺省=false。 */
   stream?: boolean;
   temperature?: number;
   top_p?: number;
   max_tokens?: number;
-  /** OpenAI 的同义字段(`max_tokens` 的新名字);两者等价,一起收(Nexus O1)。 */
+  /** OpenAI 的同义字段(`max_tokens` 的新名字);两者等价,一起收(决策 O1)。 */
   max_completion_tokens?: number;
   stop?: string[];
   tools?: ChatToolDefinition[];
   tool_choice?: unknown;
   reasoning_effort?: string;
-  /** 流式要 usage(Nexus 给上游注入 `stream_options.include_usage=true` 后透传)。 */
+  /** 流式要 usage(给上游注入 `stream_options.include_usage=true` 后透传)。 */
   stream_options?: { include_usage?: boolean };
   /** 上游特定扩展字段(连接器 extra;`session_id` 属网关内部键,绝不透传)。 */
   [key: string]: unknown;
@@ -153,7 +153,7 @@ export interface ChatCompletionChunk {
   model: string;
   choices: ChatChunkChoice[];
   /** ⚠️ usage 可能出现在任意一块上,不保证与 finish_reason 同块
-   * (`nexus/core/translate.py` 模块 docstring 踩坑 1);按块透传,绝不丢块。 */
+   * (模块 docstring 踩坑 1);按块透传,绝不丢块。 */
   usage?: ChatUsage | null;
   [key: string]: unknown;
 }
@@ -163,15 +163,15 @@ export interface ChatCompletionChunk {
 // ---------------------------------------------------------------------------
 
 /**
- * /v1/models 条目(Nexus `app.py:list_models`,app.py:667):
+ * /v1/models 条目(`list_models`):
  * - 所有条目:`id` / `object: "model"` / `owned_by` / `litenexus_kind`;
  * - real 额外:`name`(D29 人话名)/ `max_input_tokens` / `max_output_tokens` /
  *   `supports_vision`(有值才带);
  * - logical 额外:`max_input_tokens` / `supports_vision`(链上聚合,可 null 才省略)。
- * `litenexus_kind` 是 Nexus 的历史命名(旧名 LiteNexus),v4 语义= real|logical,
+ * `litenexus_kind` 沿用历史命名,v4 语义= real|logical,
  * 保留它以兼容既有客户端。
  *
- * `owned_by` 原来是字面量 `"nexus"`(镜像上游返回值);As One 改名后由装配层
+ * `owned_by` 原来是上游返回的字面量;As One 改名后由装配层
  * 写 `"as-one"`,故放宽为 `string` —— 客户端只用它做分组显示,不做校验。
  */
 export interface ModelEntry {
@@ -236,12 +236,12 @@ export interface ModelList {
 }
 
 // ---------------------------------------------------------------------------
-// 错误对象(OpenAI 形状 + Nexus 错误体)
+// 错误对象(OpenAI 形状 + 上游错误体)
 // ---------------------------------------------------------------------------
 
 export interface OpenAiErrorBody {
   error: {
-    /** Nexus `UpstreamErrorKind` 之一(或网关自身错误类型),客户端据此分类。 */
+    /** `UpstreamErrorKind` 之一(或网关自身错误类型),客户端据此分类。 */
     type: string;
     message: string;
   };
@@ -252,14 +252,14 @@ export interface FastApiDetailBody {
   detail: string | OpenAiErrorBody;
 }
 
-/** 网关→客户端的错误响应体:FastAPI 形状(detail;Nexus _as_http 只产 detail.error)。 */
+/** 网关→客户端的错误响应体:FastAPI 形状(detail;`_as_http` 只产 detail.error)。 */
 export type GatewayErrorBody = FastApiDetailBody;
 
 // ---------------------------------------------------------------------------
-// 上游错误(与 nexus/core/errors.py 对齐,语义供网关层复用)
+// 上游错误(语义供网关层复用)
 // ---------------------------------------------------------------------------
 
-/** `nexus/core/errors.py:UpstreamErrorKind`(str 常量,不用 enum)。 */
+/** `UpstreamErrorKind`(str 常量,不用 enum)。 */
 export const UpstreamErrorKind = {
   RateLimit: "rate_limit",
   Auth: "auth",
@@ -376,7 +376,7 @@ export class UpstreamError extends Error {
 // ---------------------------------------------------------------------------
 
 /**
- * 发往上游的一次调用(与 `nexus/connectors/base.py:UpstreamRequest` 对齐,
+ * 发往上游的一次调用(与 `UpstreamRequest` 对齐,
  * 网关层只关心网关侧字段)。
  */
 export interface UpstreamRequest {
@@ -455,7 +455,7 @@ export interface UpstreamRequest {
    * 报文体(`gateway-upstream.ts` 的 `bodyFor`),一个 `AbortSignal` 进 body
    * 会直接把请求打成畸形。
    *
-   * 对齐 Nexus `app.py` 的 `asyncio.CancelledError` 支:那里注释原话是
+   * `asyncio.CancelledError` 支:那里注释原话是
    * 「客户端断开:必须记失败并结账,否则端点会一直被占着」。
    */
   clientSignal?: AbortSignal;
@@ -463,7 +463,7 @@ export interface UpstreamRequest {
 
 /**
  * 上游适配器 —— fetch-like,由外部注入(阶段一 = OpenAI 兼容直连连接器)。
- * 与 `nexus/connectors/base.py:Adapter` 协议逐条对应:
+ * 与 `Adapter` 协议逐条对应:
  * - `stream` 产 OpenAI chunk dict(含收尾块),失败抛 {@link UpstreamError};
  * - `complete` 产完整 chat.completion dict,失败抛 {@link UpstreamError}。
  * 连接器不负责选路/亲和/并发/冷却 —— 那是 router 的事。
@@ -511,7 +511,7 @@ export interface ModelProvider {
   /** /v1/models 的清单来源(repo.public_models() 的 TS 对应物)。 */
   /**
    * 模型清单。**允许返回 Promise** —— 装配层判「该 provider 名下有没有凭据」
-   * (Nexus `EXISTS (SELECT 1 FROM credential ...)` 的同义判据)要读凭据库,
+   * (`EXISTS (SELECT 1 FROM credential ...)` 的同义判据)要读凭据库,
    * 而 As One 的凭据库是异步的文件型 vault。
    */
   listModels(): ModelEntry[] | Promise<ModelEntry[]>;
@@ -536,10 +536,10 @@ export interface GatewayOptions {
 }
 
 /**
- * onRequestDone 的载荷 —— Nexus 面板「逐请求明细」行的网关侧视图。
+ * onRequestDone 的载荷 —— 面板「逐请求明细」行的网关侧视图。
  * - ok/status:本次请求最终对外结果(客户端断开时响应未发出,status=0);
  * - latency_ms/ttft_ms:网关侧计时(ttft 仅流式有,非流式为 null);
- * - usage:Nexus `usage{prompt, cached, completion}` 语义(cached=prompt_tokens_details.cached_tokens);
+ * - usage:`usage{prompt, cached, completion}` 语义(cached=prompt_tokens_details.cached_tokens);
  * - session_id:经 deriveSessionId 提取(可能 null);
  * - request:请求体原文(可能较大;供 content_mode 裁剪 —— full/edges/structure)。
  */

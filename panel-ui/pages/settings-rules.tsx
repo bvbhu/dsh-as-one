@@ -29,7 +29,7 @@ interface TierRule {
 }
 interface CooldownRule {
   provider: string;
-  /** v-model.number 语义:可解析为数字,否则为空串(与 Nexus 一致)。 */
+  /** v-model.number 语义:可解析为数字,否则为空串(与既有实现一致)。 */
   cooldown: number | "";
 }
 interface RuleGroups {

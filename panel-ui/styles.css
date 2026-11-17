@@ -5,7 +5,7 @@
  * 正是这批令牌(背景/面板/文字/主色/边框/按钮/交互态),深浅双模自动切换。
  * 少数宿主原生令牌(滚动条 `--dsw-alias-scrollbar-*`、状态色 `--dsw-alias-state-*`)
  * 插件不覆盖,但由 DSH 主题自身按深浅模式给出,同样不用写死。
- * 令牌缺席时(独立 Electron 面板等无 DSH 主题的环境)回退到 Nexus 暗色系,观感不变。
+ * 令牌缺席时(独立 Electron 面板等无 DSH 主题的环境)回退到内置暗色系,观感不变。
  */
 
 * {
@@ -600,7 +600,7 @@ body {
   border-radius: 8px;
 }
 
-/* ── 子标题条(模型频道壳,对齐 Nexus .subtabs) ─────────────── */
+/* ── 子标题条(模型频道壳) ─────────────── */
 
 .subtabs {
   display: flex;
@@ -1041,7 +1041,7 @@ body {
   color: var(--text-soft);
 }
 
-/* ── 错误条(用量页用,对齐 Nexus 全局 .err)──────────────────── */
+/* ── 错误条(用量页用,对齐全局 .err)──────────────────── */
 
 .err {
   color: var(--bad);
@@ -1054,8 +1054,8 @@ body {
 }
 
 /* ===========================================================================
-   总览页(OverviewPage,1:1 移植 Nexus Overview.vue 的 scoped 样式,
-   类名统一 ov- 前缀防碰撞;配色与 Nexus 原版一致)
+   总览页(OverviewPage,scoped 样式,
+   类名统一 ov- 前缀防碰撞;配色沿用既有主题)
    =========================================================================== */
 
 .ov-err {
@@ -1411,7 +1411,7 @@ body {
 }
 
 /* ===========================================================================
-   用量统计页(UsageStatsPage,1:1 移植 Nexus styles.css 的 .usage-* 类)
+   用量统计页(UsageStatsPage,.usage-* 类)
    =========================================================================== */
 .usage-ctl {
   display: flex;
@@ -1762,10 +1762,10 @@ body {
 }
 
 /* ===========================================================================
-   设置页(SettingsPage,1:1 移植 Nexus Settings.vue 的 .ui-* 体系)
+   设置页(SettingsPage,.ui-* 体系)
    =========================================================================== */
 
-/* Nexus 的.err / .savedNotice 是纯文字;As One 已有 .err/.notice 盒式变体,
+/* 原页面的.err / .savedNotice 是纯文字;As One 已有 .err/.notice 盒式变体,
    故这里用 .ui-err/.ui-notice 承担设置页与供应商页的纯文字形态。*/
 .ui-err {
   color: var(--bad);
@@ -2386,7 +2386,7 @@ body {
 }
 
 /* ===========================================================================
-   其他供应商页(ProvidersPage,1:1 移植 Nexus Providers.vue 的scoped 样式)
+   其他供应商页(ProvidersPage,scoped 样式)
    =========================================================================== */
 
 .providers-page {
@@ -2601,7 +2601,7 @@ body {
   word-break: break-all;
 }
 
-/* ── 逻辑模型 / 模型总览 子页(Nexus 面板移植,类名沿用 Nexus)────────── */
+/* ── 逻辑模型 / 模型总览 子页(移植自既有面板,类名沿用原设计)────────── */
 
 .section {
   color: var(--text);
@@ -2638,8 +2638,8 @@ body {
   white-space: nowrap;
 }
 
-/* Nexus 的.err / .savedNotice 是纯文字;As One 已有 .err 盒式变体,
-   用作用域覆盖(.section .err,特异性 0,2,0)还原 Nexus 形态,不动全局 .err */
+/* 原页面的.err / .savedNotice 是纯文字;As One 已有 .err 盒式变体,
+   用作用域覆盖(.section .err,特异性 0,2,0)还原纯文字形态,不动全局 .err */
 .section .err {
   padding: 0;
   border: 0;
@@ -2683,7 +2683,7 @@ body {
   margin-left: 8px;
 }
 
-/* 徽章 pill(Nexus 同款) */
+/* 徽章 pill */
 .pill {
   display: inline-block;
   padding: 1px 7px;
@@ -2962,7 +2962,7 @@ body {
 /* 内嵌页自带 gap 布局,折叠体里补一点上边距即可 */
 .chx-body .chan-page { padding-top: 12px; }
 
-/* ── 渠道页三段式骨架(1:1 移植 Nexus styles.css 全局 .chan-* 段) ─────────── */
+/* ── 渠道页三段式骨架(全局 .chan-* 段) ─────────── */
 
 .chan-page { display: flex; flex-direction: column; gap: 16px; }
 
@@ -3000,7 +3000,7 @@ body {
 
 .chan-sub { color: var(--text-soft); font-size: 12px; }
 
-/* 渠道页顶部动作行:ModelsPage 子标题行 action 未接线,壳未传,页面内渲染   与 Nexus 子标题行右端动作区(act-note / act-btn)同款的刷新条 */
+/* 渠道页顶部动作行:ModelsPage 子标题行 action 未接线,壳未传,页面内渲染   与子标题行右端动作区(act-note / act-btn)同款的刷新条 */
 .chan-action { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin-bottom: 2px; }
 
 /* 账号卡头(ProviderCard / SenseNovaPanel 共用) */
@@ -3058,7 +3058,7 @@ body {
 /* 模型表的只读列(Qoder 这类未登记行不摆输入框) */
 .plain-cell { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
 
-/* 渠道页主按钮(Nexus ProviderCard 同款;不改动既有.btn) */
+/* 渠道页主按钮(ProviderCard 同款;不改动既有.btn) */
 .chan-page .btn.primary { background: var(--dsw-alias-button-info-hover, #24425f); }
 .chan-page .btn.primary:hover:not(:disabled) { background: var(--dsw-alias-button-info-hover, #24425f); }
 
@@ -3131,15 +3131,15 @@ body {
 .foot { margin-top: 0; }
 
 /* ===========================================================================
-   逻辑模型子页(LogicalModelsPage)严格复刻 Nexus LogicalModels.vue 的scoped
-   样式 ——上方 .rows/.rowCard/.rowBtn/.addButton/.editor 等通用块由供应商页等   共用,不能改这里对 .lm-section 作用域内的差异做 Nexus 同值覆盖。   =========================================================================== */
+   逻辑模型子页(LogicalModelsPage)的scoped
+   样式 ——上方 .rows/.rowCard/.rowBtn/.addButton/.editor 等通用块由供应商页等   共用,不能改这里对 .lm-section 作用域内的差异做同值覆盖。   =========================================================================== */
 
-/* ul.rows:Nexus gap 8px(通用块是供应商页的 10px) */
+/* ul.rows:gap 8px(通用块是供应商页的 10px) */
 .lm-section .rows {
   gap: 8px;
 }
 
-/* li.rowCard:Nexus 边框 var(--border) / 底色 var(--surface) / gap 12px */
+/* li.rowCard:边框 var(--border) / 底色 var(--surface) / gap 12px */
 .lm-section .rowCard {
   border-color: var(--border);
   background: var(--surface);
@@ -3181,9 +3181,9 @@ body {
   line-height: 22px;
 }
 
-/* ── 编辑器(Nexus LogicalModelEditor.vue scoped 同值) ────────────────── */
+/* ── 编辑器(LogicalModelEditor.vue scoped 同值) ────────────────── */
 
-/* Nexus 编辑器全部.input 底色 var(--bg-deep) / 边框 var(--border) / 字色 var(--text-soft) /
+/* 编辑器全部.input 底色 var(--bg-deep) / 边框 var(--border) / 字色 var(--text-soft) /
    字号 14px / 行高 22px / 聚焦边框 var(--accent)(通用 .input 是页面全局 13px 变量版 */
 .lm-section .editor .input {
   width: 100%;
@@ -3218,7 +3218,7 @@ body {
   cursor: pointer;
 }
 
-/* fieldLabel / fieldNote / fieldWarn / fieldValue:Nexus 色与行高 */
+/* fieldLabel / fieldNote / fieldWarn / fieldValue:色与行高 */
 .lm-section .editor .fieldLabel {
   color: var(--text);
   font-weight: 500;
@@ -3262,7 +3262,7 @@ body {
   color: var(--bad);
 }
 
-/* nodeRow 内:.input 的 width:100% 会让行溢出卡片,必须赢过它(Nexus 同值) */
+/* nodeRow 内:.input 的 width:100% 会让行溢出卡片,必须赢过它(同值) */
 .lm-section .editor .nodeRow .nodeProvider {
   width: 150px;
   flex: 0 0 150px;
@@ -3299,7 +3299,7 @@ body {
   cursor: default;
 }
 
-/* primaryButton / secondaryButton:Nexus 36px / 圆角 6px / 内距 0 14px /
+/* primaryButton / secondaryButton:36px / 圆角 6px / 内距 0 14px /
    字14px 行高 22px;主按钮底色 var(--dsw-alias-button-info-fill, #2f4d6b) hover var(--dsw-alias-button-info-hover, var(--dsw-alias-button-info-hover, #24425f)),副按钮透明度 + 边框 var(--border) */
 .lm-section .editor .primaryButton,
 .lm-section .editor .secondaryButton {
@@ -3340,7 +3340,7 @@ body {
 }
 
 /* ===========================================================================
-   其他供应商页(ProvidersPage):逐条照搬 Nexus panel/web/src/Providers.vue 的   <style scoped>(L1005-1261)。类名全部加 .pv- 前缀以免与 As One 现有样式冲突,
+   其他供应商页(ProvidersPage):逐条照搬既有的   <style scoped>(L1005-1261)。类名全部加 .pv- 前缀以免与 As One 现有样式冲突,
    颜色 / 尺寸 / 间距 / 圆角 / 边框 / 字重逐字保留(暗色基调与现有页面一致)。   =========================================================================== */
 
 /* 布局对照 dsh 的供应商卡片:外层一行头 + 内嵌灰面板(字段 / 模型目录) */
@@ -3547,7 +3547,7 @@ body {
 .pv-iconButton:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .pv-iconButton.pv-iconButtonDanger:hover:not(:disabled) { color: var(--bad); }
 .pv-choice { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
-/* Nexus 原为全局 `input[type="checkbox"]`;这里按 .pv- 作用域收窄到本页两个勾选位
+/* 原为全局 `input[type="checkbox"]`;这里按 .pv- 作用域收窄到本页两个勾选位
    (输入类型 / 选择器候选项),避免影响其他页面。*/
 .pv-choice input[type="checkbox"],
 .pv-candidateLabel input[type="checkbox"] { accent-color: var(--accent); }
@@ -3605,10 +3605,10 @@ body {
 .pv-dialogFooter { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 /* ===========================================================================
-    设置页追加样式(Nexus Settings.vue 1:1 复刻配套;只追加,不动既有规则)
+    设置页追加样式(配套补充;只追加,不动既有规则)
     =========================================================================== */
 
-/* 页头 h1(Nexus .ui-page-title) */
+/* 页头 h1(.ui-page-title) */
 .ui-page-title {
   margin: 0 0 4px;
   font-size: 18px;
@@ -3616,7 +3616,7 @@ body {
   color: var(--text);
 }
 
-/* 控件(Nexus .ui-input / .ui-select) */
+/* 控件(.ui-input / .ui-select) */
 .ui-input,
 .ui-select {
   width: 100%;
@@ -3646,7 +3646,7 @@ body {
   width: auto;
 }
 
-/* 独立按钮(Nexus 裸类 .ui-btn-ghost / .ui-btn-danger / .ui-btn-primary) */
+/* 独立按钮(裸类 .ui-btn-ghost / .ui-btn-danger / .ui-btn-primary) */
 .ui-btn-ghost {
   appearance: none;
   font: inherit;
@@ -3706,7 +3706,7 @@ body {
   cursor: not-allowed;
 }
 
-/* 退避曲线(Nexus .ui-chart-wrap / .ui-chart) */
+/* 退避曲线(.ui-chart-wrap / .ui-chart) */
 .ui-chart-wrap {
   margin-top: 10px;
 }
@@ -3715,7 +3715,7 @@ body {
   width: 100%;
 }
 
-/* 卡片头:h2 与 .ui-card-sub 相邻排布(还原 Nexus 的 flex 起点布局) */
+/* 卡片头:h2 与 .ui-card-sub 相邻排布(还原 flex 起点布局) */
 .ui-card-head {
   justify-content: flex-start;
 }
@@ -3732,8 +3732,8 @@ body {
 }
 
 /* ===========================================================================
-   SenseNova 专页(SenseNovaPage)严格复刻 Nexus SenseNovaPanel.vue 的scoped CSS。   ⚠️ 全部加 `.sn-` 前缀:.row / .bar / .bar-fill / .pill / .grid 这些名字在   styles.css 里*已有全局定义**(状态条、ModelTable、渠道页共用),裸用会互相污染
-   前缀版逐字搬运 Nexus 的颜色间距/圆角,页面上只认前缀版。   =========================================================================== */
+   SenseNova 专页(SenseNovaPage)的scoped CSS。   ⚠️ 全部加 `.sn-` 前缀:.row / .bar / .bar-fill / .pill / .grid 这些名字在   styles.css 里*已有全局定义**(状态条、ModelTable、渠道页共用),裸用会互相污染
+   前缀版逐字搬运颜色间距/圆角,页面上只认前缀版。   =========================================================================== */
 
 /* 账号卡头(与渠道页 ProviderCard 共用的全局 .acct-head / .who / .badges 同值,不重复定义) */
 
@@ -3857,7 +3857,7 @@ body {
 .sn-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 2px; }
 .sn-add .chan-hint { margin: 0; flex: 1 1 100%; }
 
-/* ── 账号管理页(Nexus ProviderAccounts.vue 的 1:1 复刻)────────────────────
+/* ── 账号管理页 ────────────────────
    四块结构:自动鉴权 / 已入池账号/ 真实模型 / 签到刷新。   复用 .grid / .btn / .chan-hint / .chan-banner 等既有类,不另造一套。*/
 .acct-page { display: flex; flex-direction: column; gap: 6px; }
 .acct-title { margin: 0 0 6px; font-size: 17px; color: var(--text); }

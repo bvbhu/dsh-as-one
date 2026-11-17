@@ -1,5 +1,5 @@
 /**
- * Nexus v7 各表的 TypeScript 行类型(camelCase),与 Python 侧 dict 行一一对应。
+ * v7 各表的 TypeScript 行类型(camelCase),与库里的 snake_case 列一一对应。
  *
  * 约定:
  *  - provider.id / real_model.provider / credential.provider / stats_daily.provider → "provider";
@@ -8,7 +8,7 @@
  *  - logical_model.members 与 credential.raw_json 是 JSON 字符串。
  */
 
-/** provider 表:一个 OpenAI 兼容上游(见 D:\projects\nexus\nexus\db\schema.sql L97-102)。 */
+/** provider 表:一个 OpenAI 兼容上游。 */
 export interface ProviderRow {
 	/** 上游服务商 id:'workbuddy'/'trae'/'sensenova'… */
 	id: string;
@@ -20,7 +20,7 @@ export interface ProviderRow {
 	env_prefix: string | null;
 }
 
-/** credential 表:某个 provider 下的用户名/密钥对(复合主键 provider+username,schema.sql L117-128)。 */
+/** credential 表:某个 provider 下的用户名/密钥对(复合主键 provider+username)。 */
 export interface CredentialRow {
 	provider: string;
 	username: string;
@@ -33,8 +33,8 @@ export interface CredentialRow {
 }
 
 /**
- * real_model 表:一个 provider 实际提供、可被路由的具体模型(schema.sql L151-166)。
- * 列序即 v5→v6 迁移脚本 migrate_v5_to_v6.py 的 EXPECTED_COLUMNS 声明的规范列序。
+ * real_model 表:一个 provider 实际提供、可被路由的具体模型。
+ * 列序即 v5→v6 迁移后声明的规范列序。
  */
 export interface RealModelRow {
 	provider: string;
@@ -69,7 +69,7 @@ export interface RealModelRow {
 	reasoning_allows_off?: boolean | null;
 }
 
-/** logical_model 表:路由层的逻辑模型名,strategy 决定成员选择策略(schema.sql L188-195)。 */
+/** logical_model 表:路由层的逻辑模型名,strategy 决定成员选择策略。 */
 export interface LogicalModelRow {
 	name: string;
 	/** 'random'(缺省,2026-10-26 起)等路由策略名 */
@@ -84,7 +84,7 @@ export interface LogicalModelRow {
 }
 
 /**
- * stats_daily 表:按天聚合的用量统计(schema.sql L211-225)。
+ * stats_daily 表:按天聚合的用量统计。
  * logical_model 为 NULL 的行表示"任何 logical_model"聚合;*_ms 列是毫秒累加值。
  */
 export interface StatsDailyRow {
@@ -125,7 +125,7 @@ export interface StatsExternalRow {
 	last_seen: number;
 }
 
-/** setting 表:键值配置(schema.sql L234-240),k 为主键。 */
+/** setting 表:键值配置,k 为主键。 */
 export interface SettingRow {
 	k: string;
 	v: string | null;

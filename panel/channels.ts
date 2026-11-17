@@ -417,7 +417,7 @@ export function createChannelsDomain(
   };
 
   // ── 3.1 sensenova 连接器账号池注入 ───────────────────────────────────────
-  // 连接器层账号池(Nexus sensenova.py 的 AccountPool):网关每次请求按
+  // 连接器层账号池(AccountPool):网关每次请求按
   // 「429 同号硬等 → 烧够 TPM 才换号 → 冷却按 (账号,模型) 分格」挑账号。
   // 池是进程内运行态(不可序列化),凭据以库为唯一真源 —— 所以这里只在
   // 启动时播种一次,后续凭据变化由 syncSensenovaPool() 增量对齐。
@@ -630,7 +630,7 @@ export function createChannelsDomain(
     return out;
   };
 
-  // ── 渠道签到:镜像 nexus/checkin.py(Nexus CHECKIN_PROVIDERS = trae/workbuddy)──
+  // ── 渠道签到(CHECKIN_PROVIDERS = trae/workbuddy)──
 
   /** 签到计费基址:有则用(渠道页配置的 API 地址覆盖),无则交给 core 默认端点
    *  (trae → TRAE_PAY_BASE_CN,workbuddy → wbBillingBase(domain))。 */
@@ -647,7 +647,7 @@ export function createChannelsDomain(
   };
 
 
-  /** 某 provider 的全部凭据行 → 签到输入(Nexus load_accounts 同源字段)。 */
+  /** 某 provider 的全部凭据行 → 签到输入(同源字段)。 */
   const checkinAccountsOf = async (pid: string): Promise<CheckinInputAccount[]> => {
     const creds = await ctx.vault.list(pid);
     const out: CheckinInputAccount[] = [];
@@ -674,7 +674,7 @@ export function createChannelsDomain(
   };
 
 
-  /** 失败消息:类型名 + 原因(Nexus `f"{TypeName}: {exc}"[:300]`)。 */
+  /** 失败消息:类型名 + 原因(`f"{TypeName}: {exc}"[:300]`)。 */
   const checkinErrText = (err: unknown): string => {
     if (err instanceof Error) {
       return `${err.constructor.name}: ${err.message}`.slice(0, 300);
@@ -682,7 +682,7 @@ export function createChannelsDomain(
     return String(err).slice(0, 300);
   };
 
-  /** 逐账号领取(Nexus checkin_claim 的 per-account 循环;彼此独立,互不遮蔽)。 */
+  /** 逐账号领取(per-account 循环;彼此独立,互不遮蔽)。 */
   const checkinClaimOne = async (
     pid: string,
     protocol: string,
@@ -786,7 +786,7 @@ export function createChannelsDomain(
       }
     }
     if (protocol === "trae") {
-      // Nexus 不预查令牌(会带空令牌打上游);As One 先短路,避免无用写请求。
+      // 不预查令牌会带空令牌打上游;这里先短路,避免无用写请求。
       if (!acc.token) {
         return { ...baseRow, status: "failed", message: "该账号没有可用令牌" };
       }
@@ -839,8 +839,9 @@ export function createChannelsDomain(
         return { ...baseRow, status: "failed", message: checkinErrText(err) };
       }
     }
-    // workbuddy —— 2026-11-16 上游状态端点下线后,直接打 daily-checkin:
-    // code 0 = 领取成功,code 10001「今天已签到」= already(不是失败)。
+    // workbuddy —— 状态走只读 `checkin-activity-status`(POST),领取走 `daily-checkin`:
+    // 状态 code 0 + `today_checked_in` = 今日是否已签;领取 code 0 = 成功,
+    // code 10001「今天已签到」= already(不是失败)。
     if (checkinWbRegionOf(acc.domain) !== "cn") {
       return { ...baseRow, status: "skipped", message: "国际版无签到(订阅制,额度走 payStatus)" };
     }
@@ -848,13 +849,33 @@ export function createChannelsDomain(
       return { ...baseRow, status: "failed", message: "该账号没有可用令牌" };
     }
     if (!confirm) {
-      // 没有可靠 status 就不打写端点;诚实告诉用户「状态不可预查」。
-      return {
-        ...baseRow,
-        status: "dry_run",
-        message: "workbuddy 签到状态接口已下线,无法预查;确认签到后由领取接口回报结果",
-        would_claim: true,
-      };
+      // 干跑:只读查询真实状态,**不写**。查不到才算失败 —— 不再硬编码「无法预查」。
+      try {
+        const st = await wbCheckinStatus(
+          { index: acc.index, username: acc.username, token: acc.token, domain: acc.domain, uid: acc.uid, enterprise_id: acc.enterprise_id },
+          { baseUrl: base },
+        );
+        if (st.today_checked_in) {
+          return {
+            ...baseRow,
+            status: "already",
+            message: `今日已签到${st.streak_days > 0 ? ` · 连续 ${st.streak_days} 天` : ""}`,
+            streak_days: st.streak_days,
+          };
+        }
+        return {
+          ...baseRow,
+          status: "dry_run",
+          message: st.active
+            ? `未签到,今日可领 ${st.daily_credit} 积分(未确认,不写)`
+            : "该渠道当前没有签到活动(未确认,不写)",
+          would_claim: st.active,
+          credit: st.daily_credit > 0 ? st.daily_credit : undefined,
+          streak_days: st.streak_days,
+        };
+      } catch (err) {
+        return { ...baseRow, status: "failed", message: checkinErrText(err) };
+      }
     }
     try {
       const res = await wbCheckinClaim(
@@ -875,7 +896,7 @@ export function createChannelsDomain(
   /**
    * 目录行 → 契约 CatalogModel。
    *
-   * ⚠️ **`exposed` 的语义按页面分家**(Nexus `api.ts` 的 CatalogModel docstring):
+   * ⚠️ **`exposed` 的语义按页面分家**(CatalogModel docstring):
    * - **渠道页 / 兼容供应商页**:`exposed` = **在 `real_model` 表里**(勾上 ⇔
    *   有这一行;取消勾选 = 删掉这一行,2026-10-12 渠道页定、10-13 供应商页对齐)。
    *   所以这里第 4 参传的是 `registered`,**不是** `!mv.hidden`;
@@ -916,10 +937,10 @@ export function createChannelsDomain(
 
   /**
    * 渠道页 / 兼容供应商页的模型表 —— **上游目录 ∪ 已登记**,逐字段对齐
-   * Nexus `api_pages.py:_merge_catalog`。
+   * 既有的合并口径。
    *
    * ⭐ **勾选态 = 在 `real_model` 表里**(`registered`),**不是** `!hidden`。
-   * Nexus 的注释把这件事的后果写得很直白:
+   * 旧实现的注释把这件事的后果写得很直白:
    *   > 若退回 `not hidden`,一个被部署页设成 hidden 的模型会显示成未勾,
    *   > 用户只是打开页面点一下保存,它就被当成「取消勾选」**删掉了**。
    * As One 曾经正是这么写的(`catalogModel(mv, …, !mv.hidden)`),后果:
@@ -944,7 +965,7 @@ export function createChannelsDomain(
     const out: CatalogModel[] = [];
     const seen = new Set<string>();
 
-    // 上游目录行(按模型名排序,与 Nexus `sorted(upstream)` 一致)
+    // 上游目录行(按模型名排序,与 `sorted(upstream)` 一致)
     for (const [model, up] of [...upstream.entries()].sort(([a], [b]) =>
       a < b ? -1 : a > b ? 1 : 0,
     )) {
@@ -1020,7 +1041,7 @@ export function createChannelsDomain(
     return out;
   };
 
-  // ── 凭据自动刷新:镜像 nexus/refresh.py 的 refresh_status/refresh_run ──────
+  // ── 凭据自动刷新:refresh_status / refresh_run ──────
 
   /** 逐渠道最近一次刷新记账(进程内存态;刷新结果本身经 vault 落盘)。 */
   const refreshLedger = new Map<string, {
@@ -1037,10 +1058,10 @@ export function createChannelsDomain(
   }>();
 
   /** 单飞:同渠道(或同渠道同 index)刷新进行中 → 复用同一 Promise,不打重复上游。
-   *  Nexus 手动刷新无冷却窗口(refresh.py 无节流),「避免连点」由这里承担。 */
+   *  手动刷新无冷却窗口(不做节流),「避免连点」由这里承担。 */
   const refreshInFlight = new Map<string, Promise<ApiResult>>();
 
-  /** 渠道凭据行(vault.list 顺序 = Nexus 按 provider,username 排序;index 与
+  /** 渠道凭据行(vault.list 顺序 = 按 provider,username 排序;index 与
    *  channelAccountsOf / getChannelAccounts 一致,渲染层可按行号指定账户)。 */
   const refreshAccountsOf = async (pid: string): Promise<Array<{ index: number; cred: Credential }>> => {
     const creds = await ctx.vault.list(pid);
@@ -1052,7 +1073,7 @@ export function createChannelsDomain(
     return out;
   };
 
-  /** 单账号刷新行(镜像 Nexus refresh_status 行 / _refresh_one base)。 */
+  /** 单账号刷新行(refresh_status 行 / `_refresh_one` base)。 */
   const refreshRowBase = (index: number, cred: Credential): RefreshAccountRow => ({
     index,
     account: credentialKey(cred.provider, cred.username),
@@ -1067,7 +1088,7 @@ export function createChannelsDomain(
     needs_refresh: cred.refreshSecret ? needsRefresh(cred, { marginSeconds: REFRESH_MARGIN_S }) : false,
   });
 
-  /** 逐账号刷新(镜像 Nexus _refresh_one):绝不抛异常,状态进行。 */
+  /** 逐账号刷新(`_refresh_one`):绝不抛异常,状态进行。 */
   const refreshOne = async (
     pid: string,
     index: number,
@@ -1141,7 +1162,7 @@ export function createChannelsDomain(
     };
   };
 
-  /** 整渠道刷新(镜像 Nexus refresh_run):targets 按 onlyIndex 过滤,逐账号执行。 */
+  /** 整渠道刷新(`refresh_run`):targets 按 onlyIndex 过滤,逐账号执行。 */
   const doRefreshRun = async (
     pid: string,
     confirm: boolean,
@@ -1175,7 +1196,7 @@ export function createChannelsDomain(
     const elapsedS = Math.round((Date.now() - startedAt) / 100) / 10;
     const refreshed = rows.filter((r) => r.status === "refreshed" || r.status === "refreshed_unsaved").length;
     const ok = refreshed > 0 || (!confirm && rows.length > 0);
-    // Nexus message 按 confirm 静态取;index 越界(rows 空)时给诚实文案而非"已刷新"。
+    // message 按 confirm 静态取;index 越界(rows 空)时给诚实文案而非"已刷新"。
     const message = confirm
       ? (rows.length > 0 ? "已刷新" : `没有匹配的账号(index=${onlyIndex})`)
       : "干跑结果(未发出上游请求)";

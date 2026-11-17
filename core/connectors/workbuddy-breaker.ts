@@ -33,7 +33,7 @@
  * `onRequestDone` 钩子,插件版走路由 catch),不复制逻辑。
  */
 
-import type { NexusDatabase } from "../db/database.js";
+import type { AsOneDatabase } from "../db/database.js";
 import type { CredentialVault } from "../config/credentials.js";
 
 /** 熔断标记在 `setting` 表的键。 */
@@ -58,7 +58,7 @@ export interface WorkbuddyBreakerState {
  * 解析失败按「未熔断」处理并清掉坏值:坏 JSON 不应该把渠道永久锁死,
  * 那会让用户完全无法恢复。
  */
-export function readWorkbuddyBreaker(db: NexusDatabase): WorkbuddyBreakerState | null {
+export function readWorkbuddyBreaker(db: AsOneDatabase): WorkbuddyBreakerState | null {
   const row = db.setting.get(WB_BREAKER_SETTING_KEY);
   const raw = row?.v;
   if (typeof raw !== "string" || raw.trim() === "") return null;
@@ -77,7 +77,7 @@ export function readWorkbuddyBreaker(db: NexusDatabase): WorkbuddyBreakerState |
 }
 
 /** 渠道当前是否处于熔断态。 */
-export function isWorkbuddyBreakerTripped(db: NexusDatabase): boolean {
+export function isWorkbuddyBreakerTripped(db: AsOneDatabase): boolean {
   return readWorkbuddyBreaker(db) !== null;
 }
 
@@ -87,7 +87,7 @@ export function isWorkbuddyBreakerTripped(db: NexusDatabase): boolean {
  * ⚠️ 只清标记,**不恢复凭据** —— 凭据已在熔断时被物理删除,必须重新导入。
  * 返回是否真的清掉了一条标记(没熔断时返回 false,便于面板提示)。
  */
-export function clearWorkbuddyBreaker(db: NexusDatabase): boolean {
+export function clearWorkbuddyBreaker(db: AsOneDatabase): boolean {
   const existed = readWorkbuddyBreaker(db) !== null;
   db.setting.set(WB_BREAKER_SETTING_KEY, "");
   return existed;
@@ -103,7 +103,7 @@ export function clearWorkbuddyBreaker(db: NexusDatabase): boolean {
  * @returns 删除统计 + 最终熔断状态
  */
 export async function tripWorkbuddyBreaker(
-  db: NexusDatabase,
+  db: AsOneDatabase,
   vault: CredentialVault,
   provider: string,
   reason: string,

@@ -11,13 +11,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tmpdir } from "node:os";
 
-import { openDatabase, type NexusDatabase } from "@as-one/core/src/db/database.js";
+import { openDatabase, type AsOneDatabase } from "@as-one/core/src/db/database.js";
 import type { PanelContext } from "./context.js";
 import type { ApiResult, SensenovaStatus } from "./types.js";
 import { createSensenovaDomain } from "./sensenova.js";
 import type { SensenovaDomainDeps } from "./sensenova.js";
 
-let db: NexusDatabase;
+let db: AsOneDatabase;
 
 beforeEach(() => {
   db = openDatabase(":memory:");

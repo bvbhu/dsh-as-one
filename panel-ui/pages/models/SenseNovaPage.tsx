@@ -1,5 +1,5 @@
 /**
- * SenseNova Token Plan 专页 —— 1:1 移植 Nexus `SenseNovaPanel.vue`(两段式):
+ * SenseNova Token Plan 专页(两段式):
  *
  *   ① 顶部:账号状态行 —— 一行一个账号,左侧账号名 + key 指纹 + 状态点,
  *      右侧**一行文本**(2026-11-08 用户重新定案):
@@ -16,7 +16,7 @@
  *   账号必须经 Agent 显式操作」冲突。后端 `sensenovaAddAccount` /
  *   `sensenovaRemoveAccount` / `sensenovaLogin` 等 RPC 保留,不再从 UI 触发。
  *
- * 「不显示假数字」的纪律(照抄 Nexus 的注释,因为代码就照它写):
+ * 「不显示假数字」的纪律(注释原样搬来,因为代码就照它写):
  * 1. **没有数据 ≠ 0**。上游没给某个窗口就不摆那枚徽章,不拿另一个窗口的
  *    数顶替,也不摆「—」占位;明确给了 0 才显示 0(黄色)。
  * 2. 两个窗口各带名字、**互不相加**:5h 是当下能否发请求,周是本周余额。
@@ -24,9 +24,9 @@
  *
  * ── 契约差异(按 `shared/panel-types.ts` 实际字段渲染,不编造) ─────────────
  * · `SensenovaStatus.refresh` 是 `ChannelRefreshStatus`(running / last_run_at_ms /
- *   last_elapsed_s / last_ok / last_error / result),没有 Nexus 的
+ *   last_elapsed_s / last_ok / last_error / result),没有原实现的
  *   `finished_at` / `ok` / `accounts` / `errors` → `refreshNote` 用现有字段重组文案。
- * · `getSensenovaModels()` 只返回 `SensenovaCatalogRow[]`,没有 Nexus 的
+ * · `getSensenovaModels()` 只返回 `SensenovaCatalogRow[]`,没有原实现的
  *   `catalogView`(source / count / ok / stale / warnings)→ `catalogSourceLabel`
  *   按行数重组;目录问题行复用 `status.note`(不编造 source 语义)。
  * · 账号状态行的 key 指纹 / 状态点来自 `getSensenovaStatus()`;不再有账号增删
@@ -34,7 +34,7 @@
  * · 刷新语义(2026-11-08 用户定案):**本页不再有页面级刷新按钮**。
  *   积分池由渠道页顶部「全部刷新」刷(`sensenovaRefresh(force, { catalog: false })`),
  *   模型目录由模型列表表头那颗「刷新模型列表」刷(`{ quota: false }`);
- *   页面不渲染 h1(Nexus 本页也没有页头)。
+ *   页面不渲染 h1(原页面也没有页头)。
  * · 装配层对凭据刷新/额度查询返回诚实消息(`refresh.result`、`note` 如实描述),
  *   本页照实展示,不假装成功。
  */
@@ -47,7 +47,7 @@ import type { ModelTableEdit, ModelTableRow } from "../../components/ModelTable"
 import { AccountRows } from "../../components/AccountRows";
 import type { AccountRow, AccountRowRight } from "../../components/AccountRows";
 
-/** 数值取整 + 千分位(与 Nexus `n()` 一致);null/undefined → "—"。 */
+/** 数值取整 + 千分位(与 `n()` 一致);null/undefined → "—"。 */
 function n(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
   return Math.round(value).toLocaleString("en-US");
@@ -69,7 +69,7 @@ function tsDate(value: number | null | undefined): string {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-/** 时长(秒)→ 「1h 30m / 2m 5s / 45s」(与 Nexus `format.fmtDuration` 一致)。 */
+/** 时长(秒)→ 「1h 30m / 2m 5s / 45s」(与 `format.fmtDuration` 一致)。 */
 function fmtDuration(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(Number(v))) return "—";
   const s = Math.max(0, Math.floor(Number(v)));
@@ -87,7 +87,7 @@ function bare(id: string): string {
   return i >= 0 ? id.slice(i + 1) : id;
 }
 
-/** 输入框字符串 → 声明值。空 / 0 / 非法一律当「不声明」,不写库(与 Nexus `num` 同义)。 */
+/** 输入框字符串 → 声明值。空 / 0 / 非法一律当「不声明」,不写库(与 `num` 同义)。 */
 function numOf(v: string): number | null {
   const t = (v ?? "").trim();
   if (!t) return null;
@@ -97,7 +97,7 @@ function numOf(v: string): number | null {
 
 /** 子标题行那一行刷新状态 —— **全页唯一的刷新状态出口**。
  *
- *  ⚠️ 契约没有 Nexus 的 `finished_at` / `ok` / `accounts` / `errors`,只用
+ *  ⚠️ 契约没有原实现的 `finished_at` / `ok` / `accounts` / `errors`,只用
  *  `ChannelRefreshStatus` 现有字段重组:刷新中 → 「正在刷新 · 已用 Ns」;
  *  否则把后端 `result`(装配层的诚实消息)照实上屏。
  *
@@ -158,7 +158,7 @@ export default function SenseNovaPage(): React.JSX.Element {
    *  只有被改过的行才有条目。 */
   const [draft, setDraft] = React.useState<Record<string, Record<string, string | boolean>>>({});
   const [saving, setSaving] = React.useState(false);
-  /** 脏标镜像:Nexus 用 ref 做「没改过才允许回读覆盖草稿」的判据。React 的状态更新是
+  /** 脏标镜像:原页面用 ref 做「没改过才允许回读覆盖草稿」的判据。React 的状态更新是
    *  异步的,保存路径里「先清脏标再 load()」必须走同步可读的 ref,否则 load() 仍会
    *  看到脏标而拒绝覆盖,页面停在旧值。 */
   const dirtyRef = React.useRef(false);
@@ -180,7 +180,7 @@ export default function SenseNovaPage(): React.JSX.Element {
     }
   }
 
-  /** 后台轮询:Nexus 是「刷新期间 2 秒一次、平时 10 秒一次」。
+  /** 后台轮询:刷新期间 2 秒一次、平时 10 秒一次。
    *  ⚠️ 用 ref 读 `running`,避免把 interval 挂在 `status` 上反复重建(那样每次都
    *  会立刻重发一轮,节奏会变成「2 秒 × N」)。 */
   const runningRef = React.useRef(false);
@@ -356,12 +356,12 @@ export default function SenseNovaPage(): React.JSX.Element {
     } finally {
       setRefreshingLocal(false);
     }
-    // 后端还在跑(串行登录队列)就按 2s 轮询进度(与 Nexus pollFast 同款)。
+    // 后端还在跑(串行登录队列)就按 2s 轮询进度(与 pollFast 同款)。
     const s = await rendererApi.getSensenovaStatus().catch(() => null);
     if (s?.refresh?.running) startFast();
   }
 
-  /* ── 模型目录草稿(与 Nexus toDraft / applyCatalogEdit 同构) ────────────── */
+  /* ── 模型目录草稿(与 toDraft / applyCatalogEdit 同构) ────────────── */
 
   /** 目录行 → 表格行。
    *  ⚠️ `id` 是**裸模型名**(行键 + 「模型」列显示),`fullId` 是完整 id(`sensenova/xxx`)。

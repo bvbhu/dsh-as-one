@@ -1,10 +1,10 @@
 /**
- * 用量统计频道(1:1 移植 Nexus 面板 /nexus/usage → UsageStats.vue)。
+ * 用量统计频道。
  *
  * 一份 `/metrics/history` 响应喂整页:范围/粒度/分组三档控件 + 刷新 →
  * 5 张 KPI 卡 → 堆叠柱状趋势(叠加缓存命中率折线,悬浮卡)→ 模型用量
  * (环形图 + 排名)→ 各供应商用量(环形图 + 排名)→ 页脚日期。图表全部
- * SVG 手绘(照 Nexus),不引入任何 npm 依赖。
+ * SVG 手绘,不引入任何 npm 依赖。
  *
  * 数据契约:rendererApi.getUsageHistory(range, granularity, group) →
  * UsageHistory(见 src/renderer/src/api.ts)。响应里的比率一律 0..1,分母为
@@ -189,7 +189,7 @@ export default function UsageStatsPage(): React.JSX.Element {
     }
   }, [range, granularity, group, source]);
 
-  //: 三档控件任一变化即重新加载(照 Nexus watch([range, granularity, group]))。
+  //: 三档控件任一变化即重新加载(对应 watch([range, granularity, group]))。
   React.useEffect(() => {
     void load();
   }, [load]);
@@ -704,8 +704,8 @@ export default function UsageStatsPage(): React.JSX.Element {
               <ol className="usage-rank">
                 {data.providers.map((p, i) => (
                   //: As One 契约的 UsageProvider 无 key/name,用 provider 当键;「其他」行
-                  //: 的显示名固定为「其他」(Nexus 的 p.name),机器键为哨兵
-                  //: "\u0000pother"。folded 为对齐 Nexus is_other 行新增(见
+                  //: 的显示名固定为「其他」(对应 p.name),机器键为哨兵
+                  //: "\u0000pother"。folded 为对齐 is_other 行新增(见
                   //: panel-types.ts),assembly 在排名尾部确有被聚合供应商时产出。
                   <li key={p.provider}>
                     <div

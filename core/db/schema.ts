@@ -1,27 +1,27 @@
 /**
- * Nexus SQLite schema — v7 最终形态,照抄自 D:\projects\nexus\nexus\db\schema.sql(单一真源)。
+ * SQLite schema — v7 最终形态,DDL 单一真源(即下面的 SCHEMA_V7)。
  *
  * v4 → v7 之间 DDL 形状未变:
  *  - v5(v4→v5 迁移)只改 real_model 的 `name`/`region` 数据列;
- *  - v6(v5→v6 迁移)把 real_model 重建为 schema.sql 声明的规范列序(provider, model, name,
+ *  - v6(v5→v6 迁移)把 real_model 重建为下面的规范列序(provider, model, name,
  *    supports_vision, max_input_tokens, max_output_tokens, hidden, concurrency);
  *  - v7(v6→v7 迁移)只改 setting 行数据(scheduler.rules 扁平化、retry.logical_cooldown、
  *    provider.cooldown_overrides 迁移)——不碰 DDL。
- * 所以「v7 最终 DDL」≡ schema.sql 的建表语句,直接按此建库,不做迁移链。
+ * 所以「v7 最终 DDL」≡ 本文件的建表语句,直接按此建库,不做迁移链。
  *
- * 与 Nexus 的版本行约定:repo.py:81 的 SCHEMA_VERSION 常量 = "4",schema.sql 种子行也写 '4'
- * (活库实测 version 行 = '4')。v5/v6/v7 迁移脚本会把该行更新为 5/6/7,但 DDL 单源从未越过 '4'。
- * 我们直接建 v7 语义库,版本行按 Nexus 新鲜建库行为种子为 "4"(见 SCHEMA_VERSION)。
+ * 版本行约定:SCHEMA_VERSION 常量 = "4",种子行也写 '4'(活库实测 version 行 = '4')。
+ * 历史上 v5/v6/v7 迁移脚本会把该行更新为 5/6/7,但 DDL 单源从未越过 '4'。
+ * 我们直接建 v7 语义库,版本行按新鲜建库行为种子为 "4"(见 SCHEMA_VERSION)。
  *
  * 列单位约定(重要):
- *  - credential.expires_at 单位为**秒**(epoch seconds),不是毫秒(Nexus 侧 also 以秒计)。
+ *  - credential.expires_at 单位为**秒**(epoch seconds),不是毫秒。
  *  - stats_daily 的 *_ms 列为毫秒累加值(整数);requests/fails/tokens 均为整数计数。
  *  - provider_policy / logical_model_policy 的 timeout_s / cooldown_*_s 单位是**秒**(REAL)。
  */
 
 export const SCHEMA_V7: string = `
 -- ============================================================
--- provider 表 (schema.sql L97-102)
+-- provider 表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS provider (
     id                  TEXT PRIMARY KEY,            -- 'workbuddy' / 'trae' / 'sensenova' ...
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS provider (
 CREATE INDEX IF NOT EXISTS ix_provider_protocol ON provider(protocol);
 
 -- ============================================================
--- credential 表 (schema.sql L117-128)
+-- credential 表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS credential (
     provider       TEXT NOT NULL REFERENCES provider(id) ON DELETE CASCADE,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS credential (
 );
 
 -- ============================================================
--- real_model 表 (schema.sql L151-166)
+-- real_model 表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS real_model (
     provider          TEXT NOT NULL REFERENCES provider(id) ON DELETE CASCADE,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS real_model (
 CREATE INDEX IF NOT EXISTS ix_real_model_hidden ON real_model(hidden);
 
 -- ============================================================
--- logical_model 表 (schema.sql L188-195)
+-- logical_model 表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS logical_model (
     name       TEXT PRIMARY KEY,
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS logical_model (
 );
 
 -- ============================================================
--- stats_daily 表 (schema.sql L211-225)
+-- stats_daily 表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS stats_daily (
     day               TEXT NOT NULL,                  -- 'YYYY-MM-DD'
@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS stats_external_daily (
 );
 
 -- ============================================================
--- setting 表 (schema.sql L234-240)
+-- setting 表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS setting (
     k TEXT PRIMARY KEY,
@@ -144,8 +144,8 @@ INSERT OR IGNORE INTO setting (k, v) VALUES ('version', '4');
 `;
 
 /**
- * 与 Nexus 的版本行约定一致:repo.py:81 `SCHEMA_VERSION = "4"`;schema.sql L240 种子行也是 '4';
- * 实测活库 D:\projects\nexus\data\nexus.db 的 version 行 = '4'。v5/v6/v7 迁移脚本会把该行
- * 更新为 5/6/7,但本项目直接建 v7 语义终态库,不跑迁移链,故按 Nexus 新鲜建库行为种子 '4'。
+ * 版本行约定:SCHEMA_VERSION = "4",种子行也是 '4';
+ * 实测活库 version 行 = '4'。v5/v6/v7 迁移脚本会把该行
+ * 更新为 5/6/7,但本项目直接建 v7 语义终态库,不跑迁移链,故按新鲜建库行为种子 '4'。
  */
 export const SCHEMA_VERSION: string = "4";

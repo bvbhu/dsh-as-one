@@ -1,10 +1,10 @@
 /**
- * 模型表(全项目共享;1:1 移植 Nexus ModelTable.vue)。
+ * 模型表(全项目共享)。
  *
  * 列:启用(checkbox)/ 模型 / 名称 / 倍率 / 上下文窗口 / 最大输出 / 视觉。
  * 数据来自契约类型 CatalogModel;`onEdit` 发单字段变更(id=裸模型名,
  * field ∈ exposed|name|vision|context|output),提交由页面代理负责
- * (与 Nexus ProviderCard.vue 的 draft → save 流程一致)。
+ * (与 ProviderCard.vue 的 draft → save 流程一致)。
  */
 import React from "react";
 

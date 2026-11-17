@@ -1,6 +1,6 @@
 /**
- * 逻辑模型编辑器 —— 新建与编辑**共用这一份**(结构移植自 Nexus
- * panel/web/src/components/LogicalModelEditor.vue 的模板与文案)。
+ * 逻辑模型编辑器 —— 新建与编辑**共用这一份**(模板与文案
+ * 沿用既有设计)。
  *
  * ## 2026-11-15 档链交互重做(用户定案)
  * - **不显示序号**:去掉蓝色圆圈 groupIdx,优先级由自上而下的排列表达;
@@ -10,8 +10,8 @@
  * - 不再摆 ↑↓✕ 三个按钮;按用户定案**不保留键盘调序/删除**,档链只走拖拽。
  *
  * 受控组件:name/strategy/members 由页面持有,变更经回调回写;保存/取消由页面代理。
- * 档链 members 的**数组顺序就是优先级**(Nexus 同款:前端原样提交,后端不排序)。
- * 名字输入对齐 Nexus 的 v-model.trim:输入即时去首尾空白。
+ * 档链 members 的**数组顺序就是优先级**(前端原样提交,后端不排序)。
+ * 名字输入对齐 v-model.trim 语义:输入即时去首尾空白。
  */
 import React from "react";
 import { insertIndexAt, moveItemTo, outsideRect } from "./logical-model-dnd.js";
@@ -65,7 +65,7 @@ export interface LogicalModelEditorProps {
   onCancel?: () => void;
 }
 
-/** 策略键 → 中文显示名(Nexus labelOf 同款:未知键原样显示,不让下拉空白)。 */
+/** 策略键 → 中文显示名(labelOf 同款:未知键原样显示,不让下拉空白)。 */
 function labelOf(key: string): string {
   return STRATEGY_LABELS[key as StrategyKey] ?? key;
 }
@@ -89,7 +89,7 @@ export function LogicalModelEditor({
   onCancel,
 }: LogicalModelEditorProps): React.JSX.Element {
   /**
-   * 边打边校验(Nexus 同款)。空着不算错(新建时刚打开就是空的),
+   * 边打边校验。空着不算错(新建时刚打开就是空的),
    * 非空但不合法才标红 —— 真正的拦截仍在保存前的 validateForm。
    */
   const trimmedName = name.trim();
@@ -135,7 +135,7 @@ export function LogicalModelEditor({
    * 当前供应商下的可选模型名。
    *
    * ⚠️ 值是**裸模型名**而不是 `provider/model` —— 上游模型名本身可能带斜杠,
-   * 只拿 model 字段跟选中的 provider 配对,不做任何字符串拆分(Nexus 同款)。
+   * 只拿 model 字段跟选中的 provider 配对,不做任何字符串拆分。
    * 已选的模型始终在列(即使目录里没有)。
    */
   function modelsOf(provider: string, cur: string): string[] {
@@ -148,7 +148,7 @@ export function LogicalModelEditor({
     onChangeMembers?.(members.map((m, idx) => (idx === i ? { ...m, ...patch } : m)));
   }
 
-  /** 换供应商后:该 provider 下只有一个模型时直接选上,省一次点击(Nexus 同款)。 */
+  /** 换供应商后:该 provider 下只有一个模型时直接选上,省一次点击。 */
   function onProviderChange(i: number, provider: string): void {
     const same = catalog.filter((c) => c.provider === provider);
     if (same.length === 1) setMember(i, { provider, model: same[0].model });

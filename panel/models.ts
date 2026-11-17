@@ -268,7 +268,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
         })();
 
         // ⚠️ **一行 = 一个档位成员(真实模型)**,不是 (成员 × 账号) ——
-        // Nexus `_logical_list` 的 `deployments[]` 下标就是 priority(D13),
+        // 逻辑模型列表的 `deployments[]` 下标就是 priority(D13),
         // 账号明细放在 `accounts[]` 里。按账号展开会让 3 账号的 sensenova
         // 同一个档位出现 3 遍,`order` 也就不再是成员优先级。
         const deployments: LogicalDeployment[] = [];
@@ -286,7 +286,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
               cooldown_remaining_s: inCd
                 ? Math.max(0, Math.round((rec.cooldownUntil - wallNow()) * 10) / 10)
                 : 0,
-              quota_remaining: null, // 逻辑模型页不查额度(Nexus 同位置给 null)
+              quota_remaining: null, // 逻辑模型页不查额度(同位置给 null)
             };
           });
           const first = accounts[0];
@@ -303,7 +303,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
             listed: !hidden,
             exposed: !hidden,
             exposed_note: hidden ? "hidden(仅不纳入模型列表,仍可调用)" : null,
-            // ⚠️ 这里给**真实值**(Nexus 该字段恒 false 是占位):逻辑模型页的
+            // ⚠️ 这里给**真实值**(恒 false 的话只是占位):逻辑模型页的
             // 「全视觉 / 有视觉」徽章全靠它,恒 false 会让徽章永远不出现。
             supports_vision: mv?.supportsVision ?? null,
             supported_reasoning_efforts: mv?.supportedReasoningEfforts ?? null,
@@ -327,7 +327,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
           members: members.map((m) => `${m.provider}/${m.model}`),
           // D14:`hidden` 列已删 → 「保留抽象模型」没有数据来源,恒 false。
           reserved: false,
-          // v3 残留字段,恒 `[]`(Nexus 同口径;以前错填成了成员清单,
+          // v3 残留字段,恒 `[]`(同一口径;以前错填成了成员清单,
           // 两个字段语义不同,页面若按 fallback 渲染会重复显示一遍成员)。
           fallback_chain: [],
           entry_alias: null,
@@ -349,14 +349,14 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
       return out;
     },
     /**
-     * 写逻辑模型 —— 对齐 Nexus `_logical_write`。
+     * 写逻辑模型 —— 对齐既有的写入语义。
      *
-     * ⚠️ **逐档校验「已登记」**:Nexus `_require_real_model` 对每个成员查
+     * ⚠️ **逐档校验「已登记」**:逐成员查
      * `real_model`,未登记直接 400。不校验的话可以写进一条指向空气的档位 ——
      * 调度时 `endpointChain` 展开出 0 个端点,整条链静默少一档,而页面上
      * 看起来「配好了」。
      *
-     * ⚠️ **允许空成员**(`members: []`):Nexus 明确允许先建壳再逐档添加。
+     * ⚠️ **允许空成员**(`members: []`):明确允许先建壳再逐档添加。
      * 以前这里直接拒「至少需要一个成员」,于是「新建 → 保存 → 再加档」这条
      * 正常使用路径走不通。
      */
@@ -424,9 +424,9 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
       const nowS = wallNow();
       const lastDay = deps.lastStatsDay();
       const out: DeploymentItem[] = [];
-      // ⚠️ **一行 = 一个真实模型**(Nexus v4 `_deployments_list` 的口径)。
+      // ⚠️ **一行 = 一个真实模型**(v4 口径)。
       // 以前这里按 (真实模型 × 账号) 展开,于是 sensenova 这种 3 账号的渠道,
-      // 同一个模型在「模型总览」里出现 3 遍 —— 而 Nexus 从 v4 起就把粒度改成了
+      // 同一个模型在「模型总览」里出现 3 遍 —— 而 v4 起粒度就是
       // 真实模型:`stats_daily` 没有凭据维度,按账号切分算不出各自的 TTFT/TPS,
       // 硬切只会把「全渠道合数」重复显示好几遍;端点本身由 (真实模型 × 该
       // provider 名下的凭据行) 自动推导(D5),也不可单独停用(D6)。
@@ -442,13 +442,13 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
         const modelId = `${mv.provider}/${mv.model}`;
         const logicals = logicalGroupsContaining(mv.provider, mv.model);
         const withKey = await deps.accountsWithKey(mv.provider);
-        // ⚠️ **不跳过 0 账号模型**(Nexus `_deployments_list` 同口径):没有凭据的
+        // ⚠️ **不跳过 0 账号模型**(同一口径):没有凭据的
         // 档也要列出来,`endpoint_count=0` + 「异常」徽章(缺配置)正是用户要看到
         // 的信号 —— 跳过它等于把「这个模型调不通」藏起来。
         const usableCount = withKey.filter((a) => a.hasKey).length;
         const stats = modelDayStats(mv.provider, mv.model);
         // 端点数 = 该 provider 名下的**全部**凭据行(D5),不是「启用」的账号数
-        // —— Nexus 没有停用概念,端点由 (真实模型 × 凭据行) 自动推导。
+        // —— 没有停用概念,端点由 (真实模型 × 凭据行) 自动推导。
         const endpointCount = ctx.registry.listAccounts(mv.provider).length;
         // 冷却按该真实模型下**所有端点**汇总(2026-11-07 用户定案:
         // 「多key的情况下,所有key都错误才显示冷却」)。
@@ -484,7 +484,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
           deployment_id: modelId,
           real_model_id: modelId,
           provider: mv.provider,
-          // Nexus 同款:只给一个展示标签(provider 名),账号明细在
+          // 只给一个展示标签(provider 名),账号明细在
           // endpoint_count / usable_endpoint_count 里,不在行上摊开。
           account: mv.provider,
           model: mv.model,
@@ -554,7 +554,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
       }
       // 并发上限(2026-11-08 改口):这一列是**每个凭据**的并发上限,真写
       // db.real_model.concurrency(1~2^20);同一真实模型下 N 个凭据 = N × 该值。
-      // ⚠️ 上限是 **1048576**(Nexus `_body_int(..., 1, 1 << 20)`),不是 4096 ——
+      // ⚠️ 上限是 **1048576**(`_body_int(..., 1, 1 << 20)`),不是 4096 ——
       // 以前的 4096 会把用户填的更大值**静默截断**,而且截断后的值直接进了调度。
       if (concurrency != null && Number.isFinite(concurrency)) {
         const capped = Math.min(1 << 20, Math.max(1, Math.trunc(concurrency)));
@@ -717,7 +717,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
         const withKey = await deps.accountsWithKey(id);
         const accountsCount = withKey.length;
         const usableCount = withKey.filter((a) => a.hasKey).length;
-        // ⚠️ 供应商页口径 = **只读 real_model 表**(Nexus `_providers_view`):
+        // ⚠️ 供应商页口径 = **只读 real_model 表**:
         // 上游目录(「获取可用模型」探测结果)只进选择器候选,绝不合并进列表 ——
         // 一旦合并(旧实现 mergedChannelModels 渠道页口径),「获取可用模型」
         // 就把上游目录全部模型带进列表,保存时全部登记进 real_model
@@ -747,7 +747,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
             supported_reasoning_efforts: mv.supportedReasoningEfforts,
             reasoning_allows_off: mv.reasoningAllowsOff,
           }));
-        // 已登记 / 列入 /v1/models 两个 id 清单(Nexus `deployed` / `listed`)。
+        // 已登记 / 列入 /v1/models 两个 id 清单(`deployed` / `listed`)。
         const registeredIds = models.filter((m) => m.registered).map((m) => m.id).sort();
         const listedIds = models
           .filter((m) => m.registered && m.hidden === false)
@@ -758,7 +758,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
           base_url: pdef?.baseUrl ?? drow?.base_url ?? null,
           protocol: pdef?.protocol ?? drow?.protocol ?? "openai",
           credential_provider: id,
-          // 凭据已入库(credential 表)—— 与 Nexus 一致,不再暴露文件路径。
+          // 凭据已入库(credential 表)—— 不再暴露文件路径。
           credential_file: null,
           env_prefix: pdef?.envPrefix ?? drow?.env_prefix ?? `ONE_${id.toUpperCase()}`,
           accounts_count: accountsCount,
@@ -776,7 +776,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
       return out;
     },
     /**
-     * 新增/更新一个兼容供应商 —— 对齐 Nexus `_provider_upsert`。
+     * 新增/更新一个兼容供应商 —— 对齐既有的 upsert 语义。
      *
      * ⚠️ **`envPrefix` 与 `keys` 必须能写**:以前的签名只有
      * `(id, baseUrl, protocol)`,于是
@@ -784,7 +784,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
      * - 页面上「密钥」输入框填的新 key **被静默丢弃**(`saveCard` 拿不到通道),
      *   用户以为保存成功了,实际一个字节都没动。
      *
-     * 凭据池语义(Nexus `_replace_credentials`):`keys` 数组即**整池**、按位置
+     * 凭据池语义(`keys` 数组即**整池**、按位置
      * 对齐座位;**空串座位不删**(留空 = 不改,见下),只删多出来的尾部座位。
      */
     async upsertModelProvider(
@@ -825,7 +825,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
         for (let i = 0; i < keys.length; i += 1) {
           const value = String(keys[i] ?? "").trim();
           // ⚠️ **留空串的座位不删也不改**:用户只是没填,不是要删掉这个号。
-          // 删座位必须走专门的删除动作(Nexus 同一口径)。
+          // 删座位必须走专门的删除动作(同一口径)。
           if (value === "") continue;
           const username = current[i]?.username ?? `${pid}-${i}`;
           await ctx.vault.put({ provider: pid, username, secret: value });
@@ -862,13 +862,13 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
       };
     },
     /**
-     * 删除一个兼容供应商 —— 对齐 Nexus `DELETE /providers/{id}` 的**级联**语义。
+     * 删除一个兼容供应商 —— 对齐 `DELETE /providers/{id}` 的**级联**语义。
      *
      * ⚠️ 以前只删 `provider` 表那一行,`real_model` 行和 vault 里的凭据全部残留 ——
      * 而页面上的确认文案写着「其登记的真实模型与凭据会一并移除」。那是**谎话**:
      * 用户删完再进模型总览,模型还在;凭据也还在库里躺着。
      *
-     * 级联顺序(与 Nexus 一致):
+     * 级联顺序:
      * 1. 先把该 provider 的每一个真实模型从所有逻辑模型档链里**连锁摘除**(保序);
      * 2. 删 `real_model` 行;
      * 3. 删 vault 里的凭据行;
@@ -938,7 +938,7 @@ export function createModelsDomain(ctx: PanelContext, deps: ModelsDomainDeps): M
       }
       const mv = deps.modelViewOf(pid, mid);
       if (!mv) return { ok: false, message: `未知模型 ${pid}/${mid}` };
-      // Nexus 语义:exposed=true ⇔ hidden=0。真写 db.real_model.hidden ——
+      // 语义:exposed=true ⇔ hidden=0。真写 db.real_model.hidden ——
       // deps.realModelMap 的 db 行无条件覆盖注册表,面板读数即时生效;
       // 调度端点并发/可见性经 core-repo #rowsFor 同样读 db,即时生效。
       ctx.db.realModel.update({ provider: pid, model: mid, hidden: exposed ? 0 : 1 });

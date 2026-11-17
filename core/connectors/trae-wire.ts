@@ -1,7 +1,7 @@
 /**
  * Trae 真实上游线层(core 层,纯函数零网络)。
  *
- * 移植自 Nexus 的 connectors/trae.py —— 覆盖「请求体构建 + SSE 帧解析 +
+ * 覆盖「请求体构建 + SSE 帧解析 +
  * 事件解码 + 分块产出」整条链路,与 trae.ts(AES/身份/头/错误分类)分工:
  * trae.ts 管「连接器」(getToken/decorateRequest/classifyError),
  * 本文件管「线」(wire):端点 URL、报文体、流式协议。两者都不做网络 IO。
@@ -35,7 +35,7 @@ export const PROMPT_MAX_TOKENS = 168000;
 export const DEFAULT_FUNCTION = "solo_work_lite";
 export const _IMAGE_PLACEHOLDER = "[图片未发送:trae 通道无法确认该模型支持图像输入]";
 
-/** 环境覆盖(与 Nexus _env 对齐:先环境变量,后默认值)。 */
+/** 环境覆盖(先环境变量,后默认值)。 */
 function env(name: string, fallback: string): string {
   if (typeof process === "undefined") return fallback;
   const v = process.env[name];

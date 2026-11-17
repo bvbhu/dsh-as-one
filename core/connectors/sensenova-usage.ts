@@ -7,7 +7,7 @@
  * 零跨组依赖 —— auth / pool / adapter 都可以安全引用它。
  */
 
-/** 默认 API 地址(与 Nexus sensenova.py DEFAULT_BASE_URL 对齐,已含 /v1) */
+/** 默认 API 地址(已含 /v1)。 */
 export const DEFAULT_BASE_URL = "https://token.sensenova.cn/v1";
 /** 控制台(platform)基础地址 —— 积分池等控制台接口都挂在它下面。 */
 export const PLATFORM_BASE = "https://platform.sensenova.cn";
@@ -53,8 +53,6 @@ export function classify_rate_limit(body: string): string {
 
 /**
  * 上游 usage → 可计费 token（**命中 prompt cache 的 input 不计**）。
- *
- * 与 Nexus `billable_tokens` 对齐。
  */
 export function billable_tokens(usage: unknown): number {
   if (!usage || typeof usage !== "object") {
@@ -101,7 +99,7 @@ export interface SensenovaQuotaPoolParsed {
   w5: SensenovaPoolWindow | null;
   w7: SensenovaPoolWindow | null;
 }
-/** pool-usage 报文解析结果(镜像 Nexus collector/sensenova.py 的 parse)。 */
+/** pool-usage 报文解析结果。 */
 export interface SensenovaPoolUsageParsed {
   plan_name: string | null;
   plan_type: string | null;

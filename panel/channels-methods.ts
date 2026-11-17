@@ -80,7 +80,7 @@ extra: Record<string, unknown>;
 }
 
 
-/** 单账号签到行(镜像 Nexus checkin_claim 的行形状)。 */
+/** 单账号签到行(签到领取的行形状)。 */
 export interface CheckinClaimRow {
 index: number;
 provider: string;
@@ -406,7 +406,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
           summary.already = rows.filter((r) => r.status === "already").length;
           summary.skipped = rows.filter((r) => r.status === "skipped").length;
           summary.failed = rows.filter((r) => r.status === "failed").length;
-          // `credit` = **本次真的领到的积分合计**(Nexus 同口径);不是账号总余额。
+          // `credit` = **本次真的领到的积分合计**(同一口径);不是账号总余额。
           summary.credit = rows.reduce((s, r) => s + Number(r.credit ?? 0), 0);
           summary.errors = rows
             .filter((r) => r.status === "failed")
@@ -447,13 +447,13 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
     quota: { status: string; reason: string };
   }> {
     const errors: Record<string, string> = {};
-    // ⚠️ `errors` 是**账号级 map**(`"<provider>/<username>" → 原因`),与 Nexus
+    // ⚠️ `errors` 是**账号级 map**(`"<provider>/<username>" → 原因`),
     // 同一形状:页面据此逐条报「哪个账号为什么没采到」,而不是甩一句汇总。
     if (!CH_QUOTA_PROVIDERS.has(pid)) {
       return {
         probed: 0,
         written: 0,
-        message: "额度:缺项(该渠道无额度协议,Nexus 仅 trae/workbuddy 有)",
+        message: "额度:缺项(该渠道无额度协议,仅 trae/workbuddy 有)",
         missing: ["quota"],
         errors,
         quota: { status: "missing", reason: "该渠道无额度协议" },
@@ -546,7 +546,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       const baseUrl = String(decl?.baseUrl ?? "").trim() || saved?.baseUrl || "";
       const protocol = String(decl?.protocol ?? "").trim() || saved?.protocol || "openai";
       // ── 渠道分支:有模型目录采集的渠道(CH_CATALOG_PROVIDERS) ──────────────
-      // 镜像 Nexus catalog.py:trae = wire(get_detail_param)∪ remote(/models)、
+      // trae = wire(get_detail_param) ∪ remote(/models)、
       // workbuddy = /v3/config(CN 回退 personal/models)、sensenova = token/v1/models。
       // minimax = **内置固定名单**(catalog.ts 的 MINIMAX_BUILTIN_MODELS,不打上游),
       // 2026-11-08 补进能力清单,否则展开卡片时内置目录永远合并不进页面。
@@ -556,7 +556,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         if (accounts.length === 0) {
           return { ok: false, message: `${pid} 下没有账号,没有密钥可以拿去拉上游目录。` };
         }
-        // 逐账号拉,第一个成功的算(Nexus `_fetch_models` 同一口径:目录是账号无关的,
+        // 逐账号拉,第一个成功的算(`_fetch_models` 同一口径:目录是账号无关的,
         // 只要有一个账号能拉到就能展示)。
         const failures: string[] = [];
         let result: CatalogResult | null = null;
@@ -596,7 +596,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
           models,
         };
       }
-      // 镜像 Nexus `_probe_upstream`:探测的是 base_url,协议不设门禁 ——
+      // 探测的是 base_url,协议不设门禁 ——
       // 有 http(s) base_url 的渠道都能探测;私有协议渠道没有统一 /models 接口。
       const base = baseUrl;
       if (!base) {
@@ -611,7 +611,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       if (u.protocol !== "http:" && u.protocol !== "https:") {
         return { ok: false, message: `base_url 不是可探测的 http(s) 地址:${base}` };
       }
-      // 取第一条有明文密钥的凭据去探测(Nexus `_probe_credential`)。
+      // 取第一条有明文密钥的凭据去探测(`_probe_credential`)。
       //
       // ⚠️ **取不到密钥不拦**(2026-10-24):本地/内网网关常常**本来就不需要密钥**
       // (minimax2api、各类自建代理),为「没填密钥」直接拒绝等于把这类上游挡在门外。
@@ -649,23 +649,23 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       };
     },
     /**
-     * 模型目录**整批保存** —— 对齐 Nexus `POST /providers/{id}/exposure`。
+     * 模型目录**整批保存** —— 对齐 `POST /providers/{id}/exposure`。
      *
      * As One 原来只有逐行 `setModelExposure(provider, model, exposed)`:它只翻
      * `hidden` 一个位,于是「名称 / 视觉 / 上下文 / 最大输出」这四个**声明字段
-     * 改了存不住**(用户在表格里勾了视觉,保存后又被刷回上游那一份)。Nexus 的
+     * 改了存不住**(用户在表格里勾了视觉,保存后又被刷回上游那一份)。原因是
      * 提交体本来就带这四个字段,这里按同一口径整批写。
      *
-     * ⚠️ 清单外 = 删行(不是隐藏):Nexus 的「提交清单 = 成员名单」是整批替换语义,
+     * ⚠️ 清单外 = 删行(不是隐藏):「提交清单 = 成员名单」是整批替换语义,
      * 取消勾选就是从 `real_model` 摘掉。
      *
      * ⭐ **2026-10-18(m04740)语义:删行即连锁摘除** —— 以前这里在「被逻辑模型
-     * 引用」时**整批拒绝**并点名让用户先去「逻辑模型」页手动摘。那是 Nexus
+     * 引用」时**整批拒绝**并点名让用户先去「逻辑模型」页手动摘。那是
      * 引入连锁摘除**之前**的旧口径。现在的做法是:删之前先把这一档从所有逻辑
      * 模型的 `members` 里摘掉(保序,顺序即 priority 不变),再删行 ——
      * 用户不再需要先跑一趟别的页面,也不会留下指向空气的悬空档位。
      *
-     * ⚠️ 提交 id 指向别家供应商时**静默忽略该行**(Nexus 同款 `continue`),
+     * ⚠️ 提交 id 指向别家供应商时**静默忽略该行**(同款 `continue`),
      * 不再整批报错:一个客户端顺手把整张目录表发过来时,别家的行不该让它失败。
      */
     async setChannelModels(provider: string, models: ChannelModelSpec[]): Promise<ApiResult> {
@@ -681,7 +681,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         const owner = slash >= 0 ? full.slice(0, slash) : pid;
         const bare = slash >= 0 ? full.slice(slash + 1) : full;
         if (bare === "") return { ok: false, message: `模型 id 为空:${full || "(空)"}` };
-        if (owner !== pid) continue; // 别家的行静默忽略(Nexus 同款)
+        if (owner !== pid) continue; // 别家的行静默忽略(同款)
         wanted.set(bare, raw);
       }
 
@@ -708,7 +708,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       }
       ctx.syncRegistry();
 
-      // 文案对齐 Nexus:三段计数(新登记 / 删除 / 连锁摘除)都要说出来 ——
+      // 三段计数(新登记 / 删除 / 连锁摘除)都要说出来 ——
       // 只报「共 N 个」会让用户以为被删的模型是静默消失的。
       const parts = [`共 ${wanted.size} 个模型`];
       if (added > 0) parts.push(`新登记 ${added} 个`);
@@ -811,7 +811,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       });
     },
     /**
-     * 单模型检测(对齐 Nexus `POST /providers/{id}/check-model`)。
+     * 单模型检测(对齐 `POST /providers/{id}/check-model`)。
      *
      * 只回答「这个模型有没有可调用账户」,**不打上游**。
      */
@@ -835,13 +835,13 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       };
     },
     /**
-     * SenseNova 账号列表(对齐 Nexus `GET /sensenova/accounts` → `_sensenova_accounts`)。
+     * SenseNova 账号列表(对齐 `GET /sensenova/accounts` → `_sensenova_accounts`)。
      *
      * 凭据投影,**无明文**。
      */
 
     /**
-     * 额度只读面(对齐 Nexus `GET /api/quota`)。
+     * 额度只读面(对齐 `GET /api/quota`)。
      *
      * 数据源是采集器的内存快照(不实时打上游)—— 面板上显示的是「上次采集到的
      * 额度」,不是此刻的。
@@ -906,14 +906,14 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       const pdef = ctx.registry.getProvider(pid);
       const accounts = await channelAccountsOf(pid);
       const withKey = await accountsWithKey(pid);
-      // ⚠️ 模型目录 = **上游目录 ∪ 已登记**(Nexus `_merge_catalog`),勾选 =
+      // ⚠️ 模型目录 = **上游目录 ∪ 已登记**(`_merge_catalog`),勾选 =
       // 在 `real_model` 表里。以前这里只读 `deps.realModelMap` 且拿 `!hidden` 当勾选态,
       // 于是一次刷新刷不出新模型、而被部署页取消列入的模型又显示成未勾选
       // (用户一保存就被删行)。见 mergedChannelModels 的说明。
       const models: CatalogModel[] = mergedChannelModels(pid);
       const clientPaths = await getClientPathsImpl();
       // 「自动发现并接入」的逐行 hint:库里已有 client_path.<channel> 时显示该已存路径
-      // (表示「已接入客户端」),Nexus ProviderCard.searched 语义。
+      // (表示「已接入客户端」),ProviderCard.searched 语义。
       const cpRow = clientPaths.channels.find((c) => c.channel === pid);
       const searchedHints = cpRow?.saved_path ? [`已接入客户端: ${cpRow.saved_path}`] : [];
       // 渠道页不主动打上游签到(只读页要轻,签到是显式动作);
@@ -1001,7 +1001,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         },
         models,
         // 契约值域是 modelsSourceLabel 认的那几个(api / mixed / router / error),
-        // 判据逐条对齐 Nexus `_models_source`:
+        // 判据逐条对齐来源标签的口径:
         // - 这一轮没拉到上游目录(或该渠道没有这条通路)→ "router"(仅已登记);
         // - 全是上游目录行 → "api";
         // - 上游目录 + 已登记(库里多出上游这一轮没有的模型)→ "mixed"。
@@ -1057,7 +1057,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
 
       // ⚠️ `_index` 给了就查**那一个账号**(2026-11-09:trae 概览改成逐账号查,
       // 需要按账号索引取状态);没给则沿用「代表账号」语义(取序号最小的带令牌账号)
-      // —— Nexus 面板是逐账号表格,As One 的 ChannelCheckin 是单值,故取其一并诚实标注。
+      // —— 面板是逐账号表格,As One 的 ChannelCheckin 是单值,故取其一并诚实标注。
       const acc =
         _index === undefined ? withToken[0]! : withToken.find((a) => a.index === _index);
       if (acc === undefined) {
@@ -1172,12 +1172,17 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
           { index: acc.index, username: acc.username, token: acc.token!, domain: acc.domain, uid: acc.uid, enterprise_id: acc.enterprise_id },
           { baseUrl: checkinBaseOf(pdef) ?? undefined },
         );
-        // status 端点已下线:不报错、不假装「未签」,把原因摆在该渠道自己的行上。
+        // 只读状态：`today_checked_in` 是上游权威口径，直接映射到 checked_in；
+        // 「没有活动」(active=false) 才进 reason，不再把查不到当「已下线」。
         return flat({
           supported: true,
-          active: null,
-          checked_in: null,
-          reason: st.reason,
+          active: st.active,
+          checked_in: st.today_checked_in,
+          daily_credit: st.daily_credit > 0 ? st.daily_credit : null,
+          streak_days: st.streak_days > 0 ? st.streak_days : null,
+          reason: st.active
+            ? null
+            : `该渠道当前没有签到活动${st.end_time !== null ? `（截止 ${st.end_time}）` : ""}`,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1210,7 +1215,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         return fail(`账号序号不存在: ${_index}(该渠道共 ${accounts.length} 个凭据)`);
       }
 
-      // 逐账号独立(Nexus:一个失败不遮蔽其余)。
+      // 逐账号独立(一个失败不遮蔽其余)。
       const rows: CheckinClaimRow[] = [];
       /**
        * trae 的**设备级短路**(2026-11-10 实测定案)。
@@ -1248,7 +1253,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       // 否则概览/渠道页在本周期内继续命中「未签」旧值,签完界面不更新。
       // already 不需要(状态没变);dry_run/failed 也不动缓存。
       if (confirm && claimedN > 0) invalidateCheckinCache(pid);
-      // 与 Nexus 的差异:干跑只有在至少一行 dry_run/skipped 时才算 ok;
+      // 与既有实现的差异:干跑只有在至少一行 dry_run/skipped 时才算 ok;
       // 所有行都 failed 时 ok=false —— 不把"全部失败"包装成成功。
       const ok =
         claimedN + alreadyN > 0 ||
@@ -1298,7 +1303,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         last_elapsed_s: null,
         last_ok: null,
         last_error: null,
-        result: `${pid} 暂无刷新能力(Nexus REFRESH_PROVIDERS = trae/workbuddy)`,
+        result: `${pid} 暂无刷新能力(REFRESH_PROVIDERS = trae/workbuddy)`,
         count: 0,
         accounts: [],
       };
@@ -1332,7 +1337,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
           count: 0,
           refreshed: 0,
           accounts: [],
-          message: `${pid}:该渠道无令牌刷新概念(Nexus REFRESH_PROVIDERS = trae/workbuddy)`,
+          message: `${pid}:该渠道无令牌刷新概念(REFRESH_PROVIDERS = trae/workbuddy)`,
         };
       }
       // 单飞:同渠道同 index 的并发调用复用同一 Promise(连点/双端并击不重打上游)。
@@ -1350,7 +1355,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
     async syncChannel(provider: string, force?: boolean): Promise<ApiResult> {
       const pid = String(provider ?? "");
       const forced = force !== false;
-      // Nexus /channels/{id}/sync = 模型目录 + 签到 + 额度三合一(_channel_sync,
+      // `/channels/{id}/sync` = 模型目录 + 签到 + 额度三合一(`_channel_sync`,
       // force=True 用户点刷新绕过冷却,force=False 自动刷新受冷却)。
       // ⚠️ 拆分后这里仍三段全跑:只为向后兼容既有调用方。页面侧已按语义分开走
       // —— 打开页/刷新只刷额度走 {@link syncChannelQuota},展开卡片才拉目录走
@@ -1362,7 +1367,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       const protocol = ctx.registry.getProvider(pid)?.protocol?.toLowerCase() ?? "";
       const checkinCapable = checkinSupported(protocol);
 
-      // ⚠️ **顺序与 Nexus `_channel_sync` 一致:目录 → 签到 → 额度**。
+      // ⚠️ **顺序与 `_channel_sync` 一致:目录 → 签到 → 额度**。
       // 签到排在额度采集**之前**,因为它会真的往账号里加积分 —— 额度放在它后面
       // 采,页首拿到的才是**签后**的数字。反过来做,用户会看到「已领取 100 积分」
       // 而页首积分纹丝不动,只能再手动点一次刷新才对得上。
@@ -1372,7 +1377,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
 
       // ⚠️ **组装**:三段各自独立兜异常,这里只做缺项判定与文案拼接。
       // `errors` 是**账号级 map**(由额度段产生;目录/签到各带自己的 message/reason,不混进来),
-      // 与 Nexus 同一形状:页面据此逐条报「哪个账号为什么没采到」。
+      // 同一形状:页面据此逐条报「哪个账号为什么没采到」。
       const missing: string[] = [];
       if (catalog.catalog.status === "missing") missing.push("catalog");
       if (quota.quota.status === "missing") missing.push("quota");
@@ -1603,7 +1608,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
     },
     async detectClientPath(channel: string): Promise<ApiResult> {
       const pid = String(channel ?? "");
-      // 优先级:① 已保存(迁移库 / saveClientPath 写入)→ ② Nexus 候选表
+      // 优先级:① 已保存(迁移库 / saveClientPath 写入)→ ② 已探测的候选表
       // (%LOCALAPPDATA%\Programs\...)→ ③ L 盘约定。
       const saved = ctx.db.setting.get(`client_path.${pid}`)?.v ?? null;
       if (saved !== null && saved !== "") {
@@ -1621,7 +1626,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
       }
       return { ok: true, channel: pid, detected_path: det.detected_path, source: det.source, message: det.message };
     },
-    // ── 自动发现 / 接入(镜像 Nexus POST /providers/{id}/discover、/adopt) ───
+    // ── 自动发现 / 接入(POST /providers/{id}/discover、/adopt) ───
     async discoverChannelAccounts(provider: string): Promise<DiscoverChannelResult> {
       const pid = String(provider ?? "");
       switch (pid) {
@@ -1751,7 +1756,7 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         // `unknown`(网络/计费接口异常)不阻断接入 —— 与网关侧同一口径的 fail-open。
         raw.selfcheck = { verdict: verdict.verdict, atMs: wallNow() };
       }
-      // 镜像 Nexus adopt:只新增、按 username 合并(vault.put 对 undefined 字段保留原值)。
+      // adopt:只新增、按 username 合并(vault.put 对 undefined 字段保留原值)。
       await ctx.vault.put({ provider: pid, username: name, secret: tok, raw });
       ctx.syncRegistry(); // 新凭据 = 新账户行,索引要跟上
       return {

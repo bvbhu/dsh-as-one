@@ -1,12 +1,12 @@
 /**
- * 调度引擎 —— 移植自 D:\projects\nexus:
- *  - nexus/scheduler/engine.py:Scheduler.chain 档位排序(六种策略全部语义)、
+ * 调度引擎 —— 移植自参考实现:
+ *  - `engine.py`:`Scheduler.chain` 档位排序(六种策略全部语义)、
  *    时段规则(blackout/degrade/exclude)、积分到期、额度快照、分钟级记忆化、
  *    配额刷新节流、免费档/赠送档(GRANT_TIERS 为空,测试可注入)。
- *  - nexus/core/router.py:Planner.plan/commit/finish 选路语义(会话亲和 pin、
+ *  - `router.py`:`Planner.plan/commit/finish` 选路语义(会话亲和 pin、
  *    负载感知 least-busy/balanced 的分桶裁决、冷却、在途租约)与 InflightLedger /
  *    SessionPinTable / HealthRegistry 三个纯内存组件。
- *  - nexus/core/backoff.py:RetryPolicy(见 ./backoff.ts)。
+ *  - `backoff.py`:`RetryPolicy`(见 ./backoff.ts)。
  *
  * 框架无关:不 import fastapi/dsh/electron;DB 访问只经 types.ts 定义的注入接口
  * (SchedulerRepo / SettingsRepo);本文件同时提供纯内存实现 InMemoryRepo 等供测试。

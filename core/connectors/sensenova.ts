@@ -1,5 +1,5 @@
 /**
- * SenseNova 连接器 —— 协议要点（来自 Nexus `sensenova_auth.py` / `sensenova.py`）。
+ * SenseNova 连接器 —— 协议要点。
  *
  * 这个文件现在只剩**连接器本体**（`SensenovaAdapter`）。原来 1798 行的实现按职责
  * 拆成了四个文件（重构第九刀），本文件仍 re-export 其余三组的全部符号，所以
@@ -175,8 +175,7 @@ export function holdDelaySeconds(rawBody: string, waitLeft: number): number {
  * 6. 日志纪律:**只有窗口可计费 token < 16384 却仍 429**(什么都没发就被限流)
  *    才写 warn;常规 429 / 连续失败不写。
  *
- * 与 Nexus `sensenova.py` 的 `AccountPool` / `AccountRuntime` 对应。Nexus 的
- * `_iter_upstream` 换号循环**在同一请求内也会换号** —— 本连接器保留了这一点
+ * 换号循环**在同一请求内也会换号** —— 本连接器保留了这一点
  * (见规则 1),但只在 429 时换、且换过的号不重复试。
  */
 export class SensenovaAdapter implements AuthConnector {
@@ -395,7 +394,7 @@ export class SensenovaAdapter implements AuthConnector {
   }
 
   // -------------------------------------------------------------------------
-  // 上游请求 + 单账号调度(对应 Nexus `_attempt`,**不含** `_iter_upstream` 换号)
+  // 上游请求 + 单账号调度(**不含**换号循环)
   // -------------------------------------------------------------------------
 
   /**
@@ -524,7 +523,7 @@ export class SensenovaAdapter implements AuthConnector {
    *
    * 为什么不用 `this.fetchFn`(Node 全局 fetch):undici 全局连接池会为同一
    * origin 开多条连接并轮转,每换一条就可能落到不同推理节点 → 上游前缀缓存
-   * (按 1024-token 块存在节点本地)**命中率掉一半**。Nexus 用
+   * (按 1024-token 块存在节点本地)**命中率掉一半**。改用
    * `max_connections=1` 的独立 client 钉死节点,这里用 `maxSockets: 1` 的
    * `https.Agent` 达到同样效果。
    *

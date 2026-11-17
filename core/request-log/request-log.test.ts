@@ -1,5 +1,5 @@
 /**
- * 请求日志模块测试 —— 对齐 Nexus repo.py `_RequestLogWriter` / `_skeleton` /
+ * 请求日志模块测试 —— 对齐 `_RequestLogWriter` / `_skeleton` /
  * `_trim` / `_edges` / `log_requests` / `_content_mode` 语义。
  *
  * 覆盖:writer 句柄缓存/重定向/prune/close、正文裁剪(structure 的 _keys/_len/_type
@@ -162,7 +162,7 @@ describe("trim(_trim)", () => {
     expect(trim("hello")).toBe("hello");
   });
 
-  it("非 str 且未超限:返回原值(与 Nexus 一致,不转文本)", () => {
+  it("非 str 且未超限:返回原值(与上游一致,不转文本)", () => {
     const obj = { a: [1, 2, 3] };
     expect(trim(obj, 1_000_000)).toBe(obj);
   });
@@ -236,7 +236,7 @@ describe("skeleton(_skeleton)", () => {
     expect(messages[0]).toEqual({ role: "user", chars: 2, keys: ["content", "extra_field", "role"] });
     expect(messages[1]).toEqual({ role: "assistant", chars: 2, keys: ["content", "role"] });
     expect(messages[2]).toEqual({ _type: "str" });
-    // messages 顶层特判只留 {messages, keys}(Nexus 语义:其余顶层键不展开)
+    // messages 顶层特判只留 {messages, keys}(上游语义:其余顶层键不展开)
     expect(Object.keys(out)).toEqual(["messages", "keys"]);
   });
 
@@ -523,7 +523,7 @@ describe("logRequests(log_requests) 集成", () => {
 
   it("full 档写 payload,edges 档写 payload_edges", () => {
     for (const [mode, expects] of [
-      // 短正文未超限时 _trim 返回原值(Nexus 语义:非 str 超短不转文本)
+      // 短正文未超限时 _trim 返回原值(上游语义:非 str 超短不转文本)
       ["full", (line: Record<string, unknown>) => expect(line.payload).toEqual({
         messages: [{ role: "user", content: "你好" }],
       })],

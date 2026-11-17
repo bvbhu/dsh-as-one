@@ -1,5 +1,5 @@
 /**
- * 网关自身 API Key 鉴权 —— 对齐 `nexus/gateway/auth.py`(107 行)逐条语义:
+ * 网关自身 API Key 鉴权 —— 逐条语义:
  *
  * 1. **三种携带方式都接受**(按优先级,auth.py:101-109 `_extract`):
  *    `Authorization: Bearer <key>`(或裸值)/ `x-api-key` 头 / `?key=` query
@@ -8,7 +8,7 @@
  *    理论上可被计时侧信道逐字节猜出。
  * 3. **未配置时不硬拦**(2026-10-17 用户定案,auth.py:15-17/123-131):key 来源
  *    为空 → 打一条**一次性** WARNING 但**所有请求放行**(不 401);配置了则
- *    缺 key / 错 key 一律 **401**(Nexus 没有用 403 —— auth_env 测试全部只断 401)。
+ *    缺 key / 错 key 一律 **401**(不用 403 —— auth_env 测试全部只断 401)。
  * 4. **每次现读、不缓存**(auth.py:60-68 `current_key`):换 key 立即生效,
  *    不存在要清理的进程内副本。空白值按**未设置**处理(test_gateway_auth_env
  *    `test_blank_env_value_counts_as_unset`)。
@@ -28,7 +28,7 @@ import { EnvKeyProvider, type GatewayErrorBody, type KeyProvider } from "./types
 export { EnvKeyProvider };
 export type { KeyProvider };
 
-/** 401 响应体(Nexus `HTTPException(401, detail="缺少或错误的网关 key")`,auth.py:133)。 */
+/** 401 响应体(`HTTPException(401, detail="缺少或错误的网关 key")`)。 */
 export const AUTH_ERROR_DETAIL = "缺少或错误的网关 key";
 
 /** 未配置告警文案(文案三要素:变量名 / 无鉴权放行 / 怎么恢复,auth_env 断言口径)。 */
@@ -122,7 +122,7 @@ export function requireKey(
 
 let warnedMissing = false;
 
-/** 复位一次性告警标志(测试用;Nexus 测试也是显式复位 `auth._warned_missing`)。 */
+/** 复位一次性告警标志(测试用;测试里也是显式复位 `auth._warned_missing`)。 */
 export function resetMissingKeyWarning(): void {
   warnedMissing = false;
 }

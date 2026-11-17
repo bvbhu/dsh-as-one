@@ -1,10 +1,10 @@
 /**
  * As One — scheduler core 领域类型(框架无关,零依赖)。
  *
- * 移植自 D:\projects\nexus(Nexus LLM 聚合网关)的调度侧:
- *  - nexus/scheduler/engine.py(档位排序、分桶、时段规则、额度快照)
- *  - nexus/core/router.py 的 plan/commit/finish 语义(会话亲和、冷却、在途租约)
- *  - nexus/core/backoff.py(backoff_delay、RetryPolicy)
+ * 移植自参考实现的调度侧:
+ *  - `engine.py`(档位排序、分桶、时段规则、额度快照)
+ *  - `router.py` 的 plan/commit/finish 语义(会话亲和、冷却、在途租约)
+ *  - `backoff.py`(backoff_delay、RetryPolicy)
  *
  * 本文件只声明类型与接口,**不 import db / connector / fastapi / electron**。
  * 与持久层对接统一走本文件定义的注入接口(SettingsRepo / SchedulerRepo /
@@ -148,7 +148,7 @@ export interface SchedulerConfig {
 }
 
 // ---------------------------------------------------------------------------
-// 原始行数据(snake_case,与 Nexus dict 字段一一对应;adapter 的产出形状)
+// 原始行数据(snake_case 与上游 dict 字段一一对应;adapter 的产出形状)
 // ---------------------------------------------------------------------------
 
 /** endpoint 原始 dict(v4 形状 + v3 别名都兼容)。 */
@@ -306,7 +306,7 @@ export interface RequestOutcome {
 // backoff 领域类型
 // ---------------------------------------------------------------------------
 
-/** backoff_delay 的参数(与 Nexus backoff_delay(*, attempt, base_s, factor, cap_s, jitter_ratio, rng) 对齐)。 */
+/** backoff_delay 的参数(与 `backoff_delay(*, attempt, base_s, factor, cap_s, jitter_ratio, rng)` 对齐)。 */
 export interface BackoffParams {
   attempt: number;
   baseS: number;
@@ -355,7 +355,7 @@ export interface SettingsRepo {
 
 /**
  * 调度器所需的最小 Repo 契约(引擎与 db 的唯一对接面)。
- * 字段形状对齐 Nexus Repo 的端点:endpoint_chain / direct_chain / members_of /
+ * 字段形状对齐上游 Repo 的端点:endpoint_chain / direct_chain / members_of /
  * logical_model_row / quotas / settings。
  */
 export interface SchedulerRepo extends SettingsRepo {
@@ -461,7 +461,7 @@ export interface InflightLedgerLike {
   reset(capacityKey?: string): void;
 }
 
-/** Scheduler.snapshot() 的结构化形状(Nexus engine.snapshot 对应)。 */
+/** Scheduler.snapshot() 的结构化形状(对应 engine.snapshot)。 */
 export interface SchedulerSnapshot {
   ttl_seconds: number;
   quota_loaded: boolean;
@@ -483,7 +483,7 @@ export interface SchedulerSnapshot {
   last_plan: Record<string, unknown>;
 }
 
-/** Planner.snapshot() 的结构化形状(Nexus Router.snapshot 对应)。 */
+/** Planner.snapshot() 的结构化形状(对应 Router.snapshot)。 */
 export interface PlannerSnapshot {
   inflight: Record<string, number>;
   inflight_total: number;

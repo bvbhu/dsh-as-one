@@ -1,19 +1,19 @@
 /**
- * 总览频道(1:1 移植 Nexus 面板 /nexus/ → Overview.vue)。
+ * 总览频道。
  *
- * 页面结构照搬 Nexus:状态行(标题 + 运行时长 + 就绪/健康与冷却计数)→
+ * 页面结构:状态行(标题 + 运行时长 + 就绪/健康与冷却计数)→
  * 「运行中」在途租约卡片(按逻辑模型分卡,直连高亮)→「实时日志」按对话分组
  * 的可展开卡片列表(固定按时间排序 / 条数输入 / 默认折叠)。供应商概览与指标表在
- * Nexus 已整块删除(2026-10-12),本页同样不放回。
+ * 原实现里已整块删除(2026-10-12),本页同样不放回。
  *
  * 数据契约(见 src/renderer/src/api.ts):rendererApi.getStatus() →
  * GatewayStatus;rendererApi.getRuntime() → RuntimeSnapshot(含
  * in_flight_total / by_logical_model / leases / recent / recent_limit)。
- * 轮询照搬 Nexus 的固定 5s 间隔。
+ * 轮询沿用固定 5s 间隔。
  *
- * ⚠️ Nexus 前端自己给 recent/lease 补的 ``conv``(整数)在 As One 契约里是
+ * ⚠️ 既有前端自己给 recent/lease 补的 ``conv``(整数)在 As One 契约里是
  * 后端直出的 ``string | null``(装配层 ``String(convNo)``,"0" = 无会话 id,
- * 与 Nexus 的 ``conv === 0`` 同义),页面直接消费,不再本地派生。契约允许的
+ * 与 ``conv === 0`` 同义),页面直接消费,不再本地派生。契约允许的
  * 真 null(防御分支)按用户定案「conv 为 null 的按 real_model_id 归类」处理。
  */
 import React from "react";
@@ -42,7 +42,7 @@ const DEFAULT_LIMIT = 50;
 
 // ── 实时日志排序:只按时间(最新在前),不再提供排序档选择器(2026-10-25 定案) ──
 
-// ── 按对话分组视图(2026-10-16 Nexus 定案,取代旧的 9 列表格) ────────────────
+// ── 按对话分组视图(2026-10-16 定案,取代旧的 9 列表格) ────────────────
 
 /** 一个 conv 一张卡;``conv`` 为 null 时按真实模型归类(用户定案)。 */
 interface RecentConvGroup {
@@ -236,7 +236,7 @@ export default function OverviewPage(): React.JSX.Element {
   const loadRecentLimit = React.useCallback(async () => {
     try {
       const r = await rendererApi.getSettings();
-      //: sections 的内层键是完整点号键 "ui.recent_limit"(与 Nexus 一致)。
+      //: sections 的内层键是完整点号键 "ui.recent_limit"(与既有实现一致)。
       const n = Number(
         r.sections?.["ui"]?.["ui.recent_limit"] ?? r.sections?.["ui"]?.["recent_limit"],
       );
@@ -289,7 +289,7 @@ export default function OverviewPage(): React.JSX.Element {
     void load();
     void loadRecentLimit();
     void loadCheckin();
-    //: 照搬 Nexus 的固定 5s 轮询。
+    //: 沿用固定 5s 轮询。
     const timer = window.setInterval(() => {
       void load();
     }, 5000);

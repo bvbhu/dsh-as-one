@@ -1,7 +1,7 @@
 /**
- * 请求日志聚合注册 —— 对齐 Nexus repo.py `log_requests`(L1051-1077)/
- * `_prepare_row`(L1079-1136)/`_write_stats`(L1168-1197)/`_detail`(L1199-1233)/
- * `_content_mode`(L1235-1250)。
+ * 请求日志聚合注册 —— 对齐 `log_requests` /
+ * `_prepare_row` / `_write_stats` / `_detail` /
+ * `_content_mode`。
  *
  * 一条完成行 → 库内 `stats_daily` 聚合(**复用注入的 `statsDaily.record`**,
  * 不自己写 SQL;NULL logical_model 的 UPDATE-IS-NULL 先试语义已在 record 内处理)
@@ -43,9 +43,9 @@ export interface RequestLogRow {
   ts?: unknown;
   /** 明细按天的键 `YYYY-MM-DD`;缺省 dayKey(ts)。 */
   day?: unknown;
-  /** 真实模型 id `provider/model`(与 Nexus real_model_id 同义)。 */
+  /** 真实模型 id `provider/model`(与 real_model_id 同义)。 */
   real_model_id?: unknown;
-  /** real_model_id 的别名(Nexus `row.get("real_model_id") or row.get("id")`)。 */
+  /** real_model_id 的别名(`row.get("real_model_id") or row.get("id")`)。 */
   id?: unknown;
   /** 逻辑模型名;可为 null(直连即真实模型)。 */
   logical_model?: unknown;
@@ -73,12 +73,12 @@ export interface RequestLogRow {
   ttft_ms?: unknown;
   requests?: unknown;
   fails?: unknown;
-  /** Nexus usage{prompt,cached,completion} 语义(或逐 token 字段直接给)。 */
+  /** usage{prompt,cached,completion} 语义(或逐 token 字段直接给)。 */
   usage?: unknown;
   prompt_tokens?: unknown;
   cached_tokens?: unknown;
   completion_tokens?: unknown;
-  /** 请求正文(payload 优先,request 兜底 —— Nexus `payload or request`)。 */
+  /** 请求正文(payload 优先,request 兜底 —— `payload or request`)。 */
   payload?: unknown;
   request?: unknown;
 }
@@ -145,7 +145,7 @@ export function prepareRow(row: RequestLogRow): PreparedRequestLogRow {
     : parseMs(row.ttft_ms, 0);
   const error = row.error ?? null;
   const status = parseMs(row.status, 200);
-  // ok 显式给了就用;否则 无错误 && status<400 默认真(Nexus `ok or` 语义)。
+  // ok 显式给了就用;否则 无错误 && status<400 默认真(`ok or` 语义)。
   const ok = row.ok !== undefined ? Boolean(row.ok) : !error && status < 400;
   const endpointId = provider && model ? endpointIdOf(provider, model, username) : null;
   return {
@@ -198,7 +198,7 @@ export interface StatsDeltaLike {
 export type StatsRecorder = (delta: StatsDeltaLike) => void;
 
 /**
- * 分组累加计数器(顺序与 Nexus acc 一致):requests / prompt / cached /
+ * 分组累加计数器(顺序与上游 acc 一致):requests / prompt / cached /
  * completion / latency / ttft(0 兜底) / ttft_requests(仅在 ttft_ms 非空时 +1)。
  *
  * ⚠️ **失败的请求不进统计**(用户 m11736 定案):`ok === false` 的行整条跳过 ——
@@ -300,7 +300,7 @@ export function detail(item: PreparedRequestLogRow, mode: ContentMode): Record<s
 // _content_mode(L1235-1250):5 秒缓存 + enabled 判定
 // ---------------------------------------------------------------------------
 
-/** enabled 命中即按 off 处理的值(Nexus `in ("0","false","off","no")`)。 */
+/** enabled 命中即按 off 处理的值(`in ("0","false","off","no")`)。 */
 const OFF_ENABLED = new Set(["0", "false", "off", "no"]);
 
 /** 档位校验:`raw` 洗白(去空格/小写)后必须在四档内,否则回退 fallback。 */
@@ -321,17 +321,17 @@ export interface GetSetting {
 function computeMode(getSetting: GetSetting): ContentMode {
   // 面板 set 时默认 off(api_pages.py L5270:`or "off"`);写入端默认 structure。
   const mode = parseContentMode(getSetting("request_log.content_mode"), "structure");
-  // enabled 关 → 一律 off(Nexus: `str(setting or "1") in ("0","false","off","no")`)。
+  // enabled 关 → 一律 off(`str(setting or "1") in ("0","false","off","no")`)。
   const enabledRaw = String(getSetting("request_log.enabled") ?? "1").trim().toLowerCase();
   return OFF_ENABLED.has(enabledRaw) ? "off" : mode;
 }
 
-/** 立即求解(Nexus 面板用;无缓存)。 */
+/** 立即求解(面板用;无缓存)。 */
 export function resolveContentMode(getSetting: GetSetting): ContentMode {
   return computeMode(getSetting);
 }
 
-/** 5 秒缓存解析器(Nexus `_mode_cache`/`_mode_exp`;ttlMs/tnow 可注入测试)。 */
+/** 5 秒缓存解析器(`_mode_cache`/`_mode_exp`;ttlMs/tnow 可注入测试)。 */
 export function createContentModeResolver(
   getSetting: GetSetting,
   opts: { ttlMs?: number; now?: () => number } = {},
@@ -365,7 +365,7 @@ export interface RequestLogDeps {
 
 /**
  * 注册一批完成的请求行:先写 stats_daily 聚合,再按 content_mode(≠off)逐天写
- * JSONL 明细。返回注册行数(Nexus 同款 return len(items))。
+ * JSONL 明细。返回注册行数(同款 return len(items))。
  */
 export function logRequests(rows: readonly RequestLogRow[], deps: RequestLogDeps): number {
   const items = (rows ?? []).map((r) => prepareRow(r));

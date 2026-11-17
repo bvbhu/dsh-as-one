@@ -40,7 +40,7 @@ import {
 } from "@as-one/core/src/connectors/qoder.js";
 import type { CredentialSummary } from "@as-one/core/src/config/types.js";
 import { defaultConcurrencyOf } from "@as-one/core/src/config/concurrency-defaults.js";
-import type { NexusDatabase } from "@as-one/core/src/db/database.js";
+import type { AsOneDatabase } from "@as-one/core/src/db/database.js";
 import type {
   ApiResult,
   QoderAccountRow,
@@ -97,7 +97,7 @@ interface QoderSelectionFile {
  * 放在模块级而不是 `createQoderDomain` 闭包里,是为了能被单元测试直接调用
  * (闭包里的函数要拿到 vault / PAT / 上游目录才跑得起来,测不了)。
  */
-export function ensureQoderProviderRow(db: NexusDatabase, region: QoderRegion): void {
+export function ensureQoderProviderRow(db: AsOneDatabase, region: QoderRegion): void {
   const cfg = QODER_REGION_CONFIGS[region];
   const row = db.provider.get(region);
   if (row === undefined) {
@@ -122,7 +122,7 @@ export function ensureQoderProviderRow(db: NexusDatabase, region: QoderRegion): 
  * 把模型域也改成模块级函数 —— 目前刻意重复,改动口径时**两处一起改**。
  */
 export function stripMemberFromLogicalModels(
-  db: NexusDatabase,
+  db: AsOneDatabase,
   provider: string,
   model: string,
 ): number {
@@ -199,7 +199,7 @@ function healDefaultTierWindow(
  * @returns 被修正的行数(0 = 本来就对,或目录里没有该 key)
  */
 export function healQoderWindows(
-  db: NexusDatabase,
+  db: AsOneDatabase,
   region: QoderRegion,
   models: readonly QoderCatalogModel[],
 ): number {
@@ -231,7 +231,7 @@ export function healQoderWindows(
  * @param wanted 页面上最终勾选的 key 集合
  */
 export function syncSelectedRealModels(
-  db: NexusDatabase,
+  db: AsOneDatabase,
   region: QoderRegion,
   models: readonly QoderCatalogModel[],
   wanted: ReadonlySet<string>,

@@ -1,8 +1,8 @@
 /**
- * 选路核心领域类型 —— 从 Nexus `nexus/core/router.py` + `nexus/core/errors.py` +
- * `nexus/core/metrics.py` 移植(测试规格:`tests/test_v4_semantics.py`)。
+ * 选路核心领域类型 —— 从 `router.py` + `errors.py` +
+ * `metrics.py` 移植(测试规格:`tests/test_v4_semantics.py`)。
  *
- * 形状对齐 v4 契约(`nexus/db/V4_CONTRACT.md`):
+ * 形状对齐 v4 契约:
  * - **标识符是三元组**,不是斜杠拼接的 id 列:`provider` / `model` /
  *   `credentialKey = (provider, username)`。需要字符串 id 时用
  *   {@link realModelKeyOf} / {@link endpointIdOf} 现拼(那是给人看的,不是存储键)。
@@ -35,7 +35,7 @@ export type EndpointId = string;
 // 端点 / 链
 // ---------------------------------------------------------------------------
 
-/** 上游错误类别(`nexus/core/errors.py:UpstreamErrorKind`,用 str 常量不用枚举)。 */
+/** 上游错误类别(`UpstreamErrorKind`,用 str 常量不用枚举)。 */
 export const UpstreamErrorKind = {
   /** 429 / 账号额度耗尽 —— 换下一台 */
   RateLimit: "rate_limit",
@@ -481,7 +481,7 @@ export interface CompletedRequest {
 }
 
 // ---------------------------------------------------------------------------
-// 常量(与 `nexus/core/router.py` 同名常量一一对应)
+// 常量(与 `router.py` 同名常量一一对应)
 // ---------------------------------------------------------------------------
 
 /** 在途租约租期(秒)。请求结束就释放;租期只是「回调漏触发」的保险。 */
@@ -505,10 +505,10 @@ export const DEFAULT_PIN_SECONDS = 900.0;
 export const DEFAULT_RECENT_LIMIT = 50;
 
 /**
- * `retry.logical_cooldown` 的**默认值(分钟)**,与 Nexus
- * `nexus/core/backoff.py:RETRY_DEFAULTS["retry.logical_cooldown"] = 15` 同源。
+ * `retry.logical_cooldown` 的**默认值(分钟)**,与上游
+ * `backoff.py:RETRY_DEFAULTS["retry.logical_cooldown"] = 15` 同源。
  *
- * ⚠️ 这个常量**不是**给 Router 自己发明缺省值用的 —— Nexus 里它是
+ * ⚠️ 这个常量**不是**给 Router 自己发明缺省值用的 —— 上游里它是
  * `retry_setting()` 的**播种值**:键缺失时先把默认值写回库再回读,所以 Router
  * 拿到的永远是「库里的值」。这里没有可写的库,只能在读不到时**等价地**取它。
  * 所以「配置里没有这个键」= 900 秒冷却,**不是**「不熔断」。
@@ -528,12 +528,12 @@ const PY_FLOAT_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
 const PY_INT_RE = /^[+-]?\d+$/;
 
 /**
- * 读一个**数值型** retry 设置 —— 与 Nexus
- * `nexus/core/backoff.py:_coerce_number` + `retry_setting` 等价。
+ * 读一个**数值型** retry 设置 —— 与上游
+ * `backoff.py:_coerce_number` + `retry_setting` 等价。
  *
  * ⚠️ **类型由默认值决定,不由输入决定**:库里存的是字符串,`"4"` 与 `"4.0"` 在
  * Python 侧长得一样,`int(value)` 把 `"4.9"` 截成 `4`(默认值是 `int` 时)。
- * ⚠️ 非法值(空串 / 非数字 / 负数)→ 返回**默认值**:Nexus 会「记错 + 写回默认 +
+ * ⚠️ 非法值(空串 / 非数字 / 负数)→ 返回**默认值**:上游会「记错 + 写回默认 +
  * 回读」,所以调用点看到的是默认值,而不是 0。
  */
 export function coerceRetryNumber(raw: unknown, fallback: number): number {
@@ -549,7 +549,7 @@ export function coerceRetryNumber(raw: unknown, fallback: number): number {
 }
 
 /**
- * 读一个**整数**设置 —— 与 Nexus `Router._recent_limit` 里的 `int(raw or default)`
+ * 读一个**整数**设置 —— 与上游 `Router._recent_limit` 里的 `int(raw or default)`
  * 等价(Python `int()` 不吃 `"3.9"`,那会抛 `ValueError` → 落回默认值)。
  *
  * @returns 解析出的整数;缺失 / 非法 / `< min` 一律返回 `fallback`。
@@ -715,7 +715,7 @@ export function chainItemFrom(data: ChainItemSnapshot): ChainItem {
 }
 
 // ---------------------------------------------------------------------------
-// 设置读取(与 Nexus 的 `get_setting("<字面量键>")` 对齐的键名)
+// 设置读取(与 `get_setting("<字面量键>")` 对齐的键名)
 // ---------------------------------------------------------------------------
 
 /** `scheduler.rules` —— 旧单键(2026-10-22 拆 5 键后仅迁移期回落读取)。 */

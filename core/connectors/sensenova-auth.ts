@@ -38,7 +38,7 @@ export const APIKEYS_URL = `${IAM_BASE}/iam/idp/v1/apiKeys`;
 /**
  * 浏览器 UA —— 登录链与积分池接口都带它。
  *
- * 对齐 Nexus `sensenova_auth.py:UA`:平台侧对非浏览器 UA 的处理不稳定
+ * 平台侧对非浏览器 UA 的处理不稳定
  * (登录页可能直接不回 cookie,那就会在 POST /nova/login 阶段被回
  * `InvalidArgument`)。集中一处,免得几个调用点各写一份、日后漂移。
  */
@@ -154,8 +154,6 @@ export function base64url(buf: Buffer): string {
 
 /**
  * SenseNova 认证流 —— OAuth2 + PKCE + JWE 完整实现。
- *
- * 与 Nexus `sensenova_auth.py` 对齐。
  */
 export class SensenovaAuthFlow {
   private jwks: { n: string; e: string } | null = null;
@@ -218,7 +216,7 @@ export class SensenovaAuthFlow {
     // 加密密码
     const encrypted = encrypt_password_jwe(password, jwk);
 
-    // POST iam/login —— **带 cookie**(对齐 Nexus `_login_with`)
+    // POST iam/login —— **带 cookie**
     const loginHeaders: Record<string, string> = {
       "Content-Type": "application/json",
       Origin: "https://platform.sensenova.cn",
@@ -588,10 +586,10 @@ export class SensenovaAuthFlow {
   /**
    * 手动跟随重定向直到 predicate 成立。
    *
-   * ⚠️ 必须带上 cookie jar(对齐 Nexus `_follow_until`):登录链的前几跳
+   * ⚠️ 必须带上 cookie jar:登录链的前几跳
    * (OIDC_AUTH → … → iam 登录页)会下发 `Set-Cookie`,**POST `/nova/login`
    * 必须把那条 session cookie 带回去**,否则服务端拿不到 CSRF 值,直接
-   * 回 `InvalidArgument`(Nexus 的模块 docstring 第 8 行写明了这个坑:
+   * 回 `InvalidArgument`(已知坑:
    * 「缺少 session cookie 时报 No CSRF value available in the session cookie」)。
    */
   private async _followUntil(
@@ -632,7 +630,7 @@ export class SensenovaAuthFlow {
   }
 
   /**
-   * 从 HTML 响应体里找下一跳(对齐 Nexus `_next_from_html`)。
+   * 从 HTML 响应体里找下一跳。
    *
    * 只认 `url=` 太窄:真实登录页给的是 `code=` 的完整 URL、`<meta http-equiv
    * ="refresh">`,或 `window.location.replace(...)` 这类 JS 跳转。少一种形态
@@ -661,7 +659,7 @@ export class SensenovaAuthFlow {
 /**
  * 极简 cookie jar:合并 `Set-Cookie`,逐跳回传(同域)。
  *
- * 对齐 Nexus `_CookieJar`:只取每个 `Set-Cookie` 的 `name=value` 部分,
+ * 只取每个 `Set-Cookie` 的 `name=value` 部分,
  * 丢弃 Path/HttpOnly/SameSite 等属性 —— 手动跟重定向时用不上,带回去反而
  * 可能被服务端按属性重新解释。
  */

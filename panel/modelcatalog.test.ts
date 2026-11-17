@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { openDatabase, type NexusDatabase } from "@as-one/core/src/db/database.js";
+import { openDatabase, type AsOneDatabase } from "@as-one/core/src/db/database.js";
 import { snapshotFromDb } from "@as-one/core/src/db/registry-projection.js";
 import { ProviderRegistry } from "@as-one/core/src/config/providers.js";
 
@@ -15,7 +15,7 @@ import { dedupeLabels, listModelEntries } from "./modelcatalog.js";
 import { parseReasoningEfforts, serializeReasoningEfforts } from "./modelview.js";
 import { orderRawLevels } from "@as-one/core/src/gateway/reasoning-effort.js";
 
-let db: NexusDatabase;
+let db: AsOneDatabase;
 
 beforeEach(() => {
   db = openDatabase(":memory:");

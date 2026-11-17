@@ -4,26 +4,15 @@
  * 设计目标
  * --------
  * 这一层是「静态配置」的唯一形状定义处:provider 定义、账户配置、
- * 凭据记录的归一化形态、以及 **Nexus 里散在各模块的运行期常量**
- * (策略集合 / 别名 / 规则默认值 / retry 缺省)。字段名与 Nexus 一一对应,
- * 差异处都写了源码位置注释,方便两边对表。
+ * 凭据记录的归一化形态、以及 **散在各模块的运行期常量**
+ * (策略集合 / 别名 / 规则默认值 / retry 缺省)。字段名与参考实现一一对应,
+ * 差异处都写了源码位置注释。
  *
- * 与 Nexus 的对应关系(只读源码,行号固定引用)
- * ------------------------------------------
- * - ``provider`` 表          —— nexus/db/schema.sql L97-102
- * - ``credential`` 表        —— nexus/db/schema.sql L117-128
- * - ``real_model`` 表        —— nexus/db/schema.sql L151-166
- * - ``logical_model`` 表     —— nexus/db/schema.sql L168-172
- * - 凭据归一化/到期/指纹    —— nexus/credentials.py
- * - 策略集合与别名            —— nexus/db/repo.py L90-150
- * - 调度规则默认值与校验      —— nexus/scheduler/engine.py L813-1033
- * - retry 缺省                —— nexus/core/backoff.py L86-110
- *
- * ⚠️ 两个刻意的差异(都有 Nexus 依据,不是臆造):
+ * ⚠️ 两个刻意的差异(不是臆造):
  * 1. TS 字段用 camelCase(与 src/connectors/types.ts、src/router/types.ts 一致),
  *    但 **raw 载荷里的键保留 snake_case**(那是上游给的,如 region/uid/label)。
- * 2. 本层只管「静态配置」。Nexus 的额度 / 冷却 / 会话亲和 pin 是**纯内存**
- *    运行期态(约定 D17-D19,见 nexus/db/repo.py L1334-1429),不落盘 ——
+ * 2. 本层只管「静态配置」。额度 / 冷却 / 会话亲和 pin 是**纯内存**
+ *    运行期态(约定 D17-D19),不落盘 ——
  *    这里给出形状参考 ``RuntimeQuota`` / ``RuntimeSessionPin``,但配置层
  *    不持有它们的实例。
  */
@@ -35,8 +24,7 @@
 /**
  * provider 协议枚举。
  *
- * nexus/db/schema.sql L100 的注释列了 ``openai | workbuddy | trae | sensenova``
- * (没有 CHECK 约束)。
+ * 该列没有 CHECK 约束:允许 ``openai | workbuddy | trae | sensenova`` 等值。
  *
  * `qoder` 是 As One 新增的第五种协议(cosy 协议):不是 OpenAI 兼容上游,
  * 请求体是固定模板 + 按 body 签名,网关必须走连接器分叉(`runWithAccount`)。
@@ -77,7 +65,7 @@ export function isProviderProtocol(value: unknown): value is ProviderProtocol {
 // 策略
 // ===========================================================================
 
-/** 逻辑模型选路策略(机器键)。nexus/db/repo.py L90-97。 */
+/** 逻辑模型选路策略(机器键)。 */
 export const SCHEDULER_STRATEGIES = [
   "due-first",
   "random",
@@ -92,9 +80,9 @@ export type SchedulerStrategy = (typeof SCHEDULER_STRATEGIES)[number];
 export const DEFAULT_SCHEDULER_STRATEGY: SchedulerStrategy = "random";
 
 /**
- * 旧显示名 / 旧策略值 → 机器键。**逐字镜像** nexus/db/repo.py L126-150
- * (``STRATEGY_ALIASES``)。改策略集合时两边都要动 —— Nexus 在
- * repo.py L117-120 踩过「只改一边」导致静默退化。
+ * 旧显示名 / 旧策略值 → 机器键。**逐字镜像**参考实现的
+ * ``STRATEGY_ALIASES``。改策略集合时别名表也要同步 —— 只改一边会导致
+ * 静默退化。
  */
 export const STRATEGY_ALIASES: Readonly<Record<string, SchedulerStrategy>> = {
   "最先到期 due first": "due-first",
@@ -117,12 +105,12 @@ export const STRATEGY_ALIASES: Readonly<Record<string, SchedulerStrategy>> = {
 };
 
 /**
- * 策略归一化(镜像 nexus/db/repo.py L271-284 ``normalize_strategy``)。
+ * 策略归一化(镜像参考实现的 ``normalize_strategy``)。
  *
  * - 空/None → 缺省 ``random``;
  * - 机器键原样返回;
  * - 命中别名表(原值与小写各查一次)→ 映射值;
- * - **认不出来 → 缺省 ``random``**(Nexus 哲学:坏数据不炸,退回默认,
+ * - **认不出来 → 缺省 ``random``**(坏数据不炸,退回默认,
  *   并把 ``unknown`` 原样回给调用方做 warning)。
  *
  * @returns 归一化后的机器键 + 是否发生了回退(调用方据此写 warning)。
@@ -150,8 +138,8 @@ export function normalizeStrategy(
 /**
  * 凭据主键二元组 ``(provider, username)``。
  *
- * nexus/credentials.py L20-33:v4 起 ``credential`` 表主键就是这两列,
- * username NOT NULL(空用户名会兜底成 provider 名,见 repo.py L675)。
+ * v4 起 ``credential`` 表主键就是这两列,
+ * username NOT NULL(空用户名会兜底成 provider 名)。
  * ``src/router/types.ts`` L21 有同形状的 ``CredentialKey``(那边独立定义,
  * 本层不反向依赖 router)。
  */
@@ -191,8 +179,8 @@ export interface Credential {
 }
 
 /**
- * 凭据摘要 —— **不含任何密钥**(镜像 nexus/db/repo.py L707-714
- * ``_credential_row``:``secret`` / ``refresh_secret`` 两列被 pop 掉)。
+ * 凭据摘要 —— **不含任何密钥**(镜像 ``_credential_row``:
+ * ``secret`` / ``refresh_secret`` 两列被 pop 掉)。
  *
  * 这是「列举凭据」的安全形态:面板、日志、健康快照只能用这一个出口。
  */
@@ -224,7 +212,7 @@ export interface CredentialInput {
 }
 
 // ===========================================================================
-// 到期归一化(nexus/credentials.py L144-182)
+// 到期归一化
 // ===========================================================================
 
 /**
@@ -262,9 +250,9 @@ export function normalizeExpiresSeconds(value: unknown): number | null {
 /**
  * provider 定义 —— 镜像 ``provider`` 表(schema.sql L97-102)。
  *
- * nexus/db/repo.py L615-643 ``upsert_provider`` 的列全集。
- * 注意:Nexus 里 real_model / credential 都挂在 provider 名下
- * (外键 ON DELETE CASCADE,repo.py L653),但本层把它们放在
+ * ``upsert_provider`` 的列全集。
+ * 注意:real_model / credential 都挂在 provider 名下
+ * (外键 ON DELETE CASCADE),但本层把它们放在
  * ``ProviderRegistry`` 的扁平列表里 —— 文件形态见 providers.ts。
  */
 export interface ProviderDefinition {
@@ -281,9 +269,9 @@ export interface ProviderDefinition {
 /**
  * 真实模型定义 —— 镜像 ``real_model`` 表(schema.sql L151-166)。
  *
- * nexus/db/repo.py L740-794 ``upsert_real_model`` 的列全集。
- * ⚠️ ``concurrency`` 为 ``null`` 表示「不改」(Nexus 写库时
- * ``COALESCE(?, 1)`` —— 传 NULL 不重置,见 repo.py L794 附近 SQL),
+ * ``upsert_real_model`` 的列全集。
+ * ⚠️ ``concurrency`` 为 ``null`` 表示「不改」(写库时
+ * ``COALESCE(?, 1)`` —— 传 NULL 不重置),
  * 与 ``maxInputTokens`` 等的 NULL 语义不同,别混。
  */
 export interface RealModelDefinition {
@@ -309,7 +297,7 @@ export interface RealModelDefinition {
 /**
  * 档链成员 —— ``logical_model.members`` 数组元素(有序,**顺序即 priority**)。
  *
- * nexus/db/repo.py L287-312 ``normalize_members``:数组顺序就是选路优先级
+ * ``normalize_members``:数组顺序就是选路优先级
  * (约定 D13),完全重复的 ``(provider, model)`` 只保留第一次出现。
  */
 export interface ChainMember {
@@ -335,19 +323,19 @@ export interface LogicalModelDefinition {
 /**
  * 账户配置 = 「凭据引用 + 启用/停用 + 配额/冷却/会话亲和的**静态**参数」。
  *
- * ⚠️ **Nexus 里没有独立的账户表**:账户就是 ``credential`` 行
+ * ⚠️ **参考实现里没有独立的账户表**:账户就是 ``credential`` 行
  * (provider + username 二元组),启用/停用、配额、冷却、pin 全是**运行期**
- * 内存态(约定 D17-D19,repo.py L1334-1429)。本接口是 TS 侧的**静态配置**
- * 视图,字段与 Nexus 的运行期形态对齐但只收「能落盘的部分」:
+ * 内存态(约定 D17-D19)。本接口是 TS 侧的**静态配置**
+ * 视图,字段与运行期形态对齐但只收「能落盘的部分」:
  *
  * - ``credentialRef``:``"<provider>/<username>"``(= repo.py L186
  *   ``credential_key`` 的字符串形态,DSH 侧叫 credentialRef)。
- * - ``enabled``:⚠️ **TODO / 与 Nexus 的差异** —— Nexus 的 credential 表
+ * - ``enabled``:⚠️ **TODO / 差异** —— ``credential`` 表
  *   **没有 enabled 列**:停用 = 删除行,或写一条 ``priority: 0`` 的
  *   调度规则(engine.py L813-831 的 ``window`` 字段移除后一律显式写
  *   priority=0)。本字段是 as-one 侧扩展,阶段二若走 DSH ctx.credentials
  *   则改由宿主语义决定,需重新评估。
- * - ``cooldownOverrideMinutes``:⚠️ **TODO** —— Nexus 的冷却覆盖在
+ * - ``cooldownOverrideMinutes``:⚠️ **TODO** —— 冷却覆盖在
  *   ``scheduler.rules`` 的 ``cooldown`` 字段(**供应商级**,分钟,
  *   engine.py L813-831);账户级覆盖在本层是扩展。
  * - ``sessionPinTtlSeconds``:会话亲和 pin 的 TTL;``null`` → 回落
@@ -355,9 +343,9 @@ export interface LogicalModelDefinition {
  *   ``pin_session(..., ttl_seconds=600.0)``)。
  */
 export interface AccountConfig {
-  /** 凭据引用 ``"<provider>/<username>"``(Nexus ``credential_key`` 字符串形态)。 */
+  /** 凭据引用 ``"<provider>/<username>"``(``credential_key`` 字符串形态)。 */
   credentialRef: string;
-  /** 启用/停用(⚠️ 见上「enabled」注释:Nexus 无此列)。默认 ``true``。 */
+  /** 启用/停用(⚠️ 见上「enabled」注释:参考实现无此列)。默认 ``true``。 */
   enabled: boolean;
   /**
    * 账户级冷却覆盖(分钟)。``null`` = 不覆盖,回落 scheduler.rules 的
@@ -457,7 +445,7 @@ export const DEFAULT_SCHEDULER_RULES: readonly SchedulerRule[] = [];
 export const DEFAULT_SCHEDULER_COOLDOWN_OVERRIDES: Readonly<Record<string, number>> = {};
 
 // ===========================================================================
-// retry 缺省(setting ``retry.*``,nexus/core/backoff.py L86-110)
+// retry 缺省(setting ``retry.*``)
 // ===========================================================================
 
 /**
@@ -497,7 +485,7 @@ export type RetryKey = (typeof RETRY_KEYS)[number];
  * 额度快照 —— 镜像 repo.py L1334-1357 ``quotas()`` 的条目
  * (键 = ``"<provider>/<username>"``)。
  *
- * ⚠️ **Nexus 里这是纯内存 dict,重启即失**(D17);本类型只作形状参考,
+ * ⚠️ **这是纯内存 dict,重启即失**(D17);本类型只作形状参考,
  * 配置层不持有其实例 —— 运行期额度由 router/collector 在内存维护。
  */
 export interface RuntimeQuota {
@@ -527,7 +515,7 @@ export interface RuntimeSessionPin {
 // 时钟(测试注入用;本层不反向依赖 router)
 // ===========================================================================
 
-/** 墙钟:绝对 epoch 秒(与 Nexus ``time.time()`` 同口径)。 */
+/** 墙钟:绝对 epoch 秒(与 ``time.time()`` 同口径)。 */
 export type WallClock = () => number;
 
 /** 默认墙钟(``Date.now() / 1000``,epoch 秒)。 */

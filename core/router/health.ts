@@ -1,6 +1,6 @@
 /**
  * HealthRegistry —— `endpointId -> EndpointHealth` 的内存表
- * (从 `nexus/core/router.py:HealthRegistry` 移植,取代已删的 `endpoint_health` 表)。
+ * (从 `router.py:HealthRegistry` 移植,取代已删的 `endpoint_health` 表)。
  *
  * **没有记录 = 可用**(D19 的语义,也是这里的默认):进程刚起来时表是空的,
  * 所有端点一律健康,不需要任何「先写一份健康基线」的初始化。

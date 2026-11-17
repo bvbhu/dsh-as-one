@@ -1,5 +1,5 @@
 /**
- * 设置页 —— Nexus 面板 Settings.vue 的严格 1:1 复刻(用户 m08793「所有页面严格按 nexus 复刻」)。
+ * 设置页 —— 严格 1:1 复刻既有面板(用户 m08793「所有页面严格按既有面板复刻」)。
  *
  * 结构(逐元素对齐 Settings.vue):
  * - 页头 h1.ui-page-title「设置」+ p.ui-page-desc;busy → p.hint「加载中…」,err → p.ui-err;
@@ -13,12 +13,12 @@
  * 数据契约(以 As One 契约实际字段为准,不编造):
  * - getSettings():sections 内层键是完整点号键(如 "ui.recent_limit");specs 为扁平数组,
  *   specOf 按完整键名匹配,section 由键名前缀推导(字段表见 src/main/assembly.ts SETTING_FIELDS)。
- * - 契约缺 real.wait_budget_s:「重试次数与冷却」组按现有规格渲染(Nexus pick 同款过滤),不留空位提示。
- * - RequestLogStatus.content_modes 与 Nexus 一致为 {value,label}:option 显示中文 label(不再摆机器值)。
+ * - 契约缺 real.wait_budget_s:「重试次数与冷却」组按现有规格渲染(pick 同款过滤),不留空位提示。
+ * - RequestLogStatus.content_modes 为 {value,label}:option 显示中文 label(不再摆机器值)。
  * - 请求日志卡无「开关」(2026-10-27 用户 m17413:移除开关,档位即全部控制 —— off=不写明细,仅统计聚合)。
  * - master_key 未设置 → 空态文案「未设置 ONE_API_KEY:当前无鉴权(所有请求放行)」。
  * - saveSettings → msg = r.message || "已保存";changedPayload 逐键 JSON.stringify diff。
- * - As One 的 setRequestLog 诚实返回 {ok:false}(未实现落盘):照 Nexus 交互渲染,
+ * - As One 的 setRequestLog 诚实返回 {ok:false}(未实现落盘):照既有交互渲染,
  *   r.message 经 logMsg 展示,不隐藏失败。
  */
 import React from "react";
@@ -51,7 +51,7 @@ import type {
   SettingsRead,
 } from "../api";
 
-/* ── 常量(与 Nexus Settings.vue 逐字对齐) ─────────────────────── */
+/* ── 常量(与既有设定逐字对齐) ─────────────────────── */
 
 const SECTION_TITLES: Record<string, { title: string }> = {
   // ⚠️ 这些 key 必须与后端 sections 的段名一字不差。
@@ -97,7 +97,7 @@ const UNIT_BY_KEY: Record<string, string> = {
 };
 
 
-/* ── 退避曲线(与 Nexus backoffChart computed 对齐,草稿值实时重算) ── */
+/* ── 退避曲线(与 backoffChart computed 对齐,草稿值实时重算) ── */
 
 interface BackoffChart {
   W: number;
@@ -415,7 +415,7 @@ export default function SettingsPage(): React.JSX.Element {
 
   /* ── spec / 字段辅助 ── */
 
-  /** 段名:契约给了 `section` 就用它(Nexus 把 `real.wait_budget_s` 摆在 retry 段),
+  /** 段名:契约给了 `section` 就用它(原设计把 `real.wait_budget_s` 摆在 retry 段),
    *  否则按键名前缀推导。 */
   function sectionOf(spec: SettingSpec): string {
     if (spec.section) return spec.section;
@@ -490,7 +490,7 @@ export default function SettingsPage(): React.JSX.Element {
     );
   }
 
-  /* ── retry 段:两小节(与 Nexus retryGroups 对齐) ── */
+  /* ── retry 段:两小节(与 retryGroups 对齐) ── */
 
   function retryGroups(): Array<{ title: string; fields: SettingSpec[] }> {
     const pick = (keys: string[]): SettingSpec[] =>
@@ -922,7 +922,7 @@ export default function SettingsPage(): React.JSX.Element {
                       disabled={busy}
                       onChange={(ev) => void saveReqLog(ev.target.value as RequestLogContentMode)}
                     >
-                      {/* 契约从 Nexus 起就是 {value,label}:label 是中文说明,
+                      {/* 契约从一开始就是 {value,label}:label 是中文说明,
                           摆 value(off/structure/…)等于把说明丢掉。 */}
                       {reqLog.content_modes.map((m) => (
                         <option key={m.value} value={m.value}>

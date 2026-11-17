@@ -1,7 +1,5 @@
 /**
  * 连接器注册表 —— 按 vendor id 查找连接器。
- *
- * 与 Nexus 的 `ADAPTERS` 映射对齐。
  */
 
 import type { AuthConnector } from "./types.js";

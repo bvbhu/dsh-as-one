@@ -61,7 +61,7 @@ export interface Peer {
  * 不在别名表里 → 归一回退默认区域 → CN 账号被打到国际主机。
  *
  * 真实区域存在**凭据 raw_json.region**(discover 导入/自动发现时写入,
- * 与 Nexus `AccountContext.region` 同源)。provider 表没有 region 列
+ * 与 `AccountContext.region` 同源)。provider 表没有 region 列
  * (schema.sql L97-102),所以只能从凭据侧取。
  *
  * 拿不到区域时传 `undefined` 而不是空串:连接器各自有
@@ -79,7 +79,7 @@ export async function connectorExtra(
     const out: Record<string, unknown> = {};
     const region = raw["region"];
     if (typeof region === "string" && region.trim() !== "") out.region = region.trim();
-    // 透传上游身份派生可覆盖的字段(Nexus extras:uid/domain/enterprise_id/
+    // 透传上游身份派生可覆盖的字段(extras:uid/domain/enterprise_id/
     // machine_id/device_id/api_base + user_id);连接器的 resolve_identity /
     // build_chat_headers 只在字段存在时使用,多传无害。trae 凭据 raw 用
     // user_id(计费/签到接口的 x-uid 需要它),workbuddy 用 uid,两者都透传。

@@ -1,7 +1,7 @@
 /**
  * model-catalog.ts —— 上游模型目录(/models)响应解析。
  *
- * 移植 Nexus `nexus/panel/api.py` 的语义:
+ * 移植上游面板 `api.py` 的语义:
  *   - `_capability_int` → capabilityInt:三道护栏(bool 先挡 / NaN±inf 挡 / ≤0 当没说);
  *   - `_vision_of` → visionOf:没明说一律 False(保守),防止给不支持图片的模型勾「图片」;
  *   - `_model_entry` → modelEntry:字符串元素没有能力字段(不猜);

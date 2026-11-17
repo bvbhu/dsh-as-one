@@ -71,7 +71,7 @@ export function isWorkbuddyChannelReject(err: UpstreamError, protocol: string): 
 }
 
 /**
- * 上游给的 `Retry-After` **最多认多久**(秒)—— 对齐 Nexus
+ * 上游给的 `Retry-After` **最多认多久**(秒)—— 对齐
  * `MAX_HONORED_RETRY_AFTER_S = 86400`(一天)。
  *
  * ⚠️ 必须封顶:上游偶尔会回 `retry_after: 604800`(一周)甚至一个荒谬的大数,
@@ -95,7 +95,7 @@ export function cooldownUntilOf(gerr: UpstreamError): number | undefined {
 }
 
 /**
- * 哪些失败**不值得换档**(对齐 Nexus `_REQUEST_LEVEL_KINDS`)。
+ * 哪些失败**不值得换档**(对齐 `_REQUEST_LEVEL_KINDS`)。
  *
  * - `bad_request`:请求本身有问题(参数错 / 上下文超限),换成员必然同样失败;
  * - `auth_challenge`:验证码类,要人介入,换号只是把风控触发得更勤。

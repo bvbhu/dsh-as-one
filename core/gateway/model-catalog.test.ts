@@ -1,6 +1,6 @@
 /**
  * model-catalog.test.ts —— 上游模型目录解析纯函数测试。
- * 语义对齐 Nexus `nexus/panel/api.py`(_parse_model_entries / _model_entry /
+ * 语义对齐上游面板 `api.py`(`_parse_model_entries` / `_model_entry` /
  * _capability_int / _vision_of),零网络。
  */
 import { describe, it, expect } from "vitest";

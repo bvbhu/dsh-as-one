@@ -13,7 +13,7 @@ export const DEFAULT_GATEWAY_PORT = 4000;
 export const KNOWN_PROTOCOLS = ["openai", "workbuddy", "trae", "sensenova", "qoder", "minimax", "codearts"] as const;
 
 /**
- * 请求日志记录档位 —— 逐字对齐 Nexus `api_pages.py` L5284-5289。
+ * 请求日志记录档位 —— 逐字对齐既有中文说明。
  *
  * ⚠️ label 是**中文说明**,不是机器值:下拉框里摆 `off` / `structure` 等于把
  * 这一层信息丢掉(用户能看到的只有四个英文单词)。
@@ -70,7 +70,7 @@ export const CH_QUOTA_PROVIDERS = new Set(["trae", "workbuddy", "minimax", "code
 export const CH_CATALOG_PROVIDERS = new Set(["trae", "workbuddy", "sensenova", "minimax", "qoder", "codearts"]);
 
 /**
- * 策略机器键 → 显示名 —— 逐字对齐 Nexus `api_pages.py:_STRATEGY_LABELS`。
+ * 策略机器键 → 显示名 —— 逐字对齐既有的 `_STRATEGY_LABELS`。
  *
  * ⚠️ 是「中文 + 英文全名」而不是简短中文:这个值经 `strategy_label` 回给面板,
  * 而面板的逻辑模型页用的是自己的 `STRATEGY_LABELS`(同款全名)。两处写不一样
@@ -126,26 +126,26 @@ export const CLIENT_CANDIDATES: Record<string, string[]> = {
   sensenova: [],
 };
 
-/** 设置页字段表(键 = db.setting 点号键;kind 按 Nexus 设置值形态推断)。 */
+/** 设置页字段表(键 = db.setting 点号键;kind 按设置值形态推断)。 */
 export interface SettingFieldSpec {
   key: string;
   def: string;
   kind: "str" | "int" | "float" | "bool" | "json";
   label: string;
-  /** 数值型下界(Nexus spec 同名字段);页面据此给输入框 min。 */
+  /** 数值型下界(spec 同名字段);页面据此给输入框 min。 */
   min?: number;
   /** 数值型上界。 */
   max?: number;
-  /** 展示分组覆盖(Nexus:`real.wait_budget_s` 归 retry 段,不按键前缀落 real 段)。 */
+  /** 展示分组覆盖(如:`real.wait_budget_s` 归 retry 段,不按键前缀落 real 段)。 */
   section?: string;
 }
 /**
- * 设置页字段表 —— 逐字段对齐 Nexus `api_pages.py:_SETTING_SPECS`。
+ * 设置页字段表 —— 逐字段对齐 `_SETTING_SPECS`。
  *
- * ⚠️ **这一张表就是代码里读到的设置键全集**(Nexus 同款纪律):新增设置项时,
+ * ⚠️ **这一张表就是代码里读到的设置键全集**(同款纪律):新增设置项时,
  * 先让代码真的读它,再在这里加一行 —— 顺序反了就会出现死开关。
  *
- * ⚠️ `min` / `max` 不是装饰:Nexus `_settings_save` 会拿它们**拒绝越界值**,
+ * ⚠️ `min` / `max` 不是装饰:`_settings_save` 会拿它们**拒绝越界值**,
  * 缺了就等于把校验关掉(用户填 0.01 小时的刷新间隔也能存进去)。
  */
 export const SETTING_FIELDS: SettingFieldSpec[] = [
@@ -254,7 +254,7 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     min: 1,
     max: 1440,
   },
-  // ⭐ 2026-10-18 重进设置页(与 Nexus 同批):键名前缀是 `real` 但**归在 retry 段
+  // ⭐ 2026-10-18 重进设置页(同批改动):键名前缀是 `real` 但**归在 retry 段
   // 渲染** —— 它是「重试之前单次上游调用愿意等多久」,与 retry.* 同一决策语境。
   // 段名只是展示分组,不影响键本身,也不是死开关。
   {
