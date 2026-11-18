@@ -383,10 +383,18 @@ export class Scheduler {
     for (const rule of this._windowRules()) {
       const rl = rule.logical || "*";
       if (rl !== "*" && rl !== logical) continue;
-      if (rule.provider !== provider || rule.model !== model) continue;
+      if (rule.provider !== provider) continue;
+      // ⚠️ **空 model = 该 provider 的全部模型**(2026-11-18 修):
+      // 面板的「Model(可选)」留空写的就是 ""，语义与 staticRules 的
+      // `r.model === "" || r.model === model` 必须一致。此前这里硬比
+      // `rule.model !== model`，于是「只填 provider + 时段」的 P4 规则
+      // **永远匹配不上** —— 用户把 trae 整家配进 P4（Model 留空）后，
+      // trae 下的模型仍按普通档位参与调度，正是「P4 配了却仍优先用 trae」。
+      if (rule.model !== "" && rule.model !== model) continue;
       const windows: BlackoutWindow[] = [{ weekdays: rule.weekdays, times: rule.times }];
       if (isBlackout(windows, now)) out.push(rule);
-    }    return out;
+    }
+    return out;
   }
   private _degraded(pair: Pair, logical: string, now: number): boolean {
     if (this._staticRulesFor(pair[0], pair[1], now).some((r) => r.mode === "degrade")) return true;

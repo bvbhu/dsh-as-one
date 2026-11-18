@@ -496,6 +496,40 @@ describe("Scheduler.due-first 档位排序", () => {
     ]);
   });
 
+  it("P4 留空 model + 时段 = 降级该供应商**全部**模型(2026-11-18 修)", () => {
+    // 回归：用户把 trae 整家配进 P4，Model 留空（写进库里是 ""），并给了时段。
+    // 这类规则进 timeWindows，而 `_rulesFor` 曾硬比 `rule.model !== model`，
+    // 空 model 永远匹配不上 → trae 下的模型照样按普通档位参与调度。
+    // 现象：「P4 明明配了 trae，auto 还是优先用 trae」。
+    const members: Array<[string, string]> = [
+      ["trae", "fast"],
+      ["trae", "cheap"],
+      ["other", "m"],
+    ];
+    const repo = new InMemoryRepo();
+    repo.setLogicalModel("p4-empty-model", { strategy: "due-first" });
+    repo.setMembers("p4-empty-model", members.map(([p, m]) => ({ provider: p, model: m })));
+    repo.setChain("p4-empty-model", members.map(([p, m]) => endpointRow(p, m, "u1")));
+    repo.setSetting(
+      "scheduler.rules_p4",
+      JSON.stringify([
+        {
+          provider: "trae",
+          // model 留空 = 该 provider 全部模型
+          window: { weekdays: [1, 2, 3, 4, 5], times: [["09:00", "18:00"]] },
+        },
+      ]),
+    );
+    const sched = new Scheduler(repo);
+    // ⚠️ at 的第三个参数是**日期**不是星期：day=7 才是周三(2026-10-07)。
+    // 周三 10:00 落在 09:00-18:00 内 → trae 两个模型都被降级到末尾。
+    const keys = sched.chain("p4-empty-model", { now: at(10, 0, 7) }).map((c) => c.endpoint.realModelKey);
+    expect(keys).toEqual(["other/m", "trae/fast", "trae/cheap"]);
+    // 周三 20:00 在时段外 → 不降级，按普通档位（配置序）。
+    const outside = sched.chain("p4-empty-model", { now: at(20, 0, 7) }).map((c) => c.endpoint.realModelKey);
+    expect(outside).toEqual(["trae/fast", "trae/cheap", "other/m"]);
+  });
+
   it("P4 指定 model 时只降级该模型(其它同供应商模型不受影响)", () => {
     const members: Array<[string, string]> = [
       ["sensenova", "model-a"],
