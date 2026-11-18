@@ -244,10 +244,10 @@ function validDate(s: string): boolean {
 
 function tierErr(r: TierRule): string | null {
   if (!r.provider.trim()) return "provider 必填";
-  // 2026-11-18:去掉「带时段必须填 model」这条限制。
-  // 引擎侧已修好空 model 的匹配（`_rulesFor` 现在把 "" 解释成「该 provider
-  // 的全部模型」），所以「只填 provider + 时段」是合法且有用的写法 ——
-  // 用户把 trae 整家压进 P4 时段，正是靠它。旧校验只会让人配不出来。
+  // ⚠️ 引擎的时段规则按 provider+model **精确匹配**(`_rulesFor` 要求 model 相等),
+  // 带时段却留空 model 的规则永远不命中 → 必填。别放宽这条:放宽只会让人配出一条
+  // 「看起来在库里、实际从不生效」的规则。
+  if (r.times.length > 0 && !r.model.trim()) return "带生效时间段的规则必须填 model";
   for (const t of r.times) {
     if (!HHMM_RE.test(t.start) || !HHMM_RE.test(t.end)) return "时段须为 HH:MM 格式";
     if (t.start === t.end) return "开始与结束不能相同";
