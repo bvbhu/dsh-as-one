@@ -145,14 +145,17 @@ export interface UpstreamRuntime {
    */
   onReasoningEffortLearned?: (provider: string, model: string) => void;
   /**
-   * 单次上游调用的**连接超时**(秒)—— 等连接/首字节愿意等多久。
+   * **整个请求的总尝试时间**(秒)—— 含所有换档 / 重试 / 连接器内部等待。
    *
-   * 装配层注入(它才拿得到 settings 表):设置页「请求超时时间(秒)」
-   * = `real.wait_budget_s`。0 / 负数 = **不设超时**(等上游自己回)。
+   * 装配层注入(它才拿得到 settings 表):设置页「请求总超时时间(秒)」
+   * = `real.wait_budget_s`。0 / 负数 = **不设总超时**(等上游自己回)。
    * 缺省 → {@link STREAM_CONNECT_TIMEOUT_MS}。
    *
-   * ⚠️ 只覆盖「拿到响应头之前」;头到手后 timer 就被清掉,之后的流式读取
-   * 靠 {@link STREAM_IDLE_TIMEOUT_MS} 那条路(见 iterUpstreamChunks)。
+   * ⚠️ 2026-11-18 语义变更(用户定案):它**不再是**单次连接额度。每次真发上游
+   * 前的连接超时取「剩余总预算」(见 `remainingBudgetS`),归零即总预算耗尽。
+   *
+   * ⚠️ 对单次调用只覆盖「拿到响应头之前」;头到手后 timer 就被清掉,之后的
+   * 流式读取靠 {@link STREAM_IDLE_TIMEOUT_MS} 那条路(见 iterUpstreamChunks)。
    */
   requestTimeoutMs?: () => number;
   /**
@@ -420,6 +423,21 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
    */
   const requestTimeoutMs = (): number =>
     runtime.requestTimeoutMs?.() ?? STREAM_CONNECT_TIMEOUT_MS / 1000;
+
+  /**
+   * **剩余总预算**(秒) —— 单次连接超时就用它（2026-11-18 用户定案：
+   * 「单次连接超时 = 剩余总预算」）。
+   *
+   * `requestTimeoutMs()` 现在表达的是**整个请求的总尝试时间**（含所有换档、
+   * 重试、连接器内部的 429 等待），不是单次连接的额度。所以每次真发上游前
+   * 要减去已经花掉的，得到这一次还剩多少；归零即视为总预算耗尽。
+   */
+  const remainingBudgetS = (startedAtMs: number): number => {
+    const total = requestTimeoutMs();
+    if (!(total > 0)) return 0; // 0 / 负数 = 不设总超时
+    const elapsed = (performance.now() - startedAtMs) / 1000;
+    return Math.max(0, total - elapsed);
+  };
 
   /**
    * WorkBuddy 账号级节流:在 **router.commit 之前**把这次发送排进账号的时隙。
@@ -842,7 +860,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
             // 的流式读取靠 `STREAM_IDLE_TIMEOUT_MS` 那条路(见 iterUpstreamChunks)。
             // ⚠️ 时长来自设置项「请求超时时间(秒)」(`real.wait_budget_s`),
             // 0 = 不设超时 → `armConnectTimeout` 返回 null(没有句柄可清)。
-            const timer = armConnectTimeout(abort, requestTimeoutMs());
+            const timer = armConnectTimeout(abort, remainingBudgetS(t0));
             let res: Response;
             try {
               if (item.endpoint.protocol === "sensenova") {
@@ -1160,6 +1178,12 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
             attempt,
             alternativeChannel: hasAlternativeChannel(routerChain, tried, item.endpoint.provider),
           });
+          // ⏱️ 总预算检查(2026-11-18 用户定案)：预算用完就**不再换档**，
+          // 把上一次的真实错误交回去 —— 「返回上一次的报错信息，没有才返回超时」。
+          // 连接器内部的同号等待不受这里约束（它自己响应 abort），预算内继续同号同模型重试。
+          if (requestTimeoutMs() > 0 && remainingBudgetS(t0) <= 0) {
+            throw lastError ?? gerr;
+          }
           if (decision.allowed && !alreadyTried && attempt < maxAttempts) {
             const delayS = decision.delayS;
             console.warn(
@@ -1332,7 +1356,7 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
             // 正是它 —— 新建一个的话,抢占只会中断一个没人用的 controller。
             // ⚠️ 时长来自设置项「请求超时时间(秒)」(`real.wait_budget_s`),
             // 0 = 不设超时 → `armConnectTimeout` 返回 null(没有句柄可清)。
-            const timer = armConnectTimeout(abort, requestTimeoutMs());
+            const timer = armConnectTimeout(abort, remainingBudgetS(t0));
             let res: Response;
             try {
               if (protocol === "sensenova") {
@@ -1548,6 +1572,12 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
                 item.endpoint.provider,
               ),
             });
+          // ⏱️ 总预算检查(2026-11-18 用户定案)：预算用完就**不再换档**，
+          // 把上一次的真实错误交回去 —— 「返回上一次的报错信息，没有才返回超时」。
+          // 连接器内部的同号等待不受这里约束（它自己响应 abort），预算内继续同号同模型重试。
+          if (requestTimeoutMs() > 0 && remainingBudgetS(t0) <= 0) {
+            throw lastError ?? gerr;
+          }
             if (decision.allowed && !alreadyTried && attempt < maxAttempts) {
               const delayS = decision.delayS;
               console.warn(

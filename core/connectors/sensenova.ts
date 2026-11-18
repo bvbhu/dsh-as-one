@@ -425,23 +425,33 @@ export class SensenovaAdapter implements AuthConnector {
     model: string,
     creds: ConnectorCredentials,
     signal?: AbortSignal,
-    /** 同号等待预算(秒)。默认 {@link ACCOUNT_WAIT_BUDGET_S};测试传 0 跳过真实等待。 */
+    /** 同号节奏窗口(秒)。默认 {@link ACCOUNT_WAIT_BUDGET_S}；测试传 0 跳过真实等待。 */
     waitBudgetSeconds: number = ACCOUNT_WAIT_BUDGET_S,
   ): Promise<{ res: Response; runtime: SensenovaAccountRuntime }> {
-    // ⚠️ 有界:绝不能用无预算的 `for(;;)`,那会在上游持续 429 时让请求挂起。
-    // `let` 而非 `const`:429 换号会把本轮用的账号换成池里另一个号。
-    let rt = this.acquireFor(creds);
+    // ⚠️ 有界:终止条件**只有**外层 signal（总超时预算耗尽 / 客户端断开）。
+    // 2026-11-18 用户定案：同号同模型**继续请求**，一轮节奏窗口用尽就重置再来，
+    // 「等满 N 秒仍限流」**不是**返回错误的理由 —— 见下方 `waitLeft <= 0` 分支。
+    const rt = this.acquireFor(creds);
     let waitLeft = Math.max(0, waitBudgetSeconds);
     let waitedS = 0;
-    /** 本轮已试过的账号名(防 A→B→A 死循环)。 */
-    const tried = new Set<string>([rt.name]);
+    /** 最近一次真实上游错误：总预算耗尽时优先把它交还给调用方。 */
+    let lastError: Error | undefined;
     try {
       for (;;) {
-        // 客户端已断开 → 不要再打上游。
-        if (signal?.aborted) throw new UpstreamError("connection", "客户端断开", false, 499);
+        // 外层总预算耗尽（或客户端断开）→ 交回**上一次的真实错误**；没有就报超时。
+        if (signal?.aborted) throw lastError ?? this.budgetExhausted(rt, waitedS);
         // ⚠️ **走钉连接**(不是全局 fetchFn):前缀缓存按推理节点本地存放,
         // 连接换了节点就换,缓存块丢一半(见 pinnedHttpAgent 注释)。
-        const res = await this.pinnedFetch(rt, url, body, signal);
+        // ⚠️ abort（总预算耗尽 / 客户端断开）时 fetch 抛的是原生 AbortError，
+        // 必须在这里统一成「上一次的真实错误，没有才超时」——
+        // 否则调用方会看到一条裸 "aborted"，与用户定案的口径不符。
+        let res: Response;
+        try {
+          res = await this.pinnedFetch(rt, url, body, signal);
+        } catch (fetchErr) {
+          if (signal?.aborted) throw lastError ?? this.budgetExhausted(rt, waitedS);
+          throw fetchErr;
+        }
         if (res.ok) return { res, runtime: rt };
 
         const text = await res.text().catch(() => "");
@@ -450,31 +460,24 @@ export class SensenovaAdapter implements AuthConnector {
         if (res.status !== 429) throw err; // 非限流:401/403 是凭据问题,换号也无用
 
         const now = Date.now();
-        // 429 且池内还有其它空闲未冷却账号 → 换号重试(缓存跨账号共享,粘性=真实模型级)。
-        // 旧号记账号级冷却:新会话选号会跳过它(已粘住的会话不受影响,见 runWithAccount 头注)。
-        if (rt.name !== "" && this.pool.size > 1) {
-          const next = this.pickOtherAccount(tried, now);
-          if (next !== null) {
-            tried.add(next.name);
-            rt.coolAccountFor(BILLABLE_WINDOW_S, sensenovaSnippet(text), now);
-            this.releaseFor(rt); // 释放旧号占用(单账号单并发)
-            next.inflight += 1; // 占用新号
-            rt = next;
-            continue; // 换到新号直接打(它可能没被限流)
-          }
-        }
+        // 记住这次真实错误 —— 总预算耗尽时优先交还它（用户定案：
+        // 「返回上一次的报错信息，没有才返回超时」）。
+        lastError = err;
+
+        // 429：**同号同模型继续请求**（用户 2026-11-18 定案：不换号）。
+        // 一轮节奏窗口用尽是「继续等」的信号，不是返回错误的理由 ——
+        // 重置计时接着等，真正终止只由外层 signal（总预算）决定。
         if (waitLeft <= 0) {
-          // 换无可换 + 预算耗尽:报可重试的 rate_limit + retryAfter,
-          // 让客户端/上游退避;退避回来还是这个号(会话还粘着它)。
           rt.coolAccountFor(BILLABLE_WINDOW_S, sensenovaSnippet(text), now);
-          throw this.heldTooLong(rt, err, waitedS);
+          waitLeft = Math.max(0, waitBudgetSeconds);
+          waitedS = 0;
         }
         // 同号硬等:窗口型限流(tpm/rpm,60s 滑动)等满一个窗口再打 ——
-        // 每 5s 刷一次会把窗口永远顶在「刚打过」,实测 100s 预算仍 429;
+        // 每 5s 刷一次会把窗口永远顶在「刚打过」,实测短间隔反而更容易持续 429;
         // 瞬时型 429 保持 COOLDOWN_ON_HOLD 短间隔(见 holdDelaySeconds)。
         const delay = holdDelaySeconds(text, waitLeft);
         rt.coolFor(delay, sensenovaSnippet(text), model, now);
-        await this.sleep(delay * 1000);
+        await this.sleep(delay * 1000, signal);
         waitLeft -= delay;
         waitedS += delay;
       }
@@ -513,10 +516,40 @@ export class SensenovaAdapter implements AuthConnector {
     );
   }
 
-  /** sleep(连接器内部等待,不让客户端重试;时长计入 TTFT)。 */
-  private sleep(ms: number): Promise<void> {
-    return new Promise((r) => setTimeout(r, ms));
+  /**
+   * sleep(连接器内部等待,不让客户端重试;时长计入 TTFT)。
+   *
+   * ⚠️ 必须响应 `signal`：同号等待现在是「重置计时继续」而不是抛错，
+   * 终止完全依赖外层总预算 abort —— 睡死了就打断不了，请求会一直占着并发租约。
+   */
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal === undefined) return new Promise((r) => setTimeout(r, ms));
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(done, ms);
+      function done(): void {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", done);
+        resolve();
+      }
+      signal.addEventListener("abort", done, { once: true });
+    });
+  }  /**
+   * 总预算耗尽、且**一次真实上游错误都没拿到**时的兜底错误。
+   *
+   * 用户定案（2026-11-18）：「返回上一次的报错信息，没有才返回超时」。
+   * 所以只有在 `lastError` 为空（一次都没打出去 / 上游没回过错误）时才用它。
+   */
+  private budgetExhausted(rt: SensenovaAccountRuntime, waitedS: number): UpstreamError {
+    return new UpstreamError(
+      "timeout",
+      `[sensenova] 账号 ${rt.name || "(adhoc)"} 请求总超时预算耗尽（累计等待 ${Math.round(waitedS)}s），` +
+        `未拿到有效响应`,
+      true,
+      504,
+    );
   }
+
 
   /**
    * 走**该账号的钉连接**发一次请求(返回标准 `Response`,与 fetch 同形)。

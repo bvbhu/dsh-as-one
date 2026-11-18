@@ -423,22 +423,27 @@ describe("SensenovaAdapter", () => {
     expect(adapter.poolSnapshot()["b"]).toBeUndefined();
   });
 
-  it("runWithAccount:429 时**换到池内其它空闲账号**(用户 2026-11-01 定案)", async () => {
-    // 背景修正:此前是 m23215「绝不换号」(理由:换号只是把限流甩给下一个号 +
-    // 打散前缀缓存亲和)。用户 2026-11-01 定案推翻它 —— sensenova 前缀缓存
-    // **跨账号共享**(按推理节点存放,与凭证无关),粘性绑真实模型级即可,账号
-    // 是同模型下的负载分担;rpm/rps/tpm 都是**账号级**限流,换号就能继续。
-    // 实测旧行为:死等同一个号,latency 100~160s 后仍 429(用户看到 rps exhausted)。
+  it("runWithAccount:429 时**保持同号同模型继续请求**（用户 2026-11-18 定案）", async () => {
+    // 历史脉络：m23215「绝不换号」→ 2026-11-01 改成「429 换号」→
+    // 2026-11-18 用户再次定案「同号同模型继续请求」，并明确「同号等待一轮
+    // 仍限流不作为错误理由」。所以现在：不论池里有没有别的号，都钉在原号上重试。
     const seen: string[] = [];
     let calls = 0;
     const fetchFn = (async (_url: string, init: RequestInit) => {
       calls += 1;
       seen.push(String((init.headers as Record<string, string>)["Authorization"]));
+      if (calls >= 3) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       return new Response(JSON.stringify({ error: { message: "rpm exhausted", code: "8" } }), {
         status: 429,
         headers: { "Content-Type": "application/json" },
       });
     }) as unknown as typeof fetch;
+    // 池里有两个号 —— 但**不应该**换到 b。
     const adapter = new SensenovaAdapter(
       [
         { username: "a", api_key: "ka" },
@@ -446,57 +451,74 @@ describe("SensenovaAdapter", () => {
       ],
       fetchFn,
     );
-    let err: unknown;
-    try {
-      // apiKey="ka" 属池 → 从 a 开始;429 → 换到 b(池内唯一其它号);b 也 429 →
-      // 换无可换 + 预算 0 → 抛错。所以是 **2 次调用、两个不同账号**。
-      await adapter.runWithAccount("https://x/v1/chat/completions", {}, "m1", { apiKey: "ka" }, undefined, 0);
-    } catch (e) {
-      err = e;
-    }
-    const e = err as UpstreamError;
-    expect(e).toBeInstanceOf(UpstreamError);
-    expect(calls).toBe(2); // 死循环时是 Infinity;不换号时是 1
-    expect(seen).toEqual(["Bearer ka", "Bearer kb"]); // 确实换了号,不是同号重试
-    // 可重试的 rate_limit + retryAfter(= 一个可计费滚动窗口),由客户端/上游退避。
-    expect(e.kind).toBe("rate_limit");
-    expect(e.retryable).toBe(true);
-    expect(e.retryAfter).toBe(60); // = BILLABLE_WINDOW_S
-    expect(e.message).toContain("rpm exhausted"); // 上游原样透传
-    expect(e.message).toContain("池内已无可换");
-    // 两个号都记了账号级冷却(新会话选号会跳过它们)。
-    const pool = (adapter as unknown as {
-      pool: { runtime(n: string): SensenovaAccountRuntime };
-    }).pool;
-    expect(pool.runtime("a").isAccountCooling(Date.now())).toBe(true);
-    expect(pool.runtime("b").isAccountCooling(Date.now())).toBe(true);
+    const out = await adapter.runWithAccount(
+      "https://x/v1/chat/completions",
+      {},
+      "m1",
+      { apiKey: "ka" },
+      undefined,
+      0.01,
+    );
+    expect(out.res.ok).toBe(true);
+    expect(calls).toBe(3);
+    expect(seen).toEqual(["Bearer ka", "Bearer ka", "Bearer ka"]); // 全程同一个号
   });
 
-  it("换无可换(单号池)才同号硬等;预算耗尽抛错并记账号级冷却", async () => {
-    const seen: string[] = [];
+  it("同号节奏窗口耗尽后**继续**请求，不抛错；只有外层 signal 能终止（总预算）", async () => {
     let calls = 0;
-    const fetchFn = (async (_url: string, init: RequestInit) => {
+    const fetchFn = (async () => {
       calls += 1;
-      seen.push(String((init.headers as Record<string, string>)["Authorization"]));
       return new Response(JSON.stringify({ error: { message: "rpm exhausted", code: "8" } }), {
         status: 429,
       });
     }) as unknown as typeof fetch;
-    // **单号池**:没有别的号可换 → 只能同号硬等。
     const adapter = new SensenovaAdapter([{ username: "a", api_key: "ka" }], fetchFn);
-    const t0 = Date.now();
-    // 预算 0.05s:先硬等 50ms(同号)→ 再打**同一个号** → 预算耗尽抛错。
-    await expect(
-      adapter.runWithAccount("https://x/v1/chat/completions", {}, "m1", { apiKey: "ka" }, undefined, 0.05),
-    ).rejects.toThrow(/池内已无可换/);
-    expect(calls).toBe(2);
-    expect(seen).toEqual(["Bearer ka", "Bearer ka"]);
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(40);
-    // 预算耗尽 → 该号账号级冷却:新会话选号跳过它。
-    const pool = (adapter as unknown as {
-      pool: { runtime(n: string): SensenovaAccountRuntime };
-    }).pool;
-    expect(pool.runtime("a").isAccountCooling(Date.now())).toBe(true);
+    // 外层「总预算」用 AbortSignal 表达：120ms 后 abort。
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 120);
+    let err: unknown;
+    try {
+      await adapter.runWithAccount(
+        "https://x/v1/chat/completions",
+        {},
+        "m1",
+        { apiKey: "ka" },
+        ac.signal,
+        0.02, // 节奏窗口 20ms：期间会重置多次，但不会因此抛错
+      );
+    } catch (e) {
+      err = e;
+    } finally {
+      clearTimeout(timer);
+    }
+    const e = err as UpstreamError;
+    expect(e).toBeInstanceOf(UpstreamError);
+    // 用户定案「返回上一次的报错信息，没有才返回超时」：
+    // 这里每次都是真实 429，所以交回的是**上游原文**，而不是我们自己编的
+    // 「池内已无可换」或一句泛泛的 timeout。kind 由 classifyError 归因
+    // （这类 429 归 pool_exhausted），这里只钉「交回的是那次的真实错误」。
+    expect(e.message).toContain("rpm exhausted");
+    expect(e.message).not.toContain("池内已无可换");
+    expect(e.message).not.toContain("总超时预算耗尽");
+    // 确实在继续重试，而不是一轮就放弃。
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("一次真实错误都没拿到时，总预算耗尽报 timeout", async () => {
+    // fetch 永不返回（模拟连不上），直到 signal abort。
+    const fetchFn = ((_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      })) as unknown as typeof fetch;
+    const adapter = new SensenovaAdapter([{ username: "a", api_key: "ka" }], fetchFn);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 30);
+    const err = await adapter
+      .runWithAccount("https://x/v1/chat/completions", {}, "m1", { apiKey: "ka" }, ac.signal, 0.01)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UpstreamError);
+    expect((err as UpstreamError).kind).toBe("timeout");
+    expect((err as UpstreamError).message).toMatch(/总超时预算耗尽/);
   });
 
   it("非 429 失败直接抛:不重试、不换号", async () => {

@@ -34,8 +34,15 @@ export const BILLABLE_WINDOW_S = 60;
  * (纯展示,不参与选号)。
  */
 export const COOLDOWN_ON_HOLD = 5;
-/** 单账号累计等待预算(秒)。 */
-export const ACCOUNT_WAIT_BUDGET_S = 100;
+/**
+ * 单账号累计等待预算(秒)。
+ *
+ * 2026-11-18 用户定案：100 → **50**，且**耗尽不再算错误**。
+ * 它现在只是「同号节奏窗口」——一轮等满就重置计时继续请求同号同模型，
+ * 真正的终止条件是外层请求的总超时预算（`real.wait_budget_s`）。
+ * 详见 `sensenova.ts` 的 {@link SensenovaAdapter.runWithAccount}。
+ */
+export const ACCOUNT_WAIT_BUDGET_S = 50;
 /** 健康度滚动窗口(秒)。 */
 export const HEALTH_WINDOW_S = 300;
 /**
