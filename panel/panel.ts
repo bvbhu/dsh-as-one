@@ -878,6 +878,10 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
      * 新起进程读到的是空表 —— 必须在**运行中的进程**里看才准。
      */
     getSchedulerPlan: async (logicalName: string) => {
+      // ⚠️ 先等额度就绪门（2026-11-18）：诊断入口如果读到「空配额表」，due-first
+      // 的排序键全并列，界面会显示成配置序 —— 看起来像「调度坏了」，实际只是
+      // 「这一轮还没人触发过刷新」。这里 await 一下，看到的就是与请求路径同一份数据。
+      await ctx.awaitQuota?.();
       const now = Math.floor(Date.now() / 1000);
       const plan = ctx.scheduler.planMembers(logicalName, { now, force: true });
       const chain = ctx.scheduler.chain(logicalName);

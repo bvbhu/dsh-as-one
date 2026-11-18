@@ -15,6 +15,7 @@
  */
 
 import { join } from "node:path";
+import { quotaHub, type QuotaHub } from "@as-one/core/src/datahub/index.js";
 
 import type {
   CatalogEntry,
@@ -106,7 +107,7 @@ device_checked_in?: boolean;
 /** 方法域依赖:27 个渠道域闭包 + createPanel 的三个共享闭包(与 ChannelsDomainDeps 同形状)。 */
 export interface ChannelsMethodsDeps {
   /** 额度探测缓存(模块级共享,getQuota/getProviderPage 直读)。 */
-  chQuotaCache: Map<string, { fetchedAtMs: number; snapshot: QuotaSnapshot }>;
+  chQuotaCache: QuotaHub;
   /** 注册表投影(provider → Map<"provider/model", ModelView>)。 */
   realModelMap: (pid?: string) => Map<string, ModelView>;
   /** 单模型查找。 */

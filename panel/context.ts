@@ -58,6 +58,14 @@ export interface PanelContext {
    */
   restartGateway: () => Promise<string>;
   startedAtMs: number;
+  /**
+   * 「额度快照就绪门」—— 读调度排序之前 await 它，看到的才是与请求路径同一份数据。
+   *
+   * 2026-11-18 用户定案「同步到所有使用面，保证数据唯一」：进程刚启动时额度表是空的，
+   * 此时 `scheduler.chain()` 的到期排序键全并列 → 退化成配置序。诊断/面板若在这时
+   * 读，会显示成「调度坏了」，实际只是没人触发过刷新。可选：纯面板测试里没有它。
+   */
+  awaitQuota?: () => Promise<void>;
   accountOverlay: Map<string, boolean>;
   /**
    * 账号启停的**唯一写口**(缓存 + 落库 `setting` 表)。

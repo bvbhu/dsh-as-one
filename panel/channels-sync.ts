@@ -17,6 +17,7 @@
  * 同一份,不能搬到这里(会失去与网关的共享)。
  */
 
+import { quotaHub, type QuotaHub } from "@as-one/core/src/datahub/index.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -58,7 +59,7 @@ import type { PanelContext } from "./context.js";
 /** 第十二刀:同步域需要的进程级共享状态(定义在 assembly-channels.ts 模块级)。 */
 export interface ChannelsSyncDeps {
   /** 额度内存快照(账号 → 快照)。网关侧 chQuotaTableForScheduler 读同一份。 */
-  chQuotaCache: Map<string, { fetchedAtMs: number; snapshot: QuotaSnapshot }>;
+  chQuotaCache: QuotaHub;
   /** 额度冷却闸门(账号 → 上次探测时刻)。 */
   chQuotaGate: Map<string, number>;
   /** 额度单飞(账号 → 进行中的探测)。 */

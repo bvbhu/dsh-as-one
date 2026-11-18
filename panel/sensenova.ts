@@ -9,6 +9,7 @@
  *     单例,不能搬),通过 {@link SensenovaDomainDeps} 传入。
  */
 
+import { quotaHub } from "@as-one/core/src/datahub/index.js";
 import type { CredentialVault } from "@as-one/core/src/config/credentials.js";
 import type { AsOneDatabase } from "@as-one/core/src/db/database.js";
 import type { ProviderRegistry } from "@as-one/core/src/config/providers.js";
@@ -102,7 +103,8 @@ export interface SensenovaDomain {
  * 写入点:`snQuotaFetch` 成功拿到 quota 时。
  * 读取点:`snPoolRatiosTable()` → `chQuotaTableForScheduler` → 调度器闸门。
  */
-const snRatioCache = new Map<string, { w5: number | null; w7: number | null }>();
+// ⚠️ 2026-11-18 重构：存储已移到 `quotaHub`（core/datahub），这里不再持模块级 Map。
+// 写入口统一走 `quotaHub.setPoolRatios()`，读入口 `quotaHub.poolRatios()`。
 
 /**
  * 从 quota 里算**通用池**的窗口剩余比例。
@@ -136,7 +138,7 @@ function ratiosOfQuota(quota: SensenovaQuota): { w5: number | null; w7: number |
  * (键 `sensenova/<username>`),驱动 `expensive-models.ts` 的闸门。
  */
 export function snPoolRatiosTable(): Map<string, { w5: number | null; w7: number | null }> {
-  return new Map(snRatioCache);
+  return quotaHub.poolRatios();
 }
 
 export function createSensenovaDomain(ctx: PanelContext, deps: SensenovaDomainDeps): SensenovaDomain {
@@ -623,7 +625,7 @@ const snQuotaFetch = async (username: string): Promise<SensenovaQuota | null> =>
       // 顺手把**通用池窗口比例**写进模块级表(供 chQuotaTableForScheduler 读):
       // 调度器的高消耗模型闸门按它决定要不要跳过 glm/kimi 端点。
       // ⚠️ 只在拿到 quota 时写 —— 拉取失败不动旧值(它代表「上次已知的比例」)。
-      snRatioCache.set(username, ratiosOfQuota(quota));
+      quotaHub.setPoolRatios(username, ratiosOfQuota(quota));
       snQuotaError.delete(username);
       return quota;
     } catch (err) {

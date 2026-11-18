@@ -47,7 +47,9 @@ import {
 import { RequestLogWriter } from "@as-one/core/src/request-log/writer.js";
 // 运行期额度快照(与 electron 同一份投影):due-first 的「到期早的先上」靠它,
 // 见 AppSchedulerRepo 的 quotaSnapshot 契约说明。
-import { chQuotaTableForScheduler } from "@as-one/panel/src/index.js";
+// 运行期额度快照：**唯一数据源**是 core/datahub 的 quotaHub（2026-11-18 重构）。
+// 面板探针写它、调度器读它，不再经 panel 包的模块级投影函数（依赖方向不再倒挂）。
+import { quotaHub } from "@as-one/core/src/datahub/index.js";
 import { AppSchedulerRepo } from "./repo.js";
 import { buildResolveUpstream } from "./upstream.js";
 import { rerouteSettingsFrom } from "./reroute.js";
@@ -134,6 +136,28 @@ export interface AsOneRuntime {
   setSensenovaKeyRepair(
     fn: ((username: string, reason: string) => Promise<SensenovaKeyRepairResult>) | null,
   ): void;
+  /**
+   * 「额度快照就绪门」的挂载口 —— 由插件入口在造好 WarmupGate 后注入。
+   *
+   * ## 为什么需要它（2026-11-18 用户定案「同步到所有使用面，保证数据唯一」）
+   *
+   * due-first 的排序键是**配额到期时间**，而它只存在于进程内的
+   * `chQuotaTableForScheduler()`（模块级缓存）。进程刚启动时那是空表，
+   * 此时 `chain()` 的排序键全并列 → 退化成 members 配置序。
+   *
+   * 原先只有两个入口会等刷新：`adapter.stream/complete` 和 `/v1/*` 路由。
+   * 其余读取点（面板诊断、压缩组件选模型、网关直调）拿到的是**同一份数据**，
+   * 但如果**没人触发过刷新**，它们看到的就一直是空表 —— 数据源唯一、时序不对。
+   *
+   * 所以把门挂到运行时的统一出口上：任何要读调度结果的异步入口，
+   * 先 `await awaitQuota()`。它内部就是那个共享的 WarmupGate（幂等 + 脏了才刷），
+   * 因此不会因为多挂几处就多打上游。
+   *
+   * 未挂载时（纯测试 / 没注入装配口）它是 undefined，调用方用 `?.()` 即可。
+   */
+  awaitQuota?: () => Promise<void>;
+  /** 挂载「额度就绪门」（幂等；传 null 摘掉）。 */
+  attachQuotaGate(gate: { wait(): Promise<unknown> } | null): void;
   dispose(): void;
 }
 
@@ -432,7 +456,7 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     // 面板刷新写完缓存后会 `scheduler.invalidate()`,所以这里不必自己缓存。
     quotaSnapshot: options.quotaSnapshot
       ? () => (options.quotaSnapshot!() ?? {}) as never
-      : () => chQuotaTableForScheduler(),
+      : () => quotaHub.table() as never,
   });
   const scheduler = new Scheduler(repo, {});
   const router = new Router(repo, {
@@ -629,7 +653,7 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     workbuddySelfCheck,
   });
 
-  return {
+  const runtime: AsOneRuntime = {
     dataDir,
     dbPath,
     logDir,
@@ -654,6 +678,27 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     setSensenovaKeyRepair(fn) {
       sensenovaKeyRepair = fn;
     },
+    /**
+     * 挂在运行时上的「额度就绪门」（由插件入口注入，见 AsOneRuntime.awaitQuota）。
+     *
+     * 这里刻意用可变槽而不是构造参数：WarmupGate 依赖 panel host，而 panel host
+     * 又依赖本函数返回的 runtime —— 有循环，只能后挂。
+     */
+    awaitQuota: undefined as (() => Promise<void>) | undefined,
+    attachQuotaGate(gate) {
+      if (gate === null) {
+        runtime.awaitQuota = undefined;
+        return;
+      }
+      runtime.awaitQuota = async () => {
+        try {
+          await gate.wait();
+        } catch {
+          // 门内部已处理失败（放行 + 记降级）；这里再兜一层，
+          // 绝不让「刷新失败」升级成「请求失败」。
+        }
+      };
+    },
     dispose() {
       try {
         sensenovaPoolConnector.setAccounts([]);
@@ -665,6 +710,7 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
       db.close();
     },
   };
+  return runtime;
 }
 
 /** 供测试/装配复用:把内容档位设定读成 `ContentMode`。 */

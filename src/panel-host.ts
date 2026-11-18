@@ -66,6 +66,11 @@ export function createPanelHost(rt: AsOneRuntime, options: PanelHostOptions = {}
     restartGateway: async (): Promise<string> =>
       "插件模式:网关由宿主 DSH 进程托管,面板不能重启它(重载插件即重建路由)",
     startedAtMs: rt.startedAtMs,
+    // 额度就绪门跟着 runtime 走：面板诊断读调度排序前要先等它，否则会把
+    // 「还没刷新过」显示成「调度坏了」（2026-11-18 数据统一）。
+    awaitQuota: async () => {
+      await rt.awaitQuota?.();
+    },
     accountOverlay: rt.accountOverlay,
     setAccountEnabled: rt.setAccountEnabled,
     dataDir: rt.dataDir,

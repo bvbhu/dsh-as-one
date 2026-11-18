@@ -36,6 +36,8 @@ import type {
   QuotaSnapshot,
 } from "@as-one/core/src/collector/quota.js";
 import type { QuotaSnapshot as SchedulerQuotaSnapshot } from "@as-one/core/src/scheduler/types.js";
+// 运行期额度快照的**唯一存储**（2026-11-18 用户定案：数据唯一，只经 datahub 读写）。
+import { quotaHub, type QuotaHub } from "@as-one/core/src/datahub/index.js";
 import {
   checkinSupported,
   CheckinRegionError,
@@ -145,7 +147,7 @@ export interface ChannelsDomain {
   /** 目录内存缓存(账号 → 结果)。sensenova 域 peeking 用。 */
   chCatalogCache: Map<string, { fetchedAtMs: number; result: CatalogResult }>;
   /** 额度内存快照(credentialKey → {fetchedAtMs, snapshot});渠道页卡头聚合读它。 */
-  chQuotaCache: Map<string, { fetchedAtMs: number; snapshot: QuotaSnapshot }>;
+  chQuotaCache: QuotaHub;
   /** 目录冷却闸门(账号 → 上次拉取时刻)。 */
   chCatalogGate: Map<string, number>;
   /** 拉上游模型目录(带冷却/单飞)。 */
@@ -209,9 +211,30 @@ export interface ChannelsDomain {
   };
 }
 
-const chQuotaCache = new Map<string, { fetchedAtMs: number; snapshot: QuotaSnapshot }>();
+// ⚠️ 2026-11-18 重构：运行期额度快照的**存储与投影**已统一到
+// `@as-one/core/src/datahub`（`quotaHub`）。这里不再持有模块级 Map ——
+// 历史教训就是「两处各存一份」导致面板显示了、调度没读到。
+// `chQuotaCache` 这个名字保留为指向 hub 的**只读视图**，避免一次性改爆
+// 50+ 调用点的键形状；写入口一律走 `quotaHub.set()`。
 const chQuotaGate = new Map<string, number>();
 const chQuotaInflight = new Map<string, Promise<QuotaSnapshot | null>>();
+
+/**
+ * 额度缓存的读写门面 —— 直接委托给 `quotaHub`。
+ *
+ * 保留 `Map` 的子集接口（get/set/delete/values/keys/size/clear）是为了让
+ * `channels-sync.ts` / `channels-methods.ts` / `panel.ts` 里那些
+ * `.get(key)` / `.set(key, …)` 调用点**一行不改**就落到唯一存储上。
+ * 新增代码请直接用 `quotaHub`，别再加门面。
+ */
+/**
+ * 额度缓存 —— **直接就是 `quotaHub` 本身**（2026-11-18 重构：数据唯一）。
+ *
+ * 不再有第二份存储、也不再有门面对象：`channels-sync.ts` / `channels-methods.ts`
+ * / `panel.ts` 里的 `.get(key)` / `.set(key, …)` 直接落在唯一那份 Map 上。
+ * 新代码请直接用 `quotaHub`。
+ */
+export const chQuotaCache: QuotaHub = quotaHub;
 
 /**
  * 运行期额度快照表(按 `provider/username` 索引)→ 调度器 due-first 的 T3 排序键。
@@ -238,120 +261,26 @@ const chQuotaInflight = new Map<string, Promise<QuotaSnapshot | null>>();
 /**
  * 渠道额度缓存 → 调度器的额度表。
  *
- * ⚠️ 除了 `chQuotaCache`(trae/workbuddy/minimax/qoder 的探针结果),
- * 这里还**补上 sensenova 通用池的窗口剩余比例**(2026-11-10 用户定案):
- * sensenova 不走 `CH_QUOTA_PROVIDERS` 那套探针,但它的通用池把
- * deepseek / glm / kimi 绑在同一份额度里 —— 闸门需要知道「这个账号还剩百分之几」
- * 才能决定要不要跳过 glm/kimi 这类贵模型。
+ * ⚠️ 2026-11-18 重构：**投影逻辑已搬进 `quotaHub.table()`**，这里只做委托。
+ * 原先这段代码在 panel 包里手工拼三张表（逐账号 / provider 聚合 / sensenova 比例），
+ * 等于让「调度」反向依赖「面板」。现在存储与投影都在 `core/datahub`，
+ * 这个函数保留只为兼容既有调用点，新代码请直接用 `quotaHub.table()`。
  */
 export function chQuotaTableForScheduler(): Record<string, SchedulerQuotaSnapshot> {
-  const out: Record<string, SchedulerQuotaSnapshot> = {};
-  const snapshots: QuotaSnapshot[] = [];
-  for (const { snapshot } of chQuotaCache.values()) {
-    if (!snapshot || typeof snapshot !== "object") continue;
-    const k = snapshot.credentialKey;
-    if (typeof k !== "string" || k === "") continue;
-    snapshots.push(snapshot);
-    const row: SchedulerQuotaSnapshot = {};
-    if (typeof snapshot.remaining === "number") row.remaining = snapshot.remaining;
-    if (typeof snapshot.limit === "number") row.limit = snapshot.limit;
-    if (typeof snapshot.expires_at === "number" && snapshot.expires_at > 0) {
-      row.expires_at = snapshot.expires_at;
-    }
-    if (typeof snapshot.fetched_at === "number") row.fetched_at = snapshot.fetched_at;
-    if (snapshot.error !== null) row.error = snapshot.error;
-    out[k] = row;
-  }
-  // 多账号渠道再加一行 **provider 级聚合**(键 = 裸 provider id):
-  // 到期取最早、积分取总和(用户 2026-10-30 定案)。
-  // 调度侧 `_expiryOf()` 在凭据级快照拿不到到期时回落到这一行,详见 quotaRollupOf。
-  for (const [provider, rollup] of quotaRollupOf(snapshots)) {
-    out[provider] = {
-      remaining: rollup.remaining ?? undefined,
-      limit: rollup.limit ?? undefined,
-      expires_at: rollup.expires_at ?? undefined,
-      fetched_at: rollup.fetched_at ?? undefined,
-    };
-  }
-  // ── sensenova:窗口剩余比例(2026-11-10 用户定案)──────────────
-  //
-  // 键用 `sensenova/<username>`,正好是调度器的 quotaKey(`provider/username`)。
-  // 数据源是 sensenova 域刷新时写的模块级 `snRatioCache`(见 sensenova.ts)。
-  // ⚠️ 只补 w5_ratio / w7_ratio,**不覆盖** remaining/limit(那些字段在 sensenova
-  // 这条路上本来就没有,别伪造)。
-  for (const [username, ratios] of snPoolRatiosTable()) {
-    const k = `sensenova/${username}`;
-    const prev = out[k] ?? {};
-    out[k] = {
-      ...prev,
-      ...(ratios.w5 !== null ? { w5_ratio: ratios.w5 } : {}),
-      ...(ratios.w7 !== null ? { w7_ratio: ratios.w7 } : {}),
-    };
-  }
-  return out;
+  return quotaHub.table();
 }
 
 /** provider 级额度聚合:到期取**最早**、积分/上限取**总和**。 */
-export interface QuotaRollup {
-  /** 该 provider 下所有账号里最早的到期(epoch 秒);一个都没有则 null。 */
-  expires_at: number | null;
-  /** 所有账号剩余额度之和(只累加有数字的账号);一个都没有则 null。 */
-  remaining: number | null;
-  /** 所有账号额度上限之和(同上)。 */
-  limit: number | null;
-  /** 最近一次拉取时刻里最新的那个(epoch 秒)。 */
-  fetched_at: number | null;
-  /** 参与聚合的账号数。 */
-  accounts: number;
-}
+export type { QuotaRollup } from "@as-one/core/src/datahub/index.js";
 
 /**
  * 把逐账号额度快照折叠成 provider 级聚合。
  *
- * 为什么这么折(用户 2026-10-30 定案「多账号的情况下,给调度策略注入的到期时间取最早值,
- * 积分取总和」):
- * - **到期取最早**:同一个 provider 的 N 个号里,最早过期的那个号一旦失效,这个 provider
- *   在 due-first 的 T3 消耗档里就该往后排 —— 用最晚的到期会假装自己还有很久可用。
- * - **积分取总和**:账号池能花的额度是各号之和;取第一个号或取最小值都是谎报。
- *
- * `credentialKey` 形如 `"provider/username"`,取 `/` 前那段当 provider。
+ * ⚠️ 2026-11-18 重构：实现已搬进 `core/datahub`（`quotaRollupOf`），这里只做
+ * re-export，保持既有调用点可用。口径不变：到期取最早、积分取总和，
+ * 有 error 的快照照样参与聚合（失败那轮不代表上一轮的真值作废）。
  */
-export function quotaRollupOf(snapshots: Iterable<QuotaSnapshot>): Map<string, QuotaRollup> {
-  const out = new Map<string, QuotaRollup>();
-  for (const snapshot of snapshots) {
-    if (!snapshot || typeof snapshot !== "object") continue;
-    const key = snapshot.credentialKey;
-    if (typeof key !== "string" || key === "") continue;
-    const provider = key.split("/")[0] ?? "";
-    if (provider === "") continue;
-    const cur: QuotaRollup = out.get(provider) ?? {
-      expires_at: null,
-      remaining: null,
-      limit: null,
-      fetched_at: null,
-      accounts: 0,
-    };
-    cur.accounts += 1;
-    // 有 error 的快照仍然参与聚合:它可能只是这一次探针失败,
-    // 而 remaining/expires_at 是上一轮的真值。把失败账号整条丢掉会让总和偏小。
-    if (typeof snapshot.remaining === "number") {
-      cur.remaining = (cur.remaining ?? 0) + snapshot.remaining;
-    }
-    if (typeof snapshot.limit === "number") {
-      cur.limit = (cur.limit ?? 0) + snapshot.limit;
-    }
-    if (typeof snapshot.expires_at === "number" && snapshot.expires_at > 0) {
-      cur.expires_at =
-        cur.expires_at === null ? snapshot.expires_at : Math.min(cur.expires_at, snapshot.expires_at);
-    }
-    if (typeof snapshot.fetched_at === "number" && snapshot.fetched_at > 0) {
-      cur.fetched_at =
-        cur.fetched_at === null ? snapshot.fetched_at : Math.max(cur.fetched_at, snapshot.fetched_at);
-    }
-    out.set(provider, cur);
-  }
-  return out;
-}
+export { quotaRollupOf } from "@as-one/core/src/datahub/index.js";
 
 export function createChannelsDomain(
   ctx: PanelContext,

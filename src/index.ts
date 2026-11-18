@@ -170,6 +170,10 @@ async function startAsOne(ctx: Context): Promise<void> {
   //     不走 HTTP 路由，所以只修前者的那段预热对用户看到的请求完全无效）。
   // 它内部惰性建面板 host，提前构造是安全的。
   const warmup = createQuotaWarmup(runtime, ctx);
+  // 把门挂到运行时上：**所有**要读调度结果的异步入口都能 `await runtime.awaitQuota?.()`，
+  // 而不是各自记着"先预热"（2026-11-18 用户定案：同步到所有使用面，保证数据唯一）。
+  // 门本身幂等 + 脏了才刷，多挂几处不会多打上游。
+  runtime.attachQuotaGate(warmup);
 
   // 统一并发容量视图 + 嵌入式组件（subagent 限制 / 压缩增强）。
   // 容量视图包装 rt.ledger（真实在途账本），组件只按 setting 表的开关/配额裁决，
