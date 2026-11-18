@@ -24,14 +24,9 @@
 import React from "react";
 import { rendererApi } from "../api";
 import {
-  CooldownBox,
-  ExpiryBox,
-  ModelBox,
-  ProviderBox,
+  CooldownRuleRow,
   RULES_PRIORITY_KEYS,
-  TimesBox,
-  WeekdayBox,
-  cooldownErr,
+  TierRuleRow,
   freshGroups,
   parseRules,
   ruleCard,
@@ -39,7 +34,6 @@ import {
   serializeCooldowns,
   serializeGroups,
   serializeRulesByKey,
-  tierErr,
 } from "./settings-rules";
 import type { CooldownRule, RuleGroups, TierRule } from "./settings-rules";
 import type {
@@ -467,9 +461,10 @@ export default function SettingsPage(): React.JSX.Element {
             ))}
           </select>
         ) : kind === "json" ? (
+          // 3 行起步即可看清空数组/短对象；内容多的自己往下拖（CSS 限最大 200px）。
           <textarea
             className="ui-jsonbox"
-            rows={10}
+            rows={3}
             value={value}
             disabled={busy}
             onChange={(ev) => setValue(section, spec, ev.target.value)}
@@ -570,22 +565,6 @@ export default function SettingsPage(): React.JSX.Element {
   function removeTier(key: TierKey, i: number): void {
     updateRules({ ...ruleGroups, [key]: tierList(key).filter((_, at) => at !== i) });
   }
-  function addTime(i: number, key: TierKey): void {
-    const list = tierList(key);
-    patchTier(key, i, { times: [...list[i].times, { start: "09:00", end: "18:00" }] });
-  }
-  function removeTime(i: number, ti: number, key: TierKey): void {
-    const list = tierList(key);
-    patchTier(key, i, { times: list[i].times.filter((_, at) => at !== ti) });
-  }
-  function toggleDay(i: number, d: number, key: TierKey): void {
-    const list = tierList(key);
-    const r = list[i];
-    const weekdays = r.weekdays.includes(d)
-      ? r.weekdays.filter((w) => w !== d)
-      : [...r.weekdays, d];
-    patchTier(key, i, { weekdays });
-  }
   function patchCooldown(i: number, patch: Partial<CooldownRule>): void {
     updateRules({ ...ruleGroups, cooldown: ruleGroups.cooldown.map((r, at) => (at === i ? { ...r, ...patch } : r)) });
   }
@@ -643,6 +622,9 @@ export default function SettingsPage(): React.JSX.Element {
    * 2026-11-03 用户定案(二):卡片标题口径统一 —— P1~P4 副标题一律「调度优先级」,
    * 「禁用」「冷却」两张卡只留徽标(副标题传空串,ruleCard 不渲染副标题 span)。
    * 2026-11-07 起不再传任何行为说明(hint),档位差异只由徽标承载。
+   *
+   * 2026-11-18 重做:一条规则 = 一行(`TierRuleRow`),不再是一条规则 5 个 .box
+   * 纵向堆叠。星期与时段在这行里是**两个独立段**,可只设其一。
    */
   function schedulerPanels(): React.JSX.Element[] {
     const g = ruleGroups;
@@ -650,38 +632,24 @@ export default function SettingsPage(): React.JSX.Element {
 
     for (const p of TIER_PANELS) {
       const key = p.key as TierKey;
+      const list = tierList(key);
       out.push(
         <React.Fragment key={p.key}>
           {ruleCard(
             p.badge,
             p.title,
-            tierList(key),
+            list.length,
             () => addTier(key),
-            (r, i) => {
-              const e = tierErr(r);
-              return (
-                <>
-                  <div className="blocks-container">
-                    <ProviderBox
-                      value={r.provider}
-                      options={providerOptions}
-                      onSelect={(v) => patchTier(key, i, { provider: v, model: "" })} // 联动重置:换 Provider 清空 Model
-                      onDelete={() => removeTier(key, i)}
-                    />
-                    <ModelBox
-                      optional
-                      value={r.model}
-                      options={modelOptionsFor(r.provider)}
-                      onSelect={(v) => patchTier(key, i, { model: v })}
-                    />
-                    <ExpiryBox value={r.expires_at} onChange={(v) => patchTier(key, i, { expires_at: v })} />
-                    <WeekdayBox idPrefix={`tier-${key}-${i}`} weekdays={r.weekdays} onToggle={(d) => toggleDay(i, d, key)} />
-                    <TimesBox times={r.times} onPatch={(next) => patchTier(key, i, { times: next })} />
-                  </div>
-                  {e ? <p className="rule-err">{e}</p> : null}
-                </>
-              );
-            },
+            list.map((r, i) => (
+              <TierRuleRow
+                key={i}
+                rule={r}
+                providerOptions={providerOptions}
+                modelOptions={modelOptionsFor(r.provider)}
+                onPatch={(patch) => patchTier(key, i, patch)}
+                onRemove={() => removeTier(key, i)}
+              />
+            )),
           )}
         </React.Fragment>,
       );
@@ -693,25 +661,17 @@ export default function SettingsPage(): React.JSX.Element {
         {ruleCard(
           "冷却",
           "",
-          g.cooldown,
+          g.cooldown.length,
           addCooldown,
-          (r, i) => {
-            const e = cooldownErr(r);
-            return (
-              <>
-                <div className="blocks-container">
-                  <ProviderBox
-                    value={r.provider}
-                    options={providerOptions}
-                    onSelect={(v) => patchCooldown(i, { provider: v })}
-                    onDelete={() => removeCooldown(i)}
-                  />
-                  <CooldownBox value={r.cooldown} onChange={(v) => patchCooldown(i, { cooldown: v })} />
-                </div>
-                {e ? <p className="rule-err">{e}</p> : null}
-              </>
-            );
-          },
+          g.cooldown.map((r, i) => (
+            <CooldownRuleRow
+              key={i}
+              rule={r}
+              providerOptions={providerOptions}
+              onPatch={(patch) => patchCooldown(i, patch)}
+              onRemove={() => removeCooldown(i)}
+            />
+          )),
         )}
       </React.Fragment>,
     );
@@ -755,12 +715,9 @@ export default function SettingsPage(): React.JSX.Element {
       <section key="route" id="route" className="ui-card">
         <div className="ui-card-head">
           <h2 className="ui-card-title">辅助请求路由</h2>
-          <span className="ui-card-sub">压缩摘要 / 图片解析 / 会话标题走哪个模型</span>
         </div>
-        <p className="ui-field-hint">
-          宿主除了你这一轮对话,还会自己发三种辅助请求。这里给每种请求单独指定 as-one 里的
-          <b>逻辑模型</b>;留空 = <b>不重路由</b>,按客户端给的模型原样走。配了库里没有的模型会回落原模型并告警。
-        </p>
+        {/* 2026-11-18 用户定案：副标题与整段说明都去掉 —— 卡片标题 + 三个下拉
+            已经自解释（每行左侧就是「压缩摘要 / 图片解析 / 会话标题」）。 */}
         <div className="ui-fields">
           {specs.map((spec) => {
             const value = draft.route?.[spec.key] ?? "";

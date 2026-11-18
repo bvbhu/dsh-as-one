@@ -204,39 +204,69 @@ export function AsOneCurrentModelBadge(
       <span style={{ flex: "0 0 auto", opacity: 0.75 }}>
         {route.in_flight ? "正在使用" : "预计使用"}
       </span>
-      {/* 供应商:同一台真实模型可能由不同渠道供着(sensenova / qoder / trae …),
-          只写模型名分不出是哪个渠道在应答,所以单独占一枚小标签。标签文案取服务端
-          给的 `provider_display_name`(人话名,未知 provider 时就是 id 本身 ——
-          宁可显示 id,不编名),而不是在这猜映射。 */}
-      {route.provider !== "" && (
+      {/*
+        供应商标签 —— 2026-11-18 用户定案：**不要和逻辑模型挨在一起**。
+        逻辑模型名是用户自己起的（可能本身就叫「OpenRouter Free」），
+        再在它前面贴一枚「OpenRouter」小标签，看起来像逻辑模型名的一部分，
+        分不清哪是逻辑模型、哪是渠道。所以挪到「→ 真实模型」这一侧：
+        视觉上变成「逻辑模型 → 供应商 真实模型」。
+      */}
+      <span
+        style={{
+          minWidth: 0,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          overflow: "hidden",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
         <span
-          data-as-one-current-model-provider=""
-          title={`供应商:${providerLabelOf(route)}`}
+          title={
+            route.in_flight
+              ? `本次请求正在使用 ${providerLabelOf(route)}/${route.model}`
+              : `下一条消息预计使用 ${providerLabelOf(route)}/${route.model}`
+          }
           style={{
             flex: "0 0 auto",
-            maxWidth: 96,
-            padding: "0 4px",
-            borderRadius: 3,
-            fontSize: 10,
-            lineHeight: "14px",
-            color: "var(--dsw-alias-label-tertiary, #8b94a3)",
-            background: "var(--dsw-alias-bg-secondary, rgba(127, 127, 127, 0.12))",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {route.is_logical && logicalLabelOf(route) !== null
+            ? `${logicalLabelOf(route)} →`
+            : ""}
+        </span>
+        {route.provider !== "" && (
+          <span
+            data-as-one-current-model-provider=""
+            title={`供应商:${providerLabelOf(route)}`}
+            style={{
+              flex: "0 0 auto",
+              maxWidth: 96,
+              padding: "0 4px",
+              borderRadius: 3,
+              fontSize: 10,
+              lineHeight: "14px",
+              color: "var(--dsw-alias-label-tertiary, #8b94a3)",
+              background: "var(--dsw-alias-bg-secondary, rgba(127, 127, 127, 0.12))",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {providerLabelOf(route)}
+          </span>
+        )}
+        <span
+          style={{
+            minWidth: 0,
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
         >
-          {providerLabelOf(route)}
+          {realNameOf(route)}
         </span>
-      )}
-      <span
-        style={{
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {labelOf(route)}
       </span>
     </span>
   );

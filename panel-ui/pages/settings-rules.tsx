@@ -1,5 +1,6 @@
 /* ── 调度规则编辑器域(第十三刀从 SettingsPage.tsx 抽出,2026-10-29) ──
- * 五档规则模型/校验/序列化 + 7 个槽位卡片组件 + ruleCard 包装。
+ * 五档规则模型/校验/序列化 + 行组件(DayPicker / TimeSummary / TimeEditor /
+ * TierRuleRow / CooldownRuleRow)+ ruleCard 包装。
  * 依赖: 仅 React;不引用设置页常量(SECTION_TITLES 等)与退避曲线。 */
 
 import React from "react";
@@ -243,8 +244,10 @@ function validDate(s: string): boolean {
 
 function tierErr(r: TierRule): string | null {
   if (!r.provider.trim()) return "provider 必填";
-  // ⚠️ 引擎按 provider+model 精确匹配端点:带生效时间段的规则缺 model 永不命中 → 必填。
-  if (r.times.length > 0 && !r.model.trim()) return "带生效时间段的规则必须填 model";
+  // 2026-11-18:去掉「带时段必须填 model」这条限制。
+  // 引擎侧已修好空 model 的匹配（`_rulesFor` 现在把 "" 解释成「该 provider
+  // 的全部模型」），所以「只填 provider + 时段」是合法且有用的写法 ——
+  // 用户把 trae 整家压进 P4 时段，正是靠它。旧校验只会让人配不出来。
   for (const t of r.times) {
     if (!HHMM_RE.test(t.start) || !HHMM_RE.test(t.end)) return "时段须为 HH:MM 格式";
     if (t.start === t.end) return "开始与结束不能相同";
@@ -279,140 +282,161 @@ function rulesProblem(g: RuleGroups): string | null {
   return null;
 }
 
-/* ── 调度规则卡片组件(2026-10-24 按设计稿重做:5 个独立模块框 + 严格断行星期) ── */
+/* ── 调度规则行组件(2026-11-18 重做:单规则单行 + 星期/时段独立配置) ──
+ *
+ * 旧版一条规则 = 5 个纵向堆叠的 .box(Provider / Model / 到期时间 / 生效星期 /
+ * 生效时间段),占 4~5 行、约 150px 高。现在压成一行 .rule-row:窄屏按「段」折行,
+ * 1440 宽下一行放下。段序 = 供应商 · 模型 · 到期 · 星期 · 时段 · 删除。
+ *
+ * 星期与时段是**两个独立段**,各自可为空、互不牵连(这正是「拆分时间与星期」):
+ *   - 星期全灭(7 个方块都不亮)= 每天。引擎 `isBlackout` 对空 weekdays 视为不限,
+ *     `_staticRulesFor` 对空 weekdays 同样放行,所以空 = 不限是既有语义,不是新约定;
+ *   - 时段空 = 全天。引擎只在 `window.times` 非空时才建时段规则(`_readConfig`);
+ *   - 两者都不写 → 整条规则「恒为该档」(`serializeGroups` 的 `winOf` 会省掉整个
+ *     window 对象,JSON 里不会多出空 `{}`)。
+ *
+ * 完整编辑能力不丢:时段点行尾 ▾ 展开成完整的起止时间编辑器(可增删多段),
+ * 其余字段本身就是内联控件;详情靠 title 悬浮提示承载。
+ */
 
 /** 候选列表兜底:存量配置手填的 provider/model 不在候选中时注入尾部,防止回显丢失。 */
 function withCurrent(options: string[], current: string): string[] {
   return current && !options.includes(current) ? [...options, current] : options;
 }
 
-function ProviderBox(props: {
-  value: string;
-  options: string[];
-  onSelect: (v: string) => void;
-  onDelete: () => void;
-}): React.JSX.Element {
-  return (
-    <div className="box box-provider">
-      <div className="box-label">
-        <span>
-          Provider <span className="req">*</span>
-        </span>
-        <button type="button" className="btn-del" onClick={props.onDelete}>
-          删除规则
-        </button>
-      </div>
-      <select className="input-control" value={props.value} onChange={(ev) => props.onSelect(ev.target.value)}>
-        <option value="">请选择 Provider</option>
-        {withCurrent(props.options, props.value).map((p) => (
-          <option key={p} value={p}>
-            {p}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
+/** 单行里最多直接摆几个时段 chip,其余收成「+N」(完整列表在展开区)。 */
+const INLINE_TIME_SPANS = 2;
 
-function ModelBox(props: {
-  value: string;
-  options: string[];
-  onSelect: (v: string) => void;
-  optional?: boolean;
-}): React.JSX.Element {
-  return (
-    <div className="box box-model">
-      <div className="box-label">
-        <span>Model{props.optional ? "(可选)" : ""}</span>
-      </div>
-      <select className="input-control" value={props.value} onChange={(ev) => props.onSelect(ev.target.value)}>
-        <option value="">留空 = 全部</option>
-        {withCurrent(props.options, props.value).map((m) => (
-          <option key={m} value={m}>
-            {m}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-function ExpiryBox(props: {
-  value: string;
-  onChange: (v: string) => void;
-}): React.JSX.Element {
-  // ⚠️ 这里**不能**加 `required`(用户 m11847 报「到期时间无法清除」):
-  // Chromium 对 required 的文本类输入**不渲染右侧的 × 清除按钮**
-  // (TextFieldInputType::HasVisibleClearButton() = !IsRequired()),于是只能
-  // 手动逐段删 yyyy/mm/dd;而且到期时间本身是可选的,required 还会让空值
-  // 直接卡住提交。
-  // 空态占位符改用 JS 驱动的 `.is-empty` 类隐藏(见 styles.css)——
-  // `:invalid` 只在 required 时才匹配空值,去掉 required 后就不再可靠。
-  return (
-    <div className="box box-expiry">
-      <div className="box-label">
-        <span>到期时间</span>
-      </div>
-      <input
-        type="date"
-        className={`input-control${props.value ? "" : " is-empty"}`}
-        value={props.value}
-        onChange={(ev) => props.onChange(ev.target.value)}
-      />
-    </div>
-  );
-}
-
-function WeekdayBox(props: {
-  idPrefix: string;
+/**
+ * 星期段:7 个小方块内联,各自独立开关。
+ *
+ * 一个都不选 = 每天(而不是「永不生效」):空 weekdays 在引擎里就是不限,
+ * 所以空态显式标出「每天」,避免用户以为规则废了;非空态给一个清空按钮。
+ */
+function DayPicker(props: {
   weekdays: number[];
   onToggle: (d: number) => void;
+  onClear: () => void;
 }): React.JSX.Element {
-  // 一二三四五 / 六日 两组:空间不足时「六日」整体换行,不会在一至五中间断行。
-  const renderDay = (w: { k: number; label: string }) => {
-    const id = `${props.idPrefix}-w${w.k}`;
-    return (
-      <React.Fragment key={w.k}>
-        <input type="checkbox" id={id} checked={props.weekdays.includes(w.k)} onChange={() => props.onToggle(w.k)} />
-        <label htmlFor={id}>{w.label}</label>
-      </React.Fragment>
-    );
-  };
+  const empty = props.weekdays.length === 0;
   return (
-    <div className="box box-weekdays">
-      <div className="box-label">
-        <span>生效星期</span>
+    <div className="rr-seg rr-days">
+      <span className="rr-lab" title="生效星期(1=周一 .. 7=周日);全部不选 = 每天">
+        星期
+      </span>
+      <div className="rr-day-set" role="group" aria-label="生效星期">
+        {WEEKDAYS.map((w) => {
+          const on = props.weekdays.includes(w.k);
+          return (
+            <button
+              type="button"
+              key={w.k}
+              className={"rr-day" + (on ? " on" : "")}
+              aria-pressed={on}
+              aria-label={`周${w.label}`}
+              title={`周${w.label}`}
+              onClick={() => props.onToggle(w.k)}
+            >
+              {w.label}
+            </button>
+          );
+        })}
       </div>
-      <div className="weekday-flex">
-        <div className="weekday-group">{WEEKDAYS.slice(0, 5).map(renderDay)}</div>
-        <div className="weekday-group">{WEEKDAYS.slice(5).map(renderDay)}</div>
-      </div>
+      {empty ? (
+        <span className="rr-note" title="没勾任何星期 = 每天生效">
+          每天
+        </span>
+      ) : (
+        <button type="button" className="rr-clear" title="清空星期(改为每天)" onClick={props.onClear}>
+          ✕
+        </button>
+      )}
     </div>
   );
 }
 
-function TimesBox(props: { times: TimeSpan[]; onPatch: (next: TimeSpan[]) => void }): React.JSX.Element {
+/**
+ * 时段段:紧凑 chip(`08:00-23:00`)+ 行尾展开开关。
+ *
+ * chip 只做**展示**(title 里给完整语义),编辑走展开区 —— 这样一行里不会出现
+ * 4 个 time input 把行高撑起来。时段为空时显式标「全天」。
+ */
+function TimeSummary(props: {
+  times: TimeSpan[];
+  open: boolean;
+  onToggleOpen: () => void;
+}): React.JSX.Element {
+  const shown = props.times.slice(0, INLINE_TIME_SPANS);
+  const extra = props.times.length - shown.length;
   return (
-    <div className="box box-times">
-      <div className="box-label">
-        <span>生效时间段</span>
+    <div className="rr-seg rr-times">
+      <span className="rr-lab" title="生效时间段;不设 = 全天">
+        时段
+      </span>
+      {props.times.length === 0 ? (
+        <span className="rr-note" title="没设时间段 = 全天生效">
+          全天
+        </span>
+      ) : (
+        <span className="rr-spans">
+          {shown.map((t, i) => (
+            <span key={i} className="rr-span" title={`${t.start} ~ ${t.end}(左闭右开)`}>
+              {t.start}-{t.end}
+            </span>
+          ))}
+          {extra > 0 ? (
+            <span
+              className="rr-span rr-span-more"
+              title={props.times
+                .slice(INLINE_TIME_SPANS)
+                .map((t) => `${t.start}-${t.end}`)
+                .join("、")}
+            >
+              +{extra}
+            </span>
+          ) : null}
+        </span>
+      )}
+      <button
+        type="button"
+        className={"rr-caret" + (props.open ? " on" : "")}
+        aria-expanded={props.open}
+        aria-label={props.open ? "收起时间段编辑" : "展开时间段编辑"}
+        title={props.open ? "收起时间段编辑" : "展开时间段编辑"}
+        onClick={props.onToggleOpen}
+      >
+        ▾
+      </button>
+    </div>
+  );
+}
+
+/** 时段展开区:完整的多段起止时间编辑器(增 / 删 / 改)。 */
+function TimeEditor(props: { times: TimeSpan[]; onPatch: (next: TimeSpan[]) => void }): React.JSX.Element {
+  return (
+    <div className="rule-detail">
+      <div className="rd-head">
+        <span className="rd-title">生效时间段</span>
+        <span className="rd-hint">左闭右开;不设 = 全天。跨午夜写 22:00 ~ 06:00。</span>
       </div>
-      <div className="time-flex">
+      <div className="rd-times">
         {props.times.map((t, ti) => (
-          <div key={ti} className="time-row">
+          <div className="rd-time-row" key={ti}>
             <input
               type="time"
               className="input-control"
               value={t.start}
+              aria-label="开始时间"
               onChange={(ev) =>
                 props.onPatch(props.times.map((x, at) => (at === ti ? { ...x, start: ev.target.value } : x)))
               }
             />
-            <span className="separator">~</span>
+            <span className="rd-tilde">~</span>
             <input
               type="time"
               className="input-control"
               value={t.end}
+              aria-label="结束时间"
               onChange={(ev) =>
                 props.onPatch(props.times.map((x, at) => (at === ti ? { ...x, end: ev.target.value } : x)))
               }
@@ -420,6 +444,7 @@ function TimesBox(props: { times: TimeSpan[]; onPatch: (next: TimeSpan[]) => voi
             <button
               type="button"
               className="btn-del-time"
+              title="删除该时段"
               onClick={() => props.onPatch(props.times.filter((_, at) => at !== ti))}
             >
               ×
@@ -438,19 +463,149 @@ function TimesBox(props: { times: TimeSpan[]; onPatch: (next: TimeSpan[]) => voi
   );
 }
 
-function CooldownBox(props: { value: number | ""; onChange: (v: number | "") => void }): React.JSX.Element {
+/**
+ * 一条档位规则 = 一行。
+ *
+ * ⚠️ 到期时间输入**不能**加 `required`(用户 m11847 报「到期时间无法清除」):
+ * Chromium 对 required 的文本类输入**不渲染右侧的 × 清除按钮**
+ * (`TextFieldInputType::HasVisibleClearButton() = !IsRequired()`),于是只能手动
+ * 逐段删 yyyy/mm/dd;而且到期时间本身可选,required 还会让空值卡住提交。
+ * 空态占位符改用 JS 驱动的 `.is-empty` 类隐藏(见 styles.css)——
+ * `:invalid` 只在 required 时才匹配空值,去掉 required 后就不再可靠。
+ */
+function TierRuleRow(props: {
+  rule: TierRule;
+  providerOptions: string[];
+  modelOptions: string[];
+  onPatch: (patch: Partial<TierRule>) => void;
+  onRemove: () => void;
+}): React.JSX.Element {
+  const [openTimes, setOpenTimes] = React.useState(false);
+  const r = props.rule;
+  const err = tierErr(r);
   return (
-    <div className="box box-cooldown">
-      <div className="box-label">
-        <span>冷却(分钟)</span>
+    <div className="rule-item">
+      <div className="rule-row">
+        <label className="rr-seg rr-provider" title="供应商(必填)">
+          <span className="rr-lab">
+            供应商<span className="rr-req">*</span>
+          </span>
+          <select
+            className="input-control"
+            value={r.provider}
+            // 换 Provider 联动重置 Model:旧 model 属于旧供应商,留着必然永不命中。
+            onChange={(ev) => props.onPatch({ provider: ev.target.value, model: "" })}
+          >
+            <option value="">请选择</option>
+            {withCurrent(props.providerOptions, r.provider).map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="rr-seg rr-model" title="留空 = 该供应商的全部模型">
+          <span className="rr-lab">模型</span>
+          <select
+            className="input-control"
+            value={r.model}
+            onChange={(ev) => props.onPatch({ model: ev.target.value })}
+          >
+            <option value="">全部</option>
+            {withCurrent(props.modelOptions, r.model).map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="rr-seg rr-expiry" title="到期日(可留空)">
+          <span className="rr-lab">到期</span>
+          <input
+            type="date"
+            className={`input-control${r.expires_at ? "" : " is-empty"}`}
+            value={r.expires_at}
+            onChange={(ev) => props.onPatch({ expires_at: ev.target.value })}
+          />
+        </label>
+
+        <DayPicker
+          weekdays={r.weekdays}
+          onToggle={(d) =>
+            props.onPatch({
+              weekdays: r.weekdays.includes(d)
+                ? r.weekdays.filter((x) => x !== d)
+                : [...r.weekdays, d].sort((a, b) => a - b),
+            })
+          }
+          onClear={() => props.onPatch({ weekdays: [] })}
+        />
+
+        <TimeSummary times={r.times} open={openTimes} onToggleOpen={() => setOpenTimes((v) => !v)} />
+
+        <div className="rr-actions">
+          <button type="button" className="rr-del" title="删除这条规则" aria-label="删除这条规则" onClick={props.onRemove}>
+            ×
+          </button>
+        </div>
       </div>
-      <input
-        type="number"
-        min={1}
-        className="input-control"
-        value={props.value}
-        onChange={(ev) => props.onChange(ev.target.value === "" ? "" : Number(ev.target.value))}
-      />
+
+      {openTimes ? <TimeEditor times={r.times} onPatch={(next) => props.onPatch({ times: next })} /> : null}
+      {err ? <p className="rule-err">{err}</p> : null}
+    </div>
+  );
+}
+
+/** 冷却覆盖规则 = 一行(供应商 + 分钟数)。 */
+function CooldownRuleRow(props: {
+  rule: CooldownRule;
+  providerOptions: string[];
+  onPatch: (patch: Partial<CooldownRule>) => void;
+  onRemove: () => void;
+}): React.JSX.Element {
+  const err = cooldownErr(props.rule);
+  return (
+    <div className="rule-item">
+      <div className="rule-row">
+        <label className="rr-seg rr-provider" title="供应商(必填)">
+          <span className="rr-lab">
+            供应商<span className="rr-req">*</span>
+          </span>
+          <select
+            className="input-control"
+            value={props.rule.provider}
+            onChange={(ev) => props.onPatch({ provider: ev.target.value })}
+          >
+            <option value="">请选择</option>
+            {withCurrent(props.providerOptions, props.rule.provider).map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="rr-seg rr-cooldown" title="失败后多久不再选该供应商">
+          <span className="rr-lab">冷却</span>
+          <input
+            type="number"
+            min={1}
+            className="input-control"
+            value={props.rule.cooldown}
+            onChange={(ev) => props.onPatch({ cooldown: ev.target.value === "" ? "" : Number(ev.target.value) })}
+          />
+          <span className="rr-unit">分钟</span>
+        </label>
+
+        <div className="rr-actions">
+          <button type="button" className="rr-del" title="删除这条规则" aria-label="删除这条规则" onClick={props.onRemove}>
+            ×
+          </button>
+        </div>
+      </div>
+      {err ? <p className="rule-err">{err}</p> : null}
     </div>
   );
 }
@@ -463,20 +618,21 @@ function CooldownBox(props: { value: number | ""; onChange: (v: number | "") => 
  * 「+ 添加规则」按钮放在标题行右侧,规则体纵向堆叠,空组给提示。
  *
  * 2026-11-03 用户定案(二):卡片标题口径统一 —— P1~P4 的副标题一律叫
- * 「调度优先级」,「禁用」「冷却」两张卡只留徽标、副标题留空(此时不渲染副标题 span)。
- * 2026-11-07 起各档不再传任何行为说明(hint),档位差异只由徽标承载;hint 参数保留可选,
- * 为将来可能的卡片级提示预留,但不渲染任何默认文案。
+ * 「调度优先级」,「禁用」「冷却」两张卡只留徽标、副标题留空。
+ *
+ * 2026-11-18:规则体从「5 个 .box 纵排」换成 `.rule-rows > .rule-item > .rule-row`,
+ * 分隔线只由 `.rule-item + .rule-item` 提供(见 styles.css 根因注释)。
+ * 标题行右侧顺带给出条数(「3 条」),这样删到空能立刻看出来。
  *
  * 根节点同时挂 `.ui-card` 与 `.asone-scheduler`:前者提供卡片外观,
- * 后者提供 .box / .blocks-container / .input-control 等编辑器样式作用域。
+ * 后者提供 `--asec-*` 变量与 `.input-control` 等编辑器样式作用域。
  */
-function ruleCard<T>(
+function ruleCard(
   badge: string,
   title: string,
-  rules: T[],
+  count: number,
   add: () => void,
-  render: (r: T, i: number) => React.JSX.Element,
-  hint?: string,
+  rows: React.ReactNode,
 ): React.JSX.Element {
   return (
     <section className="ui-card rule-panel asone-scheduler">
@@ -484,20 +640,20 @@ function ruleCard<T>(
         <h2 className="ui-card-title">
           <span className="badge">{badge}</span>
           {title ? <span>{title}</span> : null}
+          {count > 0 ? <span className="ui-card-sub">{count} 条</span> : null}
         </h2>
         <button type="button" className="btn-add" onClick={add}>
           + 添加规则
         </button>
       </div>
-      {hint ? <p className="card-hint">{hint}</p> : null}
-      {rules.length === 0 ? <p className="card-empty">暂无规则,点右上「+ 添加规则」新增</p> : null}
-      {rules.map((r, i) => (
-        <React.Fragment key={i}>{render(r, i)}</React.Fragment>
-      ))}
+      {count === 0 ? (
+        <p className="card-empty">暂无规则,点右上「+ 添加规则」新增</p>
+      ) : (
+        <div className="rule-rows">{rows}</div>
+      )}
     </section>
   );
 }
-
 
 /* ── 第十三刀:规则编辑器域导出面(主组件 SettingsPage 引用) ── */
 export {
@@ -515,12 +671,11 @@ export {
   cooldownErr,
   rulesProblem,
   withCurrent,
-  ProviderBox,
-  ModelBox,
-  ExpiryBox,
-  WeekdayBox,
-  TimesBox,
-  CooldownBox,
+  DayPicker,
+  TimeSummary,
+  TimeEditor,
+  TierRuleRow,
+  CooldownRuleRow,
   ruleCard,
 };
 export type { TimeSpan, TierRule, CooldownRule, RuleGroups };

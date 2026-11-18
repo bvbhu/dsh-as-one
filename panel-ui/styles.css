@@ -232,10 +232,9 @@ body {
   width: 100%;
   /* ⚠️ 2026-10-23:1180px → 1400px。sensenova 页要 3 张 420px 账号卡同行     (3×420 + 2×16 = 1292px 内容 + padding 40px = 1332px),1180px 放不下
      只能两卡一行1400px 富余,且窗口默认宽随之提到 1440px(index.ts)。     ⚠️ 2026-10-25(m14379):1400px →1680px。920px 窗口下要让设置页
-     「调度规则」每张卡里的 5 个 box(provider/model/到期/星期/时间段)排成
-     一行:box 最小宽 160+280+180+300+280 = 1200px + 4×20 gap = 1280px,
-     加 blocks-container padding 40px = 1320px,加两侧padding 40px ≈1400px
-     (2026-10-25 m14922 移除设置页左侧 ui-nav,不再占 168px+24px) → 1680px 富余。     1920 窗口下居中,左右各留 120px。*/
+     「调度规则」每张卡里的规则排成一行。2026-11-18 重做后一条规则就是一行
+     (.rule-row 的 6 个 .rr-seg),需要约 1050px;1680px 富余,1920 窗口下居中,
+     左右各留 120px。*/
   max-width: 1680px;
   margin: 0 auto;
   padding: 16px 20px 40px;
@@ -1912,6 +1911,8 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   resize: vertical;
+  /* rows=3 起步；内容多时手动往下拖，但不许拖到把整张卡片撑满屏。 */
+  max-height: 200px;
 }
 
 .ui-jsonbox:focus {
@@ -1972,9 +1973,22 @@ body {
   white-space: nowrap;
 }
 
-/* ── 调度规则编辑器(2026-10-24 按设计稿重做:5 块弹性布局 + 严格断行星期) ── */
-/* 全部 scoped 到.asone-scheduler,避免污染全局。   2026-10-24 用户要求「配色协调」改用页面全局调色条   (--bg-card var(--surface) / --border var(--border) / --text-soft var(--text-soft) / --dim var(--dim)
-   / --accent var(--accent) / --bad var(--bad)),与其它卡片同色系。*/
+/* ── 调度规则编辑器(2026-11-18 重做:一条规则一行) ──────────────────
+ *
+ * 结构:section.ui-card.rule-panel.asone-scheduler
+ *         > .ui-card-head(badge + 副标题 + 条数 + 添加按钮)
+ *         > .rule-rows > .rule-item > .rule-row > .rr-seg × N
+ *                        > .rule-item > .rule-detail(时段展开区,按需)
+ *
+ * ⚠️ 分隔线的历史 bug(本次修掉,根因见 `.rule-rows` 注释):旧版每条规则是
+ * 一个 `.blocks-container`,靠 `.rule-panel .blocks-container { padding: 12px 0 0;
+ * border-top: 1px solid }` 画分隔线 —— **padding-bottom 为 0**,于是上一个
+ * `.box` 的 border-bottom 与下一条的 border-top 严丝合缝贴在一起(实测间距
+ * 0.0px),两条 1px 边框并成一道压在上一元素底边上的粗线。
+ *
+ * 全部 scoped 到 .asone-scheduler,避免污染全局;颜色一律走主题令牌
+ * (--border / --text / --dim / --accent / --bad 等,均来自 --dsw-alias-*)。
+ */
 .asone-scheduler {
   --asec-bg-card: var(--bg-card);
   --asec-bg-box: var(--dsw-alias-bg-layer-2, #182130);
@@ -1987,43 +2001,17 @@ body {
   --asec-danger: var(--bad);
 }
 
-/* 大卡片 */
-.asone-scheduler .rule-card {
-  background: var(--asec-bg-card);
-  border: 1px solid var(--asec-border);
-  border-radius: 8px;
-  margin-bottom: 24px;
-  overflow: hidden;
-}
-/* 同档多条规则:相邻两块之间加分隔线 */
-.asone-scheduler .blocks-container + .blocks-container {
-  border-top: 1px solid var(--asec-border);
-}
-
-/* 卡片头部 */
-.asone-scheduler .card-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--asec-border);
-}
 /* 档位徽章(作用域内覆盖全局 .badge) */
 .asone-scheduler .badge {
   display: inline-block;
   background: var(--asec-primary);
   color: var(--on-accent);
   font-weight: bold;
-  font-size: 14px;
-  padding: 4px 12px;
+  font-size: 12px;
+  padding: 2px 10px;
   border-radius: 6px;
   border: 1px solid transparent;
   white-space: nowrap;
-}
-/* 档位名(新增,设计稿只有徽章 + 按钮) */
-.asone-scheduler .card-subtitle {
-  color: var(--asec-muted);
-  font-size: 13px;
 }
 .asone-scheduler .btn-add {
   background: transparent;
@@ -2038,79 +2026,134 @@ body {
   background: var(--surface-hover);
 }
 
-/* 空组 / 卡片内提示(新增) */
+/* 空组提示 */
 .asone-scheduler .card-empty {
   margin: 0;
-  padding: 20px;
+  padding: 14px 0 0;
   color: var(--asec-muted);
   font-size: 13px;
-  border-bottom: 1px solid var(--asec-border);
-}
-.asone-scheduler .card-hint {
-  margin: 0;
-  padding: 10px 20px;
-  color: var(--asec-muted);
-  font-size: 12px;
-  border-bottom: 1px solid var(--asec-border);
 }
 
-/* 核心内容区:弹性布局容器 */
-.asone-scheduler .blocks-container {
-  padding: 20px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20px;
-}
-
-/* 5 个独立模块的公共样式 */
-.asone-scheduler .box {
-  background: var(--asec-bg-box);
-  border: 1px solid var(--asec-border);
-  border-radius: 8px;
-  padding: 16px;
+/* ── 规则列表:分隔线唯一出处 ────────────────────────────────────────
+ * 分隔线只由 `.rule-item + .rule-item` 的 border-top 提供,并且每个
+ * `.rule-item` **上下各有等量 padding**(10px),所以线两侧永远有留白,
+ * 不可能再和上一个元素的边框贴在一起。
+ * ⚠️ 不要在这里或 .rule-item 上加负 margin —— 那正是旧 bug 的成因之一
+ * (旧的 `.rule-err { margin: -8px 20px 20px }` 把错误文案上提 8px 压进
+ * 上一个 .box,实测重叠 8.0px)。
+ */
+.asone-scheduler .rule-rows {
   display: flex;
   flex-direction: column;
-  gap: 12px;
 }
-.asone-scheduler .box-label {
+.asone-scheduler .rule-item {
+  padding: 10px 0;
+}
+.asone-scheduler .rule-item + .rule-item {
+  border-top: 1px solid var(--asec-border);
+}
+/* 首条不再叠一次卡片头的下边距(.ui-card-head 自带 10px)。 */
+.asone-scheduler .rule-rows > .rule-item:first-child {
+  padding-top: 2px;
+}
+
+/* ── 一行布局 ──────────────────────────────────────────────────────── */
+.asone-scheduler .rule-row {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px 14px;
+  min-width: 0;
+}
+
+/* 一个「段」= 小标签 + 控件;窄屏整体折行,不在段内部断开 */
+.asone-scheduler .rr-seg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.asone-scheduler .rr-lab {
+  flex: none;
   color: var(--asec-muted);
-  font-size: 13px;
-  height: 20px;
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: help;
 }
-.asone-scheduler .box-label .req {
+.asone-scheduler .rr-req {
   color: var(--asec-danger);
-  margin-left: 4px;
+  margin-left: 2px;
+}
+.asone-scheduler .rr-unit {
+  flex: none;
+  color: var(--asec-muted);
+  font-size: 11.5px;
+}
+/* 空态说明(「每天」/「全天」):让「不设 = 不限」这件事显式可见 */
+.asone-scheduler .rr-note {
+  flex: none;
+  color: var(--asec-muted);
+  font-size: 11.5px;
+  font-style: normal;
+  cursor: help;
 }
 
-/* 独立的宽度控制(与设计稿一致) */
-.asone-scheduler .box-provider { flex: 1 1 160px; min-width: 160px; }
-.asone-scheduler .box-model    { flex: 2 1 280px; min-width: 280px; }
-.asone-scheduler .box-expiry   { flex: 1 1 180px; min-width: 180px; }
-.asone-scheduler .box-weekdays { flex: 3 1 300px; min-width: 300px; } /* 宽度不足时触发六日整体换行*/
-.asone-scheduler .box-times    { flex: 2 1 300px; min-width: 280px; }
-.asone-scheduler .box-cooldown { flex: 1 1 180px; min-width: 160px; }
-
-/* 删除规则按钮 */
-.asone-scheduler .btn-del {
-  background: none;
-  border: none;
-  color: var(--asec-danger);
-  cursor: pointer;
-  font-size: 13px;
+/* 供应商 / 模型:可伸缩但有上限。
+ * 完全不伸缩会在行尾留一大片空白(× 被 margin-left:auto 顶到最右);
+ * 完全自由伸缩在 1440 宽下又会各占 300px、把行摊得太散。取中间:
+ * flex-basis 150/160,最多长到 260/280,剩下的空白留给行尾的 × —— 位置
+ * 固定(永远在最右),扫行时好找,也不至于离内容太远。 */
+.asone-scheduler .rr-provider select,
+.asone-scheduler .rr-model select {
+  width: 100%;
+  min-width: 0;
 }
-.asone-scheduler .btn-del:hover {
-  opacity: 0.8;
+.asone-scheduler .rr-provider {
+  flex: 1 1 150px;
+  max-width: 260px;
+  min-width: 110px;
+}
+.asone-scheduler .rr-model {
+  flex: 1 1 160px;
+  max-width: 280px;
+  min-width: 110px;
+}
+.asone-scheduler .rr-expiry {
+  flex: 0 0 auto;
+}
+.asone-scheduler .rr-expiry input[type="date"] {
+  width: 128px;
+}
+.asone-scheduler .rr-cooldown input[type="number"] {
+  width: 64px;
+}
+.asone-scheduler .rr-days {
+  flex: 0 0 auto;
+}
+.asone-scheduler .rr-times {
+  flex: 0 0 auto;
+}
+.asone-scheduler .rr-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
 }
 
-/* 输入框通用样式(select / date / time / number 共用) */
+/* 紧凑控件:行内控件压到 26px,保证一行放得下且不抬高行高 */
+.asone-scheduler .rule-row .input-control {
+  height: 26px;
+  padding: 0 6px;
+  font-size: 12.5px;
+  border-radius: 5px;
+  line-height: 1;
+}
 .asone-scheduler .input-control {
   background: var(--asec-bg-input);
   border: 1px solid var(--asec-border);
   color: var(--asec-text);
-  padding: 10px 12px;
+  padding: 6px 10px;
   border-radius: 6px;
   font-size: 13px;
   font-family: inherit;
@@ -2137,9 +2180,10 @@ body {
   opacity: 1;
 }
 
-/* ⚠ 隐藏未选择日期时的 yyyy/mm/时 占位符(用户点名必须保留)   ⚠️ 用 JS 驱动的 `.is-empty` 类,不用 `:invalid`:空的非 required date 输入
-   是 `:valid`(没有 valueMissing/typeMismatch),`:invalid` 只在 required 时才
-   匹配空值 —— 而 required 会顺带禁掉 Chromium 的 × 清除按钮(见 SettingsPage)。*/
+/* ⚠ 隐藏未选择日期时的 yyyy/mm/时 占位符(用户点名必须保留)
+ * ⚠️ 用 JS 驱动的 `.is-empty` 类,不用 `:invalid`:空的非 required date 输入
+ *    是 `:valid`(没有 valueMissing/typeMismatch),`:invalid` 只在 required 时才
+ *    匹配空值 —— 而 required 会顺带禁掉 Chromium 的 × 清除按钮(见 settings-rules)。*/
 .asone-scheduler input[type="date"].is-empty::-webkit-datetime-edit {
   color: transparent;
 }
@@ -2147,56 +2191,164 @@ body {
   color: var(--asec-text);
 }
 
-/* 星期模块:一二三四五 / 六日 两组,空间不足时「六日」整体换行*/
-.asone-scheduler .weekday-flex {
+/* ── 星期段:7 个小方块 ────────────────────────────────────────────── */
+.asone-scheduler .rr-day-set {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 3px;
+  flex: none;
 }
-.asone-scheduler .weekday-group {
-  display: flex;
-  gap: 8px;
-}
-.asone-scheduler .weekday-flex input {
-  display: none;
-}
-.asone-scheduler .weekday-flex label {
+.asone-scheduler .rr-day {
+  appearance: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 4px;
   border: 1px solid var(--asec-border);
   background: var(--asec-bg-input);
   color: var(--asec-muted);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1;
   cursor: pointer;
-  transition: all 0.2s;
-  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  flex: none;
 }
-.asone-scheduler .weekday-flex input:checked + label {
+.asone-scheduler .rr-day:hover {
+  border-color: var(--asec-primary);
+  color: var(--asec-text);
+}
+.asone-scheduler .rr-day.on {
   background: var(--asec-primary-bg);
   border-color: var(--asec-primary);
   color: var(--asec-primary);
   font-weight: bold;
 }
-
-/* 时间段模块*/
-.asone-scheduler .time-flex {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.asone-scheduler .rr-clear {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--asec-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  flex: none;
 }
-.asone-scheduler .time-row {
+.asone-scheduler .rr-clear:hover {
+  color: var(--asec-danger);
+}
+
+/* ── 时段段:紧凑 chip + 展开开关 ──────────────────────────────────── */
+.asone-scheduler .rr-spans {
   display: flex;
   align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.asone-scheduler .rr-span {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--asec-border);
+  background: var(--asec-bg-input);
+  color: var(--asec-text);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: default;
+}
+.asone-scheduler .rr-span-more {
+  color: var(--asec-muted);
+}
+.asone-scheduler .rr-caret {
+  appearance: none;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--asec-muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex: none;
+  transition: transform 0.15s, color 0.15s;
+}
+.asone-scheduler .rr-caret:hover {
+  color: var(--asec-text);
+  border-color: var(--asec-border);
+}
+.asone-scheduler .rr-caret.on {
+  transform: rotate(180deg);
+  color: var(--asec-primary);
+}
+
+/* 删除规则(行尾 ×) */
+.asone-scheduler .rr-del {
+  appearance: none;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--asec-muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex: none;
+}
+.asone-scheduler .rr-del:hover {
+  color: var(--asec-danger);
+  border-color: var(--bad-line);
+  background: var(--surface-bad);
+}
+
+/* ── 时段展开区(完整编辑:增 / 删 / 改多段) ──────────────────────── */
+.asone-scheduler .rule-detail {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--asec-border);
+  border-radius: 6px;
+  background: var(--asec-bg-box);
+}
+.asone-scheduler .rd-head {
+  display: flex;
+  align-items: baseline;
   gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
 }
-.asone-scheduler .time-row input[type="time"] {
-  width: 120px;
-  flex-shrink: 0;
+.asone-scheduler .rd-title {
+  color: var(--asec-text);
+  font-size: 12px;
+  font-weight: 500;
 }
-.asone-scheduler .separator {
+.asone-scheduler .rd-hint {
+  color: var(--asec-muted);
+  font-size: 11.5px;
+}
+.asone-scheduler .rd-times {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.asone-scheduler .rd-time-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.asone-scheduler .rd-time-row input[type="time"] {
+  width: 110px;
+  flex: none;
+}
+.asone-scheduler .rd-tilde {
   color: var(--asec-muted);
 }
 .asone-scheduler .btn-del-time {
@@ -2204,7 +2356,8 @@ body {
   border: none;
   color: var(--asec-danger);
   cursor: pointer;
-  font-size: 16px;
+  font-size: 15px;
+  line-height: 1;
   padding: 0 4px;
 }
 .asone-scheduler .btn-add-time {
@@ -2212,21 +2365,31 @@ body {
   border: none;
   color: var(--asec-primary);
   cursor: pointer;
-  font-size: 13px;
-  text-align: left;
+  font: inherit;
+  font-size: 12.5px;
   padding: 0;
-  margin-top: 4px;
 }
 .asone-scheduler .btn-add-time:hover {
   text-decoration: underline;
 }
 
-/* 规则校验错误(新增:设计稿无,沿用错误提示色)*/
+/* 规则校验错误(⚠️ 必须用**正** margin:旧的 -8px 会压进上一个元素) */
 .asone-scheduler .rule-err {
-  margin: -8px 20px 20px;
+  margin: 4px 0 0;
   color: var(--asec-danger);
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.5;
+}
+
+/* ── 窄屏:段整体折行(段内部不断开),一行变两三行但每行仍是紧凑段 ── */
+@media (max-width: 1180px) {
+  .asone-scheduler .rr-provider,
+  .asone-scheduler .rr-model {
+    flex: 1 1 180px;
+  }
+  .asone-scheduler .rr-actions {
+    margin-left: 0;
+  }
 }
 
 /* 分组布局(调度编辑器已换.asone-scheduler 结构;这几个仅「重试策略」卡还在用) */
@@ -3891,9 +4054,14 @@ body {
 
 /* ── 调度规则:每个档位一张与「外部数据刷新」同级的独立面板 ────────────
    原先把五档 + 冷却 + 会话粘性全塞进一个「调度规则」总卡,现在拆成平级卡片。
-   颜色一律走 --dsw-alias-* / 语义令牌,跟着 dsh-ui-appearance 实时联动。 */
+   颜色一律走 --dsw-alias-* / 语义令牌,跟着 dsh-ui-appearance 实时联动。
+
+   ⚠️ 这里**只**放卡片壳的覆盖:.ui-card 的 padding 收窄给规则行让位,
+   卡片头的间距压紧。规则行本身的样式在文件上半部分 `.asone-scheduler`
+   段里(含分隔线根因说明)。 */
 .rule-panel .ui-card-head {
   align-items: center;
+  margin-bottom: 6px;
 }
 .rule-panel .ui-card-title {
   display: flex;
@@ -3902,24 +4070,13 @@ body {
 }
 .rule-panel .ui-card-sub {
   margin: 0;
-}
-.rule-panel .card-hint {
-  padding: 0 0 8px;
-  border-bottom: none;
-  color: var(--text-soft);
-}
-.rule-panel .card-empty {
-  padding: 14px 0;
-  border-bottom: none;
+  font-weight: 400;
 }
 .rule-panel .badge {
   font-size: 12px;
   padding: 2px 10px;
 }
-.rule-panel .blocks-container {
-  padding: 12px 0 0;
-  border-top: 1px solid var(--asec-border);
-}
-.rule-panel .blocks-container + .blocks-container {
-  border-top: 1px solid var(--asec-border);
+/* 卡片内边距收窄:一行高之后纵向空间主要该留给规则,而不是壳。 */
+.rule-panel.ui-card {
+  padding: 10px 14px;
 }

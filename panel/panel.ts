@@ -597,11 +597,10 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
             // 不显示「×N」:同上,账号数不是这行的有效信息。
             perAccountCredit: null,
             streak: null,
-            // 设备限制说清:有账号被「本设备已签」挡住时,如实解释为什么签不上。
-            reason:
-              deviceBlocked > 0
-                ? "trae 按设备放行:本设备今日已签(同机多账号一天只能签一个)"
-                : null,
+            // 设备限制：**不在界面上解释**（2026-11-18 用户定案：签到行只显示
+            // 「是否签到 + 积分」，解释性文案一律不写）。签没签上已经由
+            // checkedIn 表达，deviceBlocked 只影响计数，不再作为 reason 展示。
+            reason: null,
             error,
           };
       });
