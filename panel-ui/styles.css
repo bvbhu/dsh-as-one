@@ -545,14 +545,31 @@ body {
   grid-template-columns: 140px 1fr;
   gap: 6px 14px;
   margin-bottom: 10px;
+  align-items: center;
 }
 
+/* ⚠️ 2026-11 修「上下不对齐」(用户反复报的那个)：
+ * 标签是纯文字、控件是 32px 的输入框。实测标签基线比输入框内文字的基线
+ * **低 4.9px**(两行标签低 9.1px)，看上去文字压在框的下半部分。
+ * 修法:标签**不加 flex**(flex 项会改变行盒计算),直接用 line-height 撑满
+ * 32px 让文字在盒内居中;控件也定 32px、内部文字同理居中 —— 两侧基线重合。 */
 .kv-grid .k {
   color: var(--text);
+  line-height: 32px;
+  min-height: 32px;
 }
 
 .kv-grid .v {
   color: var(--text);
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+
+.kv-grid .v > .input,
+.kv-grid .v > .selectInput {
+  height: 32px;
+  line-height: 30px;
 }
 
 /* ── 按钮 ───────────────────────────────────────────────────── */
@@ -889,12 +906,29 @@ body {
   cursor: grabbing;
 }
 
-/* 插入位置指示线 */
+/* 插入位置指示线（逻辑模型档链用：细线，不是列表项） */
 .dropMarker {
   height: 2px;
   margin: 0 2px;
   border-radius: 2px;
   background: var(--accent);
+}
+/* 调度列表的落点标记：画在行卡**内部顶端**，只占卡片宽度、2px 细线。
+ * ⚠️ 绝不能作为 <ul> 的直接子项 —— 那会变成铺满整行的蓝色横条。 */
+.ruleRowCard > .dropMarker {
+  height: 2px;
+  margin: -1px 0 6px;
+  width: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+/* 拖到该段末尾：在最后一条行卡底部补一条细线（同样不走列表项）。 */
+.schedRowOuter.dropAtEnd {
+  height: 2px;
+  margin-top: -6px;
+  border-radius: 2px;
+  background: var(--accent);
+  list-style: none;
 }
 
 .nodeProvider {
@@ -1893,11 +1927,10 @@ body {
   flex-direction: column;
   gap: 14px;
 }
-/* 顶层分段:直接复用用量页 `.usage-seg`,只在两端留点空。 */
-.settings-seg {
-  align-self: flex-start;
-  margin: 2px 0 4px;
-}
+/* 卡片列**不套 720px 上限**（用户 2026-11 选「只对齐边距、卡片保持较宽」）：
+ * 调度规则一行有 5 个控件，限到 720px 会把模型名截断（如
+ * `deepseek-v4.1-flash-1` 少了尾部）。与模型页的对齐点只有**标题/导航的
+ * 左边缘**（已由去掉重复 `.content` 修好），卡片自身按内容区自然铺开。 */
 .settings-body {
   display: flex;
   flex-direction: column;
@@ -1922,12 +1955,31 @@ body {
   font-size: 13px;
   font-weight: 500;
 }
-/* kv-grid 里的控件:统一宽度、和全站 .input/.selectInput 对齐。 */
-.kv-grid .v > .input,
-.kv-grid .v > .selectInput,
-.kv-grid .v > .setting-input-unit > .input {
+/* 两个小节并排(退避形状 / 重试次数)。窄屏自动降为一列。 */
+.setting-group-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px 32px;
+}
+/* 长文本输入(可重试错误码等):与标签同一行,但输入框撑满剩余宽度。 */
+.kv-grid .v > .input.wideInput {
   width: 100%;
-  max-width: 460px;
+}
+/* kv-grid 里的控件:统一宽度、和全站 .input/.selectInput 对齐。
+ *
+ * ⚠️ 2026-11 修对齐:原先纯输入框 max-width 460、带单位的框又走另一套收缩规则,
+ * 于是同一张卡里「1.5 的框」和「10 的框」宽度不同、右端参差。现在两者统一
+ * 定宽 180px(与 .setting-input-unit 的输入框同宽),整列右端严格对齐。 */
+.kv-grid .v > .input,
+.kv-grid .v > .selectInput {
+  width: 180px;
+  box-sizing: border-box;
+}
+/* 独占整行的 wide 字段(可重试错误码等):输入框必须撑满整行。
+ * ⚠️ 必须写在 180px 规则**之后**且保持更高特异性,否则同优先级下被覆盖。 */
+.kv-grid .v.kv-wide > .input,
+.kv-grid .v.kv-wide > .selectInput {
+  width: 100%;
 }
 .kv-wide {
   grid-column: 1 / -1;
@@ -1958,11 +2010,22 @@ body {
   outline: none;
   border-color: var(--accent);
 }
+/* 带单位的数值行 —— 统一成「定宽输入框 + 紧跟单位」。
+ *
+ * ⚠️ 2026-11 修「每行高度/宽度都不对齐」:
+ * 原来这里是 `inline-flex` + `max-width`,宽度随内容收缩 —— `1.5`/`24`
+ * 的框比 `10` 窄,单位「秒」/「比例」的位置也跟着浮动,整列右端参差。
+ * 现在输入框定宽(180px)、单位紧贴其后,所有行视觉同宽同高。 */
 .setting-input-unit {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 460px;
+  width: 100%;
+}
+.setting-input-unit > .input {
+  flex: 0 0 180px;
+  width: 180px;
+  box-sizing: border-box;
 }
 .setting-unit {
   color: var(--text-soft);
@@ -2050,19 +2113,53 @@ body {
 .kv-wide-grid {
   gap: 8px 16px;
 }
-/* 冷却行:供应商 + 分钟 + 删除,横排。 */
+/* 冷却行:供应商 + 分钟 + 删除,横排。
+ *
+ * 两行(逻辑模型成员冷却 / 供应商级冷却)必须**同构**:
+ * 同样的 1px 边框、10px 圆角、12/14 内边距、32px 控件高。 */
 .cooldownRows {
-  margin-top: 10px;
+  margin-top: 0;
+}
+.cooldownRows > li.rowCard {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px 14px;
+}
+/* 「逻辑模型成员冷却」标签与「供应商」下拉同宽,两种行严格同构/对齐。 */
+.cooldownFieldLabel {
+  flex: 0 0 128px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 32px;
+  white-space: nowrap;
+}
+.cooldownRows .ruleProvider {
+  flex: 0 0 128px;
+}
+.cooldownRows .ruleNum {
+  width: 92px;
+  text-align: right;
+}
+/* 成员冷却是「标签 + 输入框」两段,供应商行是「下拉 + 输入框 + 删除」三段。
+ * 让成员行的输入框与供应商行的输入框**左边缘对齐**:标签宽 = 下拉宽 + gap。 */
+.cooldownFieldLabel {
+  flex: 0 0 128px;
+}
+.cooldownRows .ruleRowLine > .ruleNum,
+.cooldownRows .ruleRowLine > .cooldownMinute > .ruleNum {
+  height: 30px;
+  box-sizing: border-box;
+}
+.cooldownRows .ruleRowLine {
+  /* 第 1 个控件(标签/供应商)与第 2 个控件(分钟)之间的间距与调度行一致。 */
+  gap: 8px;
 }
 .cooldownMinute {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: none;
-}
-.ruleNum {
-  width: 92px;
-  text-align: right;
 }
 .ruleUnit {
   color: var(--text-soft);

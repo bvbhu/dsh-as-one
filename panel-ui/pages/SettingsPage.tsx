@@ -84,27 +84,16 @@ const TIER_PANELS = [
  * 设置页顶层分段(2026-11-18 重设计):一次只显示一个任务域,不恢复左侧固定导航。
  * 卡片内部一律「标签左 / 控件右」的紧凑行(settings-row),无说明段落。
  */
+/**
+ * 二级导航(2026-11 用户定案):原先「集成 / 界面 / 系统」三组各只有一两个
+ * 零散设置项,单独成 tab 太空。**合并成一个「其他」**。
+ */
 const SETTINGS_TABS = [
   { key: "scheduler", label: "调度" },
   { key: "policy", label: "策略" },
-  { key: "integration", label: "集成" },
-  { key: "ui", label: "界面" },
-  { key: "system", label: "系统" },
+  { key: "misc", label: "其他" },
 ] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number]["key"];
-
-const UNIT_BY_KEY: Record<string, string> = {
-  "external_refresh.interval_hours": "小时",
-  "retry.base_backoff_s": "秒",
-  "retry.max_backoff_s": "秒",
-  "retry.jitter_ratio": "比例",
-  "retry.logical_max": "次",
-  "retry.real_max": "次",
-  "retry.logical_cooldown": "分钟",
-  "real.wait_budget_s": "秒",
-  "scheduler.pin_seconds": "秒",
-  "ui.recent_limit": "条",
-};
 
 
 /* ── 退避曲线(与 backoffChart computed 对齐,草稿值实时重算) ── */
@@ -595,8 +584,10 @@ export default function SettingsPage(): React.JSX.Element {
   function field(section: string, spec: SettingSpec, wide = false): React.JSX.Element {
     const value = draft[section]?.[spec.key] ?? "";
     const kind = spec.kind;
-    const unit = UNIT_BY_KEY[spec.key] || "";
     const on = value === "true" || value === "1";
+    // ⚠️ 2026-11 用户定案:输入框后面**不显示任何单位**(秒/次/条/分钟等)——
+    // 有单位的输入框会比没单位的窄一截、右端参差,破坏整列对齐。单位语义由
+    // 标签/字段名承载(如「会话粘性时长(s)」的 key 与范围提示),视觉上一律干净。
     let control: React.JSX.Element;
     if (kind === "bool") {
       control = (
@@ -637,26 +628,25 @@ export default function SettingsPage(): React.JSX.Element {
         />
       );
     } else {
+      // 数字/文本输入统一成裸 .input(不再包 .setting-input-unit、不再挂单位后缀),
+      // 这样它与下拉框同为 180px、右端严格对齐。
       control = (
-        <span className="setting-input-unit">
-          <input
-            className="input"
-            type={kind === "int" || kind === "float" ? "number" : "text"}
-            min={spec.min}
-            max={spec.max}
-            step={kind === "float" ? "0.1" : undefined}
-            value={value}
-            disabled={busy}
-            onChange={(ev) => setValue(section, spec, ev.target.value)}
-          />
-          {unit ? <span className="setting-unit">{unit}</span> : null}
-        </span>
+        <input
+          className={"input" + (wide ? " wideInput" : "")}
+          type={kind === "int" || kind === "float" ? "number" : "text"}
+          min={spec.min}
+          max={spec.max}
+          step={kind === "float" ? "0.1" : undefined}
+          value={value}
+          disabled={busy}
+          onChange={(ev) => setValue(section, spec, ev.target.value)}
+        />
       );
     }
     return (
       <React.Fragment key={spec.key}>
-        <span className={"k" + (wide ? " kv-wide" : "")}>{spec.label}</span>
-        <span className={"v" + (wide ? " kv-wide" : "")}>{control}</span>
+        <span className="k">{spec.label}</span>
+        <span className="v">{control}</span>
       </React.Fragment>
     );
   }
@@ -1119,22 +1109,38 @@ export default function SettingsPage(): React.JSX.Element {
             ＋ 添加供应商
           </button>
         </div>
-        <div className="kv-grid kv-wide-grid">
-          {memberSpec !== undefined ? field(sectionOf(memberSpec), memberSpec) : null}
-        </div>
-        {g.cooldown.length > 0 ? (
-          <ul className="rows sched-rows cooldownRows">
-            {g.cooldown.map((r, i) => (
-              <CooldownRuleRow
-                key={i}
-                rule={r}
-                providerOptions={providerOptions}
-                onPatch={(patch) => patchCooldown(i, patch)}
-                onRemove={() => removeCooldown(i)}
-              />
-            ))}
-          </ul>
-        ) : null}
+        <ul className="rows sched-rows cooldownRows">
+          {/* 逻辑模型成员冷却 —— 与供应商行**同构**(同一个 .rowCard + .ruleRowLine,
+           * 同样带边框、同一列宽,只是没有拖动与删除)。 */}
+          {memberSpec !== undefined ? (
+            <li className="rowCard ruleRowCard">
+              <div className="ruleRowLine">
+                <span className="cooldownFieldLabel" title={memberSpec.label}>
+                  {memberSpec.label}（分钟）
+                </span>
+                <input
+                  type="number"
+                  min={memberSpec.min}
+                  max={memberSpec.max}
+                  className="input ruleField ruleNum"
+                  title={`${memberSpec.label}(分钟)`}
+                  value={draft[sectionOf(memberSpec)]?.[memberSpec.key] ?? ""}
+                  disabled={busy}
+                  onChange={(ev) => setValue(sectionOf(memberSpec), memberSpec, ev.target.value)}
+                />
+              </div>
+            </li>
+          ) : null}
+          {g.cooldown.map((r, i) => (
+            <CooldownRuleRow
+              key={i}
+              rule={r}
+              providerOptions={providerOptions}
+              onPatch={(patch) => patchCooldown(i, patch)}
+              onRemove={() => removeCooldown(i)}
+            />
+          ))}
+        </ul>
       </section>
     );
   }
@@ -1159,16 +1165,22 @@ export default function SettingsPage(): React.JSX.Element {
     if (section === "retry") {
       body = (
         <div className="setting-groups">
-          {retryGroups().map((grp) => (
-            <div key={grp.title} className="setting-group">
-              <div className="setting-group-title">{grp.title}</div>
-              <div className="kv-grid">
-                {grp.fields.map((s) => field("retry", s))}
+          {/* 两个小节**两列并排**(用户 2026-11)。窄屏由 CSS 自动降为一列。 */}
+          <div className="setting-group-cols">
+            {retryGroups().map((grp) => (
+              <div key={grp.title} className="setting-group">
+                <div className="setting-group-title">{grp.title}</div>
+                <div className="kv-grid">
+                  {grp.fields.map((s) => field("retry", s))}
+                </div>
               </div>
-            </div>
-          ))}
-          {/* 可重试错误码(独占整行) */}
-          <div className="kv-grid">{codesField ? field("retry", codesField, true) : null}</div>
+            ))}
+          </div>
+          {/* 可重试错误码 —— 标签左/输入框右**同一行**(用户 2026-11:不要分成两行);
+              值较长,给它单独一个 .kv-grid,输入框用 .wideInput 撑满剩余宽度。 */}
+          {codesField ? (
+            <div className="kv-grid">{field("retry", codesField, true)}</div>
+          ) : null}
           {chartBlock}
         </div>
       );
@@ -1243,29 +1255,34 @@ export default function SettingsPage(): React.JSX.Element {
     </div>
   );
 
+  // ⚠️ 根节点**不要**再挂 `.content` —— `App.tsx` 的 `<main className="content">`
+  // 已经提供了一层（padding 16/20/40 + max-width）。再套一层会让 padding 叠加成
+  // 40px 左缩进，设置页的标题 / 导航 / 卡片就比模型页整体偏右 20px
+  // （用户 2026-11 报的「边距不一致」）。
   return (
-    <div className="content settings-page">
+    <div className="settings-page">
       <h1 className="page-title">设置</h1>
       {busy ? <p className="hint">加载中…</p> : null}
       {err ? <p className="ov-err">{err}</p> : null}
 
       {data ? (
         <>
-          {/* 顶层分段:调度=选什么模型,策略=怎么请求(含冷却),一次只显示一个域。 */}
-          <div className="usage-seg settings-seg" role="tablist" aria-label="设置分类">
+          {/* 二级导航:与「模型」页的 `.subtabs/.subtab` **同款** ——
+              用户 2026-11 定案「统一子标题样式,不要用量统计的 usage-seg」。 */}
+          <nav className="subtabs" role="tablist" aria-label="设置分类">
             {SETTINGS_TABS.map((t) => (
               <button
                 key={t.key}
                 type="button"
                 role="tab"
                 aria-selected={activeTab === t.key}
-                className={activeTab === t.key ? "on" : ""}
+                className={`subtab${activeTab === t.key ? " on" : ""}`}
                 onClick={() => setActiveTab(t.key)}
               >
                 {t.label}
               </button>
             ))}
-          </div>
+          </nav>
 
           <div className="settings-body">
             {/* 调度:选什么模型(优先级列表 / 时段配置 / 其它调度参数) */}
@@ -1283,9 +1300,10 @@ export default function SettingsPage(): React.JSX.Element {
                 {cooldownCard()}
               </>
             ) : null}
-            {activeTab === "integration" ? <>{sectionCard("external_refresh")}</> : null}
-            {activeTab === "ui" ? (
+            {/* 其他:原先的「集成 / 界面 / 系统」三组零散项合并到此 */}
+            {activeTab === "misc" ? (
               <>
+                {sectionCard("external_refresh")}
                 {sectionCard("ui")}
                 {/* 请求日志(独立端点,立即生效) */}
                 {reqLog ? (
@@ -1309,8 +1327,9 @@ export default function SettingsPage(): React.JSX.Element {
                           ))}
                         </select>
                       </span>
-                      <span className="k kv-wide">落盘位置</span>
-                      <span className="v kv-wide">
+                      {/* 落盘位置:标签左 / 内容右,**同一行**(用户 2026-11:不要分行) */}
+                      <span className="k">落盘位置</span>
+                      <span className="v">
                         <span className="setting-key-row">
                           <code className="setting-key">{reqLog.path}</code>
                           <span className="pill">{reqLog.counters?.written ?? 0} 条</span>
@@ -1322,29 +1341,27 @@ export default function SettingsPage(): React.JSX.Element {
                     {logMsg ? <p className="hint">{logMsg}</p> : null}
                   </section>
                 ) : null}
+                <section id="readonly" className="card setting-card">
+                  <div className="card-head">
+                    <h2>只读信息</h2>
+                  </div>
+                  <div className="kv-grid">
+                    <span className="k">ONE_API_KEY</span>
+                    <span className="v">
+                      {data.master_key ? (
+                        <span className="setting-key-row">
+                          <code className="setting-key">{data.master_key}</code>
+                          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void copyKey()}>
+                            {keyCopied ? "已复制 ✓" : "复制"}
+                          </button>
+                        </span>
+                      ) : (
+                        <span className="ov-err">未设置</span>
+                      )}
+                    </span>
+                  </div>
+                </section>
               </>
-            ) : null}
-            {activeTab === "system" ? (
-              <section id="readonly" className="card setting-card">
-                <div className="card-head">
-                  <h2>只读信息</h2>
-                </div>
-                <div className="kv-grid">
-                  <span className="k">ONE_API_KEY</span>
-                  <span className="v">
-                    {data.master_key ? (
-                      <span className="setting-key-row">
-                        <code className="setting-key">{data.master_key}</code>
-                        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void copyKey()}>
-                          {keyCopied ? "已复制 ✓" : "复制"}
-                        </button>
-                      </span>
-                    ) : (
-                      <span className="ov-err">未设置</span>
-                    )}
-                  </span>
-                </div>
-              </section>
             ) : null}
           </div>
 

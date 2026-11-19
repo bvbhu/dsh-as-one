@@ -874,19 +874,16 @@ function CooldownRuleRow(props: {
           ))}
         </select>
 
-        <span className="cooldownMinute">
-          <input
-            type="number"
-            min={1}
-            className="input ruleField ruleNum"
-            value={props.rule.cooldown}
-            title="失败后多久不再选该供应商"
-            onChange={(ev) =>
-              props.onPatch({ cooldown: ev.target.value === "" ? "" : Number(ev.target.value) })
-            }
-          />
-          <span className="ruleUnit">分钟</span>
-        </span>
+        <input
+          type="number"
+          min={1}
+          className="input ruleField ruleNum"
+          value={props.rule.cooldown}
+          title="失败后多久不再选该供应商(分钟)"
+          onChange={(ev) =>
+            props.onPatch({ cooldown: ev.target.value === "" ? "" : Number(ev.target.value) })
+          }
+        />
 
         <button type="button" className="rowBtn danger ruleDel" title="删除这条冷却" onClick={props.onRemove}>
           删除
