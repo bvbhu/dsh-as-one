@@ -127,8 +127,17 @@ export type UpstreamErrorKind =
   | "content-policy"
   | "unknown";
 
-/** 额度耗尽类业务码（`110` 当日用量用尽、`111` 套餐过期等）。 */
-export const QUOTA_CODES: ReadonlySet<string> = new Set(["110", "111", "112"]);
+/**
+ * 额度耗尽类业务码：
+ * - `110` 当日用量用尽；
+ * - `111` 套餐过期；
+ * - `112` 模型额度用尽（上游带 `pricingUrl`）；
+ * - `144` 专属积分包余额不足（上游带 `modelKey`）。
+ *
+ * 这些码通常由 HTTP 403 承载，但语义是「额度不足、会自愈/需充值」，
+ * 不是凭据失效。漏一个码就会在分类时回落成 auth，给用户错误提示。
+ */
+export const QUOTA_CODES: ReadonlySet<string> = new Set(["110", "111", "112", "144"]);
 
 const CONTENT_POLICY_MARKERS = [
   "DataInspectionFailed",
@@ -690,6 +699,18 @@ export function parseCampaignFeed(payload: Record<string, unknown>): {
     showCampaign: typeof data["showCampaign"] === "boolean" ? data["showCampaign"] : undefined,
     campaignUrl: typeof data["campaignUrl"] === "string" ? data["campaignUrl"] : undefined,
   };
+}
+
+/**
+ * `CLAIM_BENEFIT.claimStatus` / 领取响应的幂等已领判据。
+ *
+ * 上游不只一种写法：`CLAIMED` 是活动列表里的主形态，领取接口也可能回
+ * `ALREADY_CLAIMED` / `ALREADY` / `replayed`（含大小写变体）。任何一处把它
+ * 误判成未签，都会让用户看到"点签到没反应 / 签了还显示未签"。
+ */
+export function isQoderClaimedStatus(status: string | undefined): boolean {
+  const v = String(status ?? "").toUpperCase();
+  return v === "CLAIMED" || v === "ALREADY_CLAIMED" || v === "ALREADY" || v === "REPLAYED";
 }
 
 /** 签到结果（幂等三态）。 */

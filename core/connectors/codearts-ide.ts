@@ -63,6 +63,19 @@ export const CODEARTS_IDE_CHECKIN_TYPE = "USER_LOGIN";
 /** claim 并发冲突业务码：另一通道已领 / 重试竞态 → 视为「今日已签」。 */
 export const CODEARTS_IDE_CONFLICT_CODE = 40001;
 
+/**
+ * 上游表示「今日已签到、积分已入账/已消费」的活动状态（大小写不敏感比较）。
+ *
+ * - `CONFIRMED`：2026-11-16 实测 confirm 响应里的状态；
+ * - `CONSUMED`：2026-11-19 实测 delivery 里签到活动（`claimable:false`）的状态 ——
+ *   即上游把「今天签过、奖励已消费」从 CONFIRMED 改叫 CONSUMED 了。
+ *
+ * ⚠️ 漏判 CONSUMED 会把已签误报成「可领取 N 积分(未签)」，并让真签到多打一次
+ * claim（上游回 40001），最终在面板上显示「失败:CodeArts」。两个状态都必须
+ * 零写请求、直接返回 `already:true`。
+ */
+export const CODEARTS_IDE_SIGNED_STATUSES = new Set(["CONFIRMED", "CONSUMED"]);
+
 export const CODEARTS_IDE_TIMEOUT_MS = 20_000;
 
 // ---------------------------------------------------------------------------
@@ -271,7 +284,8 @@ export interface CodeartsIdeClaimResult {
  *
  * - 干跑（`confirm:false`）：只查活动列表，零写请求；
  * - `ELIGIBLE` → claim → confirm（**漏 confirm 积分不入账**，实测踩过）；
- * - claim 回 `40001` 并发冲突 / 状态 `CLAIMED|CONFIRMED` → `already:true`；
+ * - claim 回 `40001` 并发冲突 / 状态 `CLAIMED` 或 {@link CODEARTS_IDE_SIGNED_STATUSES}
+ *   （CONFIRMED / CONSUMED）→ `already:true`；
  * - confirm 业务码非 0 → `ok:false`（claim 已提交但没入账，调用方必须能分辨）。
  */
 export async function codeartsIdeCheckin(
@@ -284,8 +298,9 @@ export async function codeartsIdeCheckin(
   if (campaign === undefined) {
     return { ok: false, code: -1, message: "没有签到活动(USER_LOGIN)", credit: 0, expireAt: null, already: false };
   }
-  const today = campaign.status;
-  if (today === "CONFIRMED") {
+  const today = typeof campaign.status === "string" ? campaign.status.toUpperCase() : "";
+  if (CODEARTS_IDE_SIGNED_STATUSES.has(today)) {
+    // CONFIRMED / CONSUMED 都是「今天已签、奖励已入账」；零写请求。
     return { ok: false, code: 0, message: "今日已签到(已确认入账)", credit: campaign.benefitAmount, expireAt: null, already: true };
   }
   if (today === "CLAIMED") {

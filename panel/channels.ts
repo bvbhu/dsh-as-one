@@ -55,7 +55,10 @@ import {
   minimaxSigninStatus,
 } from "@as-one/core/src/connectors/minimax-signin.js";
 import { minimaxAccountFor } from "./minimax-renew.js";
-import { codeartsIdeCheckin } from "@as-one/core/src/connectors/codearts-ide.js";
+import {
+  CODEARTS_IDE_CONFLICT_CODE,
+  codeartsIdeCheckin,
+} from "@as-one/core/src/connectors/codearts-ide.js";
 import { panelClaimedToday, panelTodayPoints } from "@as-one/core/src/connectors/minimax-wire.js";
 import { discoverTraeAccounts } from "@as-one/core/src/connectors/discover.js";
 import {
@@ -651,14 +654,20 @@ export function createChannelsDomain(
             confirm,
           },
         );
-        // already=true 且 code=0 = 已签已入账；dry_run（confirm=false）≠ 失败。
+        // already=true 就是「今日已签」——不必再要求 code===0：
+        // claim 撞并发冲突(40001)时 core 返回 `{ok:false, code:40001, already:true}`
+        // （另一通道已签/重试竞态，上游明确说今天领过了）。旧判断加上 code===0
+        // 会把这种确定性已签判成 failed，导致「全部签到」摘要出现「失败:CodeArts」。
+        // dry_run（confirm=false）≠ 失败。
         const status: CheckinClaimRow["status"] = res.ok
           ? "claimed"
-          : res.already && res.code === 0
+          : res.already
             ? "already"
-            : res.code === -1 && res.message.includes("干跑")
-              ? "dry_run"
-              : "failed";
+            : res.code === CODEARTS_IDE_CONFLICT_CODE
+              ? "already"
+              : res.code === -1 && res.message.includes("干跑")
+                ? "dry_run"
+                : "failed";
         return {
           ...baseRow,
           status,

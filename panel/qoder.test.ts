@@ -281,7 +281,7 @@ describe("qoder 多账号签到(checkinEach)", () => {
     expect(rows[2]).toMatchObject({ account: "c", status: "claimed" });
   });
 
-  it("上游说没活动 → unavailable 且带原话,不伪装成已领", async () => {
+  it("上游说没活动 → unavailable，明确是账号没活动而非设备限制", async () => {
     const rows = await checkinEach("qoder", [targets[0]!], async () => ({
       status: "unavailable",
       message: "上游今日没有下发可领取的签到活动",
@@ -289,7 +289,7 @@ describe("qoder 多账号签到(checkinEach)", () => {
     expect(rows[0]).toMatchObject({
       account: "a",
       status: "unavailable",
-      message: "上游今日没有下发可领取的签到活动",
+      message: "该账号当前没有签到活动（上游未下发，非设备限制）",
     });
   });
 

@@ -50,6 +50,7 @@ import {
   parseQoderFrame,
   parseStreamDelta,
   parseUsage,
+  isQoderClaimedStatus,
   qoderErrorBlockOf,
   qoderErrorFrameOf,
   retryAfterMsOf,
@@ -486,6 +487,9 @@ export class QoderClient {
    * 每日签到：先拉活动找 `CLAIM_BENEFIT` 可领的那条，再领。
    *
    * 三态分清：`claimed` / `already-claimed`（幂等，409 也算）/ `unavailable`。
+   * 上游对「重复领取」并不只有一种写法：活动列表里的 `CLAIMED`、领取 409、
+   * 领取响应里的 `ALREADY_CLAIMED` / `ALREADY` / `replayed` 都是「今天已经领过」，
+   * 不能当成失败，否则用户会以为「点签到没反应」。
    */
   async claimDailyCredits(credential: string, signal?: AbortSignal): Promise<QoderCheckinOutcome> {
     const campaigns = await this.fetchCampaigns(credential, signal);
@@ -493,7 +497,7 @@ export class QoderClient {
     const claimable = campaigns.find((c) => c.actionType === "CLAIM_BENEFIT" && c.claimStatus === "CLAIMABLE");
     const nextRefreshAtMs = daily?.endAt === undefined ? undefined : daily.endAt * 1000;
     if (claimable === undefined) {
-      return daily?.claimStatus === "CLAIMED"
+      return isQoderClaimedStatus(daily?.claimStatus)
         ? { status: "already-claimed", nextRefreshAtMs }
         : { status: "unavailable", message: "上游今日没有下发可领取的签到活动" };
     }
@@ -501,13 +505,19 @@ export class QoderClient {
     const url = `${this.config.openapi}${this.config.campaignsPath}/${encodeURIComponent(claimable.campaignId)}/claim`;
     try {
       const data = await this.sashRequest(holder, url, { method: "POST", body: {}, signal });
-      if (String(data["status"] ?? "") === "CLAIMED") {
+      const status = String(data["status"] ?? "");
+      // 成功只认明确的 CLAIMED：未知状态不猜成领到了（积分没到账比"没反应"更糟）。
+      if (status.toUpperCase() === "CLAIMED") {
         return {
           status: "claimed",
           amount: claimable.amount,
           validityDays: claimable.validityDays,
           nextRefreshAtMs,
         };
+      }
+      // 幂等态：上游用不同写法表示"今天已经领过"，都必须按成功处理。
+      if (isQoderClaimedStatus(status)) {
+        return { status: "already-claimed", nextRefreshAtMs };
       }
       return { status: "unavailable", message: `签到未完成（上游状态 ${String(data["status"] ?? "未知")}）` };
     } catch (error) {

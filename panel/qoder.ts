@@ -880,7 +880,12 @@ export async function checkinEach(
           amount: null,
           validityDays: null,
           nextRefreshAtMs: null,
-          message: outcome.message,
+          // 上游"没有下发活动"是账号资格/窗口问题，不是本次点击失败。
+          // 文案必须说清，否则用户会理解成"点了签到没反应"。
+          message:
+            outcome.message === "上游今日没有下发可领取的签到活动"
+              ? "该账号当前没有签到活动（上游未下发，非设备限制）"
+              : outcome.message,
         });
       }
     } catch (error) {

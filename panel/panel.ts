@@ -12,6 +12,7 @@
 import type { CredentialVault } from "@as-one/core/src/config/credentials.js";
 import { providerDisplayName } from "@as-one/core/src/config/provider-labels.js";
 import { CHECKIN_PROVIDERS, checkinSupported } from "@as-one/core/src/connectors/checkin.js";
+import { isQoderClaimedStatus } from "@as-one/core/src/connectors/qoder-wire.js";
 import { codeartsIdeCheckin } from "@as-one/core/src/connectors/codearts-ide.js";
 import { MINIMAX_QUOTA_TIMEOUT_MS } from "@as-one/core/src/collector/quota.js";
 import { minimaxSigninStatus } from "@as-one/core/src/connectors/minimax-signin.js";
@@ -695,7 +696,7 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
             dailyCredit += daily.amount;
             perAccountAmounts.push(daily.amount);
           }
-          if (daily.claimStatus === "CLAIMED") checkedIn += 1;
+          if (isQoderClaimedStatus(daily.claimStatus)) checkedIn += 1;
           else pending += 1;
         }
         return {
@@ -913,10 +914,8 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
       const confirmOn = confirm === true;
       const parts: string[] = [];
       let anyOk = false;
-      /** 成功签到/已签的渠道数(摘要用,不塞进长文案)。 */
-      let okChannels = 0;
-      /** 失败的渠道(摘要里点名,方便用户知道去查哪个)。 */
-      const failedLabels: string[] = [];
+      /** 失败**明细**:渠道 + 原因。用户 2026-11 定案「失败一定要输出完整信息」。 */
+      const failedDetails: string[] = [];
 
       // trae / workbuddy
       for (const pid of CHECKIN_PROVIDERS) {
@@ -933,13 +932,13 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
           const r = await chd.methods.checkinClaim(pid, confirmOn);
           if (r.ok) {
             anyOk = true;
-            okChannels += 1;
           } else {
-            failedLabels.push(checkinLabelOf(pid));
+            // 失败必须**带完整原因**（用户 2026-11：成功不用写信息，失败一定要输出完整信息）。
+            failedDetails.push(`${checkinLabelOf(pid)}：${r.message ?? "签到失败（上游未给原因）"}`);
           }
           parts.push(`${checkinLabelOf(pid)}:${r.message ?? (r.ok ? "签到完成" : "签到失败")}`);
         } catch (e) {
-          failedLabels.push(checkinLabelOf(pid));
+          failedDetails.push(`${checkinLabelOf(pid)}：${errTextOf(e)}`);
           parts.push(`${checkinLabelOf(pid)}:${errTextOf(e)}`);
         }
       }
@@ -953,15 +952,25 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
         if (claimed + already > 0) {
           anyOk = true;
           // Qoder 也是一个渠道:计入摘要的成功数(与上面循环同口径)。
-          okChannels += 1;
-        } else if (unavailable > 0) {
-          failedLabels.push("Qoder");
+        }
+        // ⚠️ 即使有账号签成功，也要**明确列出没有签到活动的账号**
+        // （用户 2026-11：「qoder 请明确返回账号没有签到活动」）——
+        // 否则用户只看到 1/3 却不知道另外两个为什么没签。
+        const noActivity = views.filter((v) => v.status === "unavailable");
+        if (noActivity.length > 0) {
+          // 只列账号名 —— 原因已由外层统一说明，逐账号再重复一遍会嵌套成
+          // 「…没有签到活动（…）：a（该账号当前没有签到活动…）」这种车轱辘话。
+          failedDetails.push(
+            `Qoder：${noActivity.length} 个账号当前没有签到活动（上游未下发，非设备限制，也非插件故障）：${noActivity
+              .map((v) => v.account)
+              .join("、")}`,
+          );
         }
         parts.push(
           `Qoder:签到 ${claimed} / 已签 ${already}${unavailable ? ` / 不可用 ${unavailable}` : ""}`,
         );
       } catch (e) {
-        failedLabels.push("Qoder");
+        failedDetails.push(`Qoder：${errTextOf(e)}`);
         parts.push(`Qoder:${errTextOf(e)}`);
       }
 
@@ -974,16 +983,18 @@ export function createPanel(ctx: PanelContext, deps: PanelDeps): PanelBundle {
       // ⚠️ 摘要**短**:以前把每个渠道的完整 message 用 ` · ` 串起来,一行能到
       // 两三百字(截图里就是一整段),既难读又把真正的失败点淹没。
       // 现在只给「成功几个 / 失败哪几个」,细节看下方每行 chip。
-      const okTotal = okChannels;
+      // 摘要口径（2026-11 用户定案）：
+      // - **成功不写信息** —— 每个渠道行上已经有「已签」绿字，再复述一遍是噪音；
+      // - **失败必须输出完整信息** —— 要给到渠道名 + 原因（不能只丢一个渠道名，
+      //   那样用户还得自己去逐个点开找原因）。
       let message: string;
-      if (failedLabels.length > 0) {
-        message = `签到完成 ${okTotal} 个渠道;失败:${failedLabels.join("、")}`;
-      } else if (okTotal > 0) {
-        message = `签到完成 ${okTotal} 个渠道`;
+      if (failedDetails.length > 0) {
+        message = failedDetails.join("；");
       } else if (parts.length === 0) {
         message = "没有可签到的渠道(未配置或没有账号)";
       } else {
-        message = "签到完成";
+        // 全部成功：不写冗余信息。
+        message = "";
       }
       return {
         ok: anyOk,

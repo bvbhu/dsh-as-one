@@ -173,6 +173,27 @@ describe("codeartsIdeCheckin", () => {
     expect(calls.some((c) => c.method === "POST")).toBe(false);
   });
 
+  it("status=CONSUMED（2026-11-19 实测上游口径）→ 今日已签，零写请求", async () => {
+    // 真实上游把「今日已签且奖励已消费」的活动标成 CONSUMED（claimable:false），
+    // 不再是 CONFIRMED。漏判会误报「可领取(未签)」，点签到还多打一发 claim 被回 40001。
+    const { fetchFn, calls } = fakeFetch({
+      "/v1/ops/delivery": () => ({ body: deliveryOf([{ ...ELIGIBLE, claimable: false, status: "CONSUMED" }]) }),
+    });
+    const res = await codeartsIdeCheckin(ACCOUNT, { fetchFn, confirm: false });
+    expect(res.already).toBe(true);
+    expect(res.credit).toBe(100);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("status=consumed（小写）→ 同样识别为已签（大小写不敏感）", async () => {
+    const { fetchFn, calls } = fakeFetch({
+      "/v1/ops/delivery": () => ({ body: deliveryOf([{ ...ELIGIBLE, claimable: false, status: "consumed" }]) }),
+    });
+    const res = await codeartsIdeCheckin(ACCOUNT, { fetchFn });
+    expect(res.already).toBe(true);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
   it("confirm:false 干跑 → 零写请求，返回可领面额", async () => {
     const { fetchFn, calls } = fakeFetch({
       "/v1/ops/delivery": () => ({ body: deliveryOf([ELIGIBLE]) }),

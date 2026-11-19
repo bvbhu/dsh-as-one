@@ -20,6 +20,7 @@ import {
   deepestBusinessCode,
   extractLatestUserPrompt,
   isContentPolicy,
+  isQoderClaimedStatus,
   jobTokenBody,
   parseCampaignFeed,
   parseCachedTokens,
@@ -34,7 +35,7 @@ import {
   retryAfterMsOfHeader,
   sseDataPayload,
 } from "./qoder-wire.js";
-import { parseJobToken, QoderAdapter, QoderUpstreamError, regionOfCreds } from "./qoder.js";
+import { parseJobToken, QoderAdapter, QoderClient, QoderUpstreamError, regionOfCreds } from "./qoder.js";
 import { isQoderRegion, QODER_CHAT_PATH, QODER_REGION_CONFIGS } from "./qoder-wire.js";
 
 /**
@@ -148,6 +149,21 @@ describe("qoder-wire 错误分类", () => {
     const body = '{"code":"110","message":"daily quota exhausted"}';
     expect(classifyHttpStatus(403, body)).toBe("auth");
     expect(classifyFailure(403, body)).toBe("quota-exhausted");
+  });
+
+  it("403 + code 144 是专属积分包余额不足，不是凭据失效", () => {
+    const body =
+      '{"code":"144","message":"Dedicated resource package balance is low","modelKey":"smodel"}';
+    expect(classifyHttpStatus(403, body)).toBe("auth");
+    expect(classifyFailure(403, body)).toBe("quota-exhausted");
+    // 整数写法与嵌套 message 同样按业务码兜底。
+    expect(classifyFailure(403, '{"code":144,"message":"low"}')).toBe("quota-exhausted");
+  });
+
+  it("每一张配额码表条目都优先于 403 的 auth 兜底", () => {
+    for (const code of ["110", "111", "112", "144"]) {
+      expect(classifyFailure(403, JSON.stringify({ code }))).toBe("quota-exhausted");
+    }
   });
 
   it("业务码优先于状态码", () => {
@@ -402,6 +418,125 @@ describe("qoder 连接器纯函数", () => {
     expect(b.id).toBe("u2");
     expect(b.securityOauthToken).toBe("jt-2");
     expect(b.expireTime).toBeUndefined();
+  });
+});
+
+describe("qoder 已领状态判据", () => {
+  it("把上游所有已知幂等写法都认成已领", () => {
+    for (const status of ["CLAIMED", "ALREADY_CLAIMED", "ALREADY", "replayed", "Claimed"]) {
+      expect(isQoderClaimedStatus(status)).toBe(true);
+    }
+  });
+
+  it("CLAIMABLE / 空 / 未知状态不误判成已领", () => {
+    for (const status of ["CLAIMABLE", "", "PENDING", undefined]) {
+      expect(isQoderClaimedStatus(status)).toBe(false);
+    }
+  });
+});
+
+describe("qoder claimDailyCredits 幂等与请求链", () => {
+  function makeClient(opts: {
+    campaigns: unknown;
+    claimStatus?: number;
+    claimBody?: unknown;
+    calls?: string[];
+  }): QoderClient {
+    const calls = opts.calls ?? [];
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.includes("/api/v3/user/jobToken")) {
+        return new Response(
+          JSON.stringify({ data: { id: "u1", name: "n", securityOauthToken: "jt-1", expireTime: 9999999999 } }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/api/v1/jobToken/exchange")) {
+        return new Response(JSON.stringify({ data: { token: "jt-sash" } }), { status: 200 });
+      }
+      if (url.includes("/me/campaigns") && init?.method !== "POST") {
+        return new Response(JSON.stringify(opts.campaigns), { status: 200 });
+      }
+      if (url.includes("/claim")) {
+        return new Response(JSON.stringify(opts.claimBody ?? { status: "CLAIMED" }), {
+          status: opts.claimStatus ?? 200,
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+    return new QoderClient("qoder", { fetch: fakeFetch });
+  }
+
+  const claimableCampaign = {
+    data: {
+      campaigns: [
+        {
+          campaignId: "c1",
+          actionType: "CLAIM_BENEFIT",
+          claimStatus: "CLAIMABLE",
+          endAt: 1_795_857_600,
+          benefit: { amount: 100, validity: { days: 30 } },
+        },
+      ],
+    },
+  };
+
+  it("CLAIMABLE → 真发 claim，返回 claimed 带金额与有效期", async () => {
+    const calls: string[] = [];
+    const client = makeClient({ campaigns: claimableCampaign, calls });
+    const out = await client.claimDailyCredits("pt-x");
+    expect(out).toMatchObject({ status: "claimed", amount: 100, validityDays: 30 });
+    expect(calls.some((c) => c.includes("/me/campaigns?forceRefresh=true"))).toBe(true);
+    expect(calls.some((c) => c.includes("/me/campaigns/c1/claim"))).toBe(true);
+  });
+
+  it("活动列表已是 CLAIMED → 不发 claim，报 already-claimed", async () => {
+    const calls: string[] = [];
+    const client = makeClient({
+      campaigns: {
+        data: {
+          campaigns: [
+            { campaignId: "c1", actionType: "CLAIM_BENEFIT", claimStatus: "CLAIMED", endAt: 1_795_857_600 },
+          ],
+        },
+      },
+      calls,
+    });
+    const out = await client.claimDailyCredits("pt-x");
+    expect(out).toMatchObject({ status: "already-claimed", nextRefreshAtMs: 1_795_857_600_000 });
+    expect(calls.some((c) => c.includes("/claim"))).toBe(false);
+  });
+
+  it("claim 返回 409 → already-claimed（幂等）", async () => {
+    const client = makeClient({ campaigns: claimableCampaign, claimStatus: 409, claimBody: {} });
+    const out = await client.claimDailyCredits("pt-x");
+    expect(out.status).toBe("already-claimed");
+  });
+
+  it("claim 返回 ALREADY_CLAIMED / replayed 等幂等标记 → already-claimed", async () => {
+    for (const status of ["ALREADY_CLAIMED", "ALREADY", "replayed"]) {
+      const client = makeClient({ campaigns: claimableCampaign, claimBody: { status } });
+      const out = await client.claimDailyCredits("pt-x");
+      expect(out.status).toBe("already-claimed");
+    }
+  });
+
+  it("claim 返回未知状态 → unavailable，不虚报领到", async () => {
+    const client = makeClient({ campaigns: claimableCampaign, claimBody: { status: "PENDING" } });
+    const out = await client.claimDailyCredits("pt-x");
+    expect(out).toMatchObject({ status: "unavailable" });
+    if (out.status === "unavailable") expect(out.message).toContain("PENDING");
+  });
+
+  it("没有 CLAIM_BENEFIT 活动 → unavailable，不发 claim", async () => {
+    const calls: string[] = [];
+    const client = makeClient({
+      campaigns: { data: { campaigns: [{ campaignId: "v1", actionType: "VIEW_DETAILS", claimStatus: "CLAIMABLE" }] } },
+      calls,
+    });
+    const out = await client.claimDailyCredits("pt-x");
+    expect(out).toMatchObject({ status: "unavailable" });
+    expect(calls.some((c) => c.includes("/claim"))).toBe(false);
   });
 });
 
