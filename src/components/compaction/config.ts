@@ -312,15 +312,6 @@ function parseBool(value: string | null, fallback: boolean): boolean {
  * 校验失败 → 抛错，由 applyCompaction 捕获后禁用增强（宿主原摘要照常）。
  */
 export function readCompactionConfig(getSetting: (key: string) => string | null): CompactionComponentConfig {
-  const rawTiers = getSetting("compaction.tiers");
-  let tiers: QuiltPoolTier[] = [];
-  if (rawTiers !== null && rawTiers.trim() !== "") {
-    const parsed: unknown = JSON.parse(rawTiers);
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      throw new Error("compaction.tiers must be a non-empty JSON array");
-    }
-    tiers = resolveConfig({ tiers: parsed }).tiers as QuiltPoolTier[];
-  }
   const rawMode = (getSetting("compaction.promptMode") ?? COMPACTION_DEFAULTS.promptMode).trim().toLowerCase();
   // 三档：default（一次压完） / anchored（分块+锚点） / quilt（分块不带锚点）。
   // 未知值回落到 default —— 它是"最像宿主自带压缩"的那一档，最不会让人意外。
@@ -330,11 +321,16 @@ export function readCompactionConfig(getSetting: (key: string) => string | null)
   const mergeMaxContextTokens = rawMerge !== null && Number.isSafeInteger(Number(rawMerge)) && Number(rawMerge) > 0
     ? Number(rawMerge)
     : DEFAULT_MERGE_MAX_CONTEXT_TOKENS;
+  // 2026-11 用户定案：「逻辑模型和压缩模式已经提供了所有信息」——
+  //   - 逻辑模型复用辅助请求路由卡的 `route.compact`（唯一真源，不再有 compaction.logicalModel）；
+  //   - tiers 由该逻辑模型的 members 自动推导（不再有 compaction.tiers JSON）；
+  //   - 恒启用（不再有 compaction.enabled 开关）：选了压缩逻辑模型就生效。
+  const logicalModel = (getSetting("route.compact") ?? "").trim();
   return {
-    enabled: parseBool(getSetting("compaction.enabled"), COMPACTION_DEFAULTS.enabled),
+    enabled: logicalModel !== "",
     promptMode,
-    logicalModel: (getSetting("compaction.logicalModel") ?? "").trim(),
-    tiers,
+    logicalModel,
+    tiers: [],
     mergeMaxContextTokens,
   };
 }

@@ -179,7 +179,9 @@ async function startAsOne(ctx: Context): Promise<void> {
   // 容量视图包装 rt.ledger（真实在途账本），组件只按 setting 表的开关/配额裁决，
   // 不做第二套账本、不注册独立 bundle 行。设置默认开启，关掉即不生效。
   const capacity = createCapacityView(runtime.ledger);
-  const disposeSubagentLimit = applySubagentLimit(ctx, capacity, runtime.getSetting);
+  // 子代理并发限制 = 模型自身的并发容量（启用凭据数 × 每凭据并发；逻辑模型取成员之和）。
+  // 2026-11 用户定案：不再有任何 subagentLimit.* 设置项。
+  const disposeSubagentLimit = applySubagentLimit(ctx, capacity, runtime.subagentCapOf);
   // 压缩拦截器要挂在有 `llm` 服务的子 fiber 上（下面 llm effect 里装配），
   // 这里先留 disposer 槽位。
   let disposeCompaction: (() => void) | undefined;

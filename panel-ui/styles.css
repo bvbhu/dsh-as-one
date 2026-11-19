@@ -1883,6 +1883,422 @@ body {
   line-height: 18px;
 }
 
+/* ── 设置页重设计(2026-11):全站设计语言 ────────────────────────
+ * 卡片统一用 `.card/.card-head`(与总览/模型/渠道/用量各页同款),字段行用
+ * `.kv-grid`(左 140px 标签 / 右控件),控件用 `.input/.selectInput`,按钮用
+ * `.btn/.primaryButton/.secondaryButton`,徽章用 `.pill/.rowTag`。
+ * 不再有设置页专属的 .ui-* 视觉孤岛。 */
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* 顶层分段:直接复用用量页 `.usage-seg`,只在两端留点空。 */
+.settings-seg {
+  align-self: flex-start;
+  margin: 2px 0 4px;
+}
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.setting-card {
+  /* .card 已是 8px 圆角/1px border/surface 底;这里只收紧间距求"紧凑整齐"。 */
+  padding: 12px 16px;
+}
+.setting-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.setting-group-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+/* kv-grid 里的控件:统一宽度、和全站 .input/.selectInput 对齐。 */
+.kv-grid .v > .input,
+.kv-grid .v > .selectInput,
+.kv-grid .v > .setting-input-unit > .input {
+  width: 100%;
+  max-width: 460px;
+}
+.kv-wide {
+  grid-column: 1 / -1;
+}
+.setting-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.setting-check .checkInput {
+  accent-color: var(--ok);
+}
+.setting-json {
+  box-sizing: border-box;
+  height: auto;
+  min-height: 72px;
+  max-height: 200px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  resize: vertical;
+}
+.setting-json:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.setting-input-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 460px;
+}
+.setting-unit {
+  color: var(--text-soft);
+  font-size: 11px;
+  flex: none;
+}
+.setting-key-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.setting-key {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  word-break: break-all;
+}
+
+/* 底部保存栏:静态 footer(不 sticky、不遮挡卡片),复用全站按钮。 */
+.setting-savebar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--border);
+}
+.setting-savebar-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+}
+.setting-savebar-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bad);
+}
+.setting-savebar-msg {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.setting-savebar-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.setting-savebar .primaryButton,
+.setting-savebar .secondaryButton {
+  height: 32px;
+  font-size: 12px;
+  padding: 0 14px;
+}
+
+/* ── 设置页排版:单列流式 + 组内横向铺满 ────────────────────────────
+ * 用户 2026-11:「不同的项目不分列,同一组条目尽量利用横向空间」。
+ * 所以这里**不做多列分组**(那张 settingColumns 已删),每条字段仍是一行
+ * 「标签左 / 控件右」,但控件占满可用宽度 —— 右半边不再留空。 */
+/* 同一行控件**右端也对齐**:输入框一律占满剩余宽度,单位贴右。 */
+.kv-wide-grid .v > .input,
+.kv-wide-grid .v > .selectInput {
+  width: 100%;
+  max-width: none;
+}
+.kv-wide-grid .v > .setting-input-unit {
+  width: 100%;
+  max-width: none;
+}
+.kv-wide-grid .v > .setting-input-unit > .input {
+  flex: 1;
+  max-width: none;
+}
+.kv-wide-grid {
+  gap: 8px 16px;
+}
+/* 冷却行:供应商 + 分钟 + 删除,横排。 */
+.cooldownRows {
+  margin-top: 10px;
+}
+.cooldownMinute {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.ruleNum {
+  width: 92px;
+  text-align: right;
+}
+.ruleUnit {
+  color: var(--text-soft);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.ruleRowCard.hasError {
+  border-color: var(--bad);
+}
+
+/* ── 调度优先级列表:一个列表,分隔占位符分段 ────────────────────
+ * 参照逻辑模型列表(.rows > .rowCard)。分隔条既是段标题(高/次/低/禁用),
+ * 也是该段的添加位(点「＋ 添加」)。P3 不显示 —— 没有规则就是 P3 基线档。 */
+.sched-rows {
+  gap: 8px;
+}
+.sched-sep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-bottom: 2px;
+}
+.sched-rows > .sched-sep:first-child {
+  margin-top: 0;
+}
+.sched-sep-badge {
+  /* 弱化:淡底 + 强调色字(不用实心 accent,避免与顶部 tab / 主按钮抢主次)。 */
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+  font-weight: 600;
+}
+.sched-sep-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.sched-sep .card-extra {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+.sched-sep-add {
+  margin-left: auto;
+}
+/* 一条规则 = 常展开的一行:⠿ + 供应商 + 模型 + 到期 + 时段 + 删除。 */
+.ruleRowCard {
+  padding: 8px 10px 8px 6px;
+}
+.ruleRowLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ruleField {
+  height: 30px;
+  font-size: 12px;
+  min-width: 0;
+}
+/* 列宽制:供应商/到期/时段定宽(同行严格对齐),模型吃掉剩余宽度 ——
+ * 这样整行铺满横向空间、右端不留空,「删除」始终贴右。 */
+.ruleProvider {
+  flex: 0 0 128px;
+}
+.ruleModel {
+  flex: 1 1 auto;
+  min-width: 140px;
+}
+.ruleExpiry {
+  flex: 0 0 128px;
+}
+.ruleProfile {
+  flex: 0 0 128px;
+}
+.ruleDel {
+  flex: none;
+}
+.ruleRowCard .rule-err {
+  margin: 4px 0 0;
+  padding-left: 22px;
+}
+.schedRowOuter {
+  list-style: none;
+}
+.sched-rows {
+  /* 与 .rows 对齐:去掉默认 padding,靠 gap 分隔。 */
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+/* 拖动把手:与逻辑模型档链同款。 */
+.ruleRowCard .dragHandle {
+  flex: none;
+  color: var(--dim);
+  cursor: grab;
+  user-select: none;
+  font-size: 13px;
+  line-height: 1;
+}
+.ruleRowCard .dragHandle:active {
+  cursor: grabbing;
+}
+.ruleRowCard.nodeRowDragging {
+  opacity: 0.45;
+}
+.schedRowsOutside {
+  outline: 1px dashed var(--bad);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+.ruleOpen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+/* 编辑器:与逻辑模型编辑器同款 .editor + .fieldRow(标签在上)。 */
+.ruleEditor,
+.ruleOpen .editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ruleEditor .fieldRow,
+.ruleOpen .fieldRow {
+  max-width: 520px;
+}
+/* 卡头操作区:编辑 / 删除 紧凑排列。 */
+.ruleRowCard .rowActions {
+  gap: 6px;
+}
+.ruleModelTag {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 时段配置卡:一条时段 = 名称 + 若干子规则(常展开)。 */
+.profileRows {
+  gap: 10px;
+}
+.profileRow {
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-deep);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.profileTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.profileName {
+  flex: 0 1 220px;
+  height: 30px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.profileDel {
+  margin-left: auto;
+}
+.profileSeg {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.profileSegDays {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.profileSegTimes {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.profileTime {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.profileTime .input {
+  width: 104px;
+  height: 28px;
+  font-size: 12px;
+  padding: 0 6px;
+}
+.profileNote {
+  color: var(--text-soft);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.profileActions {
+  display: flex;
+  gap: 8px;
+  padding-top: 2px;
+}
+.profileRow .rr-day-set {
+  display: inline-flex;
+  gap: 3px;
+}
+.profileRow .rr-day {
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 11.5px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.profileRow .rr-day.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+
 .ui-field-err {
   margin: 0;
   color: var(--bad);
@@ -2475,9 +2891,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 14px;
-  position: sticky;
-  bottom: 12px;
-  z-index: 5;
+  /* 静态 footer:不悬浮、不遮挡卡片内容(用户重设计后卡片更密,sticky 会压住末卡)。 */
 }
 .ui-savebar-count {
   display: inline-flex;
@@ -3872,6 +4286,7 @@ body {
 /* 退避曲线(.ui-chart-wrap / .ui-chart) */
 .ui-chart-wrap {
   margin-top: 10px;
+  max-width: 760px;
 }
 .ui-chart {
   display: block;

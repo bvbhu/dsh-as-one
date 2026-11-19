@@ -88,22 +88,25 @@ describe("config: 纯函数校验（替代 schemastery/zod）", () => {
     })).toThrow(/duplicate pool route/);
   });
 
-  it("reads component settings from setting table", () => {
+  it("压缩逻辑模型复用 route.compact(不再有 compaction.logicalModel/tiers)", () => {
     const settings: Record<string, string> = {
-      "compaction.enabled": "true",
       "compaction.promptMode": "anchored",
-      "compaction.logicalModel": "free",
+      "route.compact": "free",
+      // 旧的三个键即使残留在库里也不再被读取。
+      "compaction.enabled": "0",
+      "compaction.logicalModel": "legacy",
       "compaction.tiers": JSON.stringify(baseTiers().tiers),
     };
     const cfg = readCompactionConfig((k) => settings[k] ?? null);
-    expect(cfg.enabled).toBe(true);
     expect(cfg.promptMode).toBe("anchored");
     expect(cfg.logicalModel).toBe("free");
-    expect(cfg.tiers).toHaveLength(1);
+    expect(cfg.tiers).toEqual([]);
+    // 选了压缩逻辑模型就启用（不再有独立开关；旧 enabled=0 被忽略）。
+    expect(cfg.enabled).toBe(true);
   });
 
-  it("defaults promptMode to default and disabled when setting says 0", () => {
-    const cfg = readCompactionConfig((k) => (k === "compaction.enabled" ? "0" : null));
+  it("没配 route.compact → 不启用；promptMode 缺省 default", () => {
+    const cfg = readCompactionConfig(() => null);
     expect(cfg.enabled).toBe(false);
     expect(cfg.promptMode).toBe("default");
     expect(cfg.tiers).toEqual([]);

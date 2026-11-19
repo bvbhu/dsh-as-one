@@ -27,6 +27,7 @@ import {
   monotonic,
   rulesDefaultsJson,
   wallNow,
+  windowProfilesDefaultsJson,
 } from "@as-one/core/src/scheduler/engine.js";
 import { getAllConnectors } from "@as-one/core/src/connectors/index.js";
 import { dayKey, parseContentMode } from "@as-one/core/src/request-log/index.js";
@@ -290,6 +291,85 @@ function validateCooldownOverrides(parsed: unknown): string | null {
   return null;
 }
 
+/**
+ * `scheduler.window_profiles` 校验:命名时段表(2026-11)。
+ *
+ * 元素 `{id, name, weekdays?, times?}`;id 唯一且非空,name 可省(回落 id)。
+ * 与规则校验同一纪律:形状不对**直接拒绝并指明第几条**,不做静默修正。
+ */
+function validateWindowProfiles(parsed: unknown): string | null {
+  const KEY = "scheduler.window_profiles";
+  if (!Array.isArray(parsed)) {
+    return `${KEY} 应为 JSON 数组,收到 ${parsed === null ? "null" : typeof parsed}`;
+  }
+  const seen = new Set<string>();
+  const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+  for (let i = 0; i < parsed.length; i += 1) {
+    const n = i + 1;
+    const item = parsed[i];
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      return `${KEY} 第 ${n} 项应为对象,收到 ${Array.isArray(item) ? "array" : typeof item}`;
+    }
+    const p = item as Record<string, unknown>;
+    const id = p["id"];
+    if (typeof id !== "string" || id.trim() === "") {
+      return `${KEY} 第 ${n} 项:id 必填且为非空字符串,收到 ${JSON.stringify(id)}`;
+    }
+    if (seen.has(id.trim())) return `${KEY} 第 ${n} 项:id ${JSON.stringify(id)} 重复`;
+    seen.add(id.trim());
+    const tag = `${KEY} 第 ${n} 项(id=${JSON.stringify(id)})`;
+    const name = p["name"];
+    if (name !== undefined && name !== null && typeof name !== "string") {
+      return `${tag}:name 必须是字符串`;
+    }
+    // 子规则(segments):不拆分 profile 的表达力全在这里。
+    // 兼容旧形态(顶层 weekdays/times)按单段校验。
+    const segs = p["segments"];
+    const rawSegs =
+      segs !== undefined && segs !== null
+        ? segs
+        : [{ weekdays: p["weekdays"], times: p["times"] }];
+    if (!Array.isArray(rawSegs)) {
+      return `${tag}:segments 必须是数组`;
+    }
+    for (let si = 0; si < rawSegs.length; si += 1) {
+      const seg = rawSegs[si];
+      const stag = `${tag} 第 ${si + 1} 段`;
+      if (seg === null || typeof seg !== "object" || Array.isArray(seg)) {
+        return `${stag}:必须是对象 {weekdays?, times?}`;
+      }
+      const s = seg as Record<string, unknown>;
+      const weekdays = s["weekdays"];
+      if (weekdays !== undefined && weekdays !== null) {
+        const ok =
+          Array.isArray(weekdays) &&
+          weekdays.length > 0 &&
+          weekdays.every((d) => typeof d === "number" && Number.isInteger(d) && d >= 1 && d <= 7);
+        if (!ok) return `${stag}:weekdays 必须是 1..7 的整数列表,收到 ${JSON.stringify(weekdays)}`;
+      }
+      const times = s["times"];
+      if (times !== undefined && times !== null) {
+        const okShape = Array.isArray(times) && times.every((x) => Array.isArray(x) && x.length === 2);
+        if (!okShape) {
+          return `${stag}:times 必须是 [["HH:MM","HH:MM"], ...] 形状,收到 ${JSON.stringify(times)}`;
+        }
+        for (const span of times as unknown[][]) {
+          if (
+            typeof span[0] !== "string" ||
+            typeof span[1] !== "string" ||
+            !HHMM.test(span[0]) ||
+            !HHMM.test(span[1])
+          ) {
+            return `${stag}:times 里的时段必须是 HH:MM 格式,收到 ${JSON.stringify(span)}`;
+          }
+          if (span[0] === span[1]) return `${stag}:时段 ${span[0]} 起止相同(空区间,永不命中)`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function validateRulesArray(parsed: unknown, priorityKey: string): string | null {
   const KEY = priorityKey;
   if (!Array.isArray(parsed)) {
@@ -334,9 +414,28 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         return `${tag}:window 必须是对象 {weekdays?, times?},收到 ${Array.isArray(win) ? "array" : typeof win}`;
       }
       const w = win as Record<string, unknown>;
-      const winExtra = Object.keys(w).filter((k) => k !== "times" && k !== "weekdays").sort();
+      const winExtra = Object.keys(w)
+        .filter((k) => k !== "times" && k !== "weekdays" && k !== "profile")
+        .sort();
       if (winExtra.length > 0) {
-        return `${tag}:window 有未知键:${winExtra.join(", ")}(只认 times / weekdays)`;
+        return `${tag}:window 有未知键:${winExtra.join(", ")}(只认 profile / times / weekdays)`;
+      }
+      // 2026-11:命名时段引用。给了 profile 就不该再写内联 times/weekdays(双真源)。
+      const profile = w["profile"];
+      if (profile !== undefined && profile !== null) {
+        if (typeof profile !== "string" || profile.trim() === "") {
+          return `${tag}:window.profile 必须是非空字符串(引用 scheduler.window_profiles 里的 id),收到 ${JSON.stringify(profile)}`;
+        }
+        if (w["times"] !== undefined || w["weekdays"] !== undefined) {
+          return `${tag}:window.profile 与内联 times/weekdays 互斥,只留一种`;
+        }
+        // 引用时段的规则按 provider+model 精确匹配端点,model 必须填。
+        if (typeof model !== "string" || model.trim() === "") {
+          return (
+            `${tag}:引用时段的规则必须同时有非空 model(时段规则按 provider+model 精确匹配端点),` +
+            `收到 model=${JSON.stringify(model)}`
+          );
+        }
       }
       const times = w["times"];
       if (times !== undefined && times !== null) {
@@ -1093,7 +1192,9 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
               ? rulesDefaultsJson(Number(spec.key.slice("scheduler.rules_p".length)))
               : spec.key === "scheduler.cooldown_overrides"
                 ? cooldownDefaultsJson()
-                : spec.def;
+                : spec.key === "scheduler.window_profiles"
+                  ? windowProfilesDefaultsJson()
+                  : spec.def;
           ctx.db.setting.set(spec.key, seed);
           value = seed;
         }
@@ -1112,6 +1213,7 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
         ...(f.min === undefined ? {} : { min: f.min }),
         ...(f.max === undefined ? {} : { max: f.max }),
         ...(f.section === undefined ? {} : { section: f.section }),
+        ...(f.options === undefined ? {} : { options: f.options.map((o) => ({ ...o })) }),
       }));
       return {
         sections,
@@ -1212,6 +1314,13 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
             writes.push({ key: spec.key, value: JSON.stringify(parsed, null, 2) });
             continue;
           }
+          if (spec.key === "scheduler.window_profiles") {
+            const bad = validateWindowProfiles(parsed);
+            if (bad !== null) return { ok: false, message: bad };
+            // 时段表也可能被规则引用 —— 改它同样要让调度器重读配置 + 刷注册表。
+            writes.push({ key: spec.key, value: JSON.stringify(parsed, null, 2) });
+            continue;
+          }
           writes.push({ key: spec.key, value: JSON.stringify(parsed, null, 2) });
           continue;
         }
@@ -1226,7 +1335,9 @@ function validateRulesArray(parsed: unknown, priorityKey: string): string | null
       }
       // scheduler.rules_p<priority> 是注册表快照的一部分(引擎按 registry.listSchedulerRules
       // 之外还会读 setting,但 dsh-plugin / 面板读数走注册表),换快照保持一致。
-      if (writes.some((w) => w.key.startsWith("scheduler.rules"))) ctx.syncRegistry();
+      if (writes.some((w) => w.key.startsWith("scheduler.rules") || w.key === "scheduler.window_profiles")) {
+        ctx.syncRegistry();
+      }
       const changed = writes.map((w) => w.key);
       return {
         ok: true,

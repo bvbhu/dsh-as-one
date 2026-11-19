@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 
 import { openDatabase, type AsOneDatabase } from "@as-one/core/src/db/database.js";
 import { ProviderRegistry } from "@as-one/core/src/config/providers.js";
+import { defaultConcurrencyOf } from "@as-one/core/src/config/concurrency-defaults.js";
 import { CredentialVault } from "@as-one/core/src/config/credentials.js";
 import { DbCredentialBackend } from "@as-one/core/src/db/credential-backend.js";
 import { snapshotFromDb } from "@as-one/core/src/db/registry-projection.js";
@@ -119,6 +120,18 @@ export interface AsOneRuntime {
   onRequestDone(info: RequestDoneInfo): void;
   /** 密钥在场表:repo 的 hasSecret 需同步读,装配时一次性探测(不碰明文)。 */
   secretPresence: Map<string, boolean>;
+  /**
+   * 某模型（或逻辑模型）的**总并发容量** —— 子代理并发的唯一限制依据。
+   *
+   * 2026-11 用户定案：「子代理并发限制的设置项整体移除，只按模型的并发限制
+   * 限制子代理（逻辑模型的并发取所有成员模型的并发之和）」。
+   *
+   * 口径（与 `concurrency-defaults.ts` 的「每凭据」语义一致）：
+   * - 真实模型 = **启用凭据数 × 该凭据的 concurrency**（3 个号 × 1 = 3）；
+   * - 逻辑模型 = 各成员真实模型该值**之和**；
+   * - 查不到（provider/model 缺失、成员全空）→ `null`（不限制）。
+   */
+  subagentCapOf: (provider: string | undefined, model: string | undefined) => number | null;
   /** 把库里的最新状态重新投影进注册表(面板写库之后调用,索引即时对齐)。 */
   syncRegistry(): void;
   startedAtMs: number;
@@ -670,6 +683,30 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     setAccountEnabled,
     getSetting: (key: string) => settingOf(db, key),
     secretPresence,
+    subagentCapOf: (provider, model) => {
+      // 真实模型:启用凭据数 × 该凭据并发(见 concurrency-defaults 的「每凭据」语义)。
+      const realCap = (p: string, m: string): number => {
+        const creds = registry
+          .listAccounts(p)
+          .filter((a) => accountOverlay.get(a.credentialRef) ?? a.enabled).length;
+        const conc =
+          db.realModel.get(p, m)?.concurrency ??
+          registry.getRealModel(p, m)?.concurrency ??
+          defaultConcurrencyOf(p);
+        return Math.max(1, creds) * Math.max(1, conc);
+      };
+      // 逻辑模型名(不带斜杠):取所有成员模型容量之和。
+      if (model !== undefined && model !== "" && !model.includes("/")) {
+        const row = db.logicalModel.get(model);
+        if (row !== null && row !== undefined) {
+          const members = parseMembers(row.members);
+          if (members.length === 0) return null;
+          return members.reduce((sum, m) => sum + realCap(m.provider, m.model), 0);
+        }
+      }
+      if (provider === undefined || provider === "" || model === undefined || model === "") return null;
+      return realCap(provider, model);
+    },
     syncRegistry,
     resolveUpstream,
     listModels: async () => listModelEntries(registry, db, await providersWithCredentials(registry, vault)),

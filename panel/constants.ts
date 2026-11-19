@@ -130,7 +130,7 @@ export const CLIENT_CANDIDATES: Record<string, string[]> = {
 export interface SettingFieldSpec {
   key: string;
   def: string;
-  kind: "str" | "int" | "float" | "bool" | "json";
+  kind: "str" | "int" | "float" | "bool" | "json" | "enum";
   label: string;
   /** 数值型下界(spec 同名字段);页面据此给输入框 min。 */
   min?: number;
@@ -138,6 +138,8 @@ export interface SettingFieldSpec {
   max?: number;
   /** 展示分组覆盖(如:`real.wait_budget_s` 归 retry 段,不按键前缀落 real 段)。 */
   section?: string;
+  /** `kind: "enum"` 的候选项(值 + 中文标签);页面渲染成下拉框。 */
+  options?: ReadonlyArray<{ value: string; label: string }>;
 }
 /**
  * 设置页字段表 —— 逐字段对齐 `_SETTING_SPECS`。
@@ -186,6 +188,12 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     def: "",
     kind: "json",
     label: "调度规则 · 禁用档(priority 0)",
+  },
+  {
+    key: "scheduler.window_profiles",
+    def: "",
+    kind: "json",
+    label: "命名时段配置(星期 + 时段)",
   },
   {
     key: "scheduler.cooldown_overrides",
@@ -247,12 +255,15 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     min: 0,
   },
   {
+    // 2026-11 用户定案:它是「失败后多久不选这个逻辑模型成员」,与供应商级冷却
+    // 同一个决策语境 → **页面渲染在冷却卡里**(`section` 只影响分组显示,键名不变)。
     key: "retry.logical_cooldown",
     def: "15",
     kind: "int",
-    label: "逻辑模型成员冷却(分钟)",
+    label: "逻辑模型成员冷却",
     min: 1,
     max: 1440,
+    section: "cooldown",
   },
   // ⭐ 2026-10-18 重进设置页(同批改动):键名前缀是 `real` 但**归在 retry 段
   // 渲染** —— 它与 retry.* 同一决策语境。段名只是展示分组,不影响键本身。
@@ -302,63 +313,24 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     kind: "str",
     label: "会话标题",
   },
-  // ── 嵌入式组件:subagent 并发限制(代码读 src/components/subagent-limit.ts) ──
-  {
-    key: "subagentLimit.enabled",
-    def: "true",
-    kind: "bool",
-    label: "启用 subagent 并发限制",
-    section: "subagentLimit",
-  },
-  {
-    key: "subagentLimit.defaultLimit",
-    def: "4",
-    kind: "int",
-    label: "默认最大 subagent 数(未命中规则时)",
-    min: 1,
-    section: "subagentLimit",
-  },
-  {
-    key: "subagentLimit.limits",
-    def: "[]",
-    kind: "json",
-    label: "按 provider/model 指定上限",
-    section: "subagentLimit",
-  },
-  {
-    key: "subagentLimit.countMainAgent",
-    def: "true",
-    kind: "bool",
-    label: "主会话占用也计入(不拦截主会话)",
-    section: "subagentLimit",
-  },
   // ── 嵌入式组件:压缩增强(src/components/compaction) ───────────────────
-  {
-    key: "compaction.enabled",
-    def: "true",
-    kind: "bool",
-    label: "启用压缩增强(quilt 分层摘要)",
-    section: "compaction",
-  },
+  //
+  // ⚠️ 2026-11 用户定案:压缩增强**不再是独立卡片**,只保留「压缩模式」一个下拉,
+  // 并进「辅助请求路由」卡。其余三项全部退役:
+  //   - `compaction.enabled`   → 恒启用(路由卡里选了逻辑模型就生效);
+  //   - `compaction.logicalModel` → 复用同卡的 `route.compact`(逻辑模型名,唯一真源);
+  //   - `compaction.tiers`     → 由该逻辑模型的 members 自动推导。
+  // 用户原话:「逻辑模型和压缩模式已经提供了所有信息」。
   {
     key: "compaction.promptMode",
     def: "default",
-    kind: "str",
-    label: "压缩模式(default 一次压完 / anchored 分块+锚点 / quilt 分块)",
-    section: "compaction",
-  },
-  {
-    key: "compaction.logicalModel",
-    def: "",
-    kind: "str",
-    label: "压缩模型(逻辑模型名)",
-    section: "compaction",
-  },
-  {
-    key: "compaction.tiers",
-    def: "[]",
-    kind: "json",
-    label: "模型池 tiers(JSON,覆盖逻辑模型 members)",
+    kind: "enum",
+    label: "压缩模式",
+    options: [
+      { value: "default", label: "一次性压完" },
+      { value: "anchored", label: "分块 + 锚点" },
+      { value: "quilt", label: "分块（quilt）" },
+    ],
     section: "compaction",
   },
 ];

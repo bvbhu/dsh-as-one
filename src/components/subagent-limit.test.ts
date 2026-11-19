@@ -1,24 +1,13 @@
+/**
+ * subagent-limit 单测。
+ *
+ * 2026-11 用户定案改了语义：「子代理并发限制的设置项整体移除，只按模型的并发
+ * 限制限制子代理（逻辑模型的并发取所有成员模型的并发之和）」 —— 所以
+ * `capFor` / `readConfig` / `SUBAGENT_LIMIT_DEFAULTS` 都已退役，
+ * 容量由 `SubagentCapOf` 回调给出。这里覆盖模型解析与错误构造。
+ */
 import { describe, it, expect } from "vitest";
-import {
-  resolveModel,
-  capFor,
-  limitError,
-  readConfig,
-  SUBAGENT_LIMIT_DEFAULTS,
-  type SubagentLimitConfig,
-  type ResolvedModel,
-} from "./subagent-limit.js";
-
-const cfg: SubagentLimitConfig = {
-  ...SUBAGENT_LIMIT_DEFAULTS,
-  defaultLimit: 9,
-  limits: [
-    { provider: "as-one", model: "auto", max: 2 },
-    { provider: "as-one", model: "*", max: 5 },
-    { provider: "*", model: "glm-flash", max: 7 },
-    { provider: "*", model: "*", max: 8 },
-  ],
-};
+import { resolveModel, limitError } from "./subagent-limit.js";
 
 function execWith(args: unknown, parent?: unknown) {
   return {
@@ -47,28 +36,15 @@ describe("resolveModel", () => {
   it("current() 抛错不崩", () => {
     const r = resolveModel({
       arguments: {},
-      agent: { model: { current: () => { throw new Error("x"); } } },
+      agent: {
+        model: {
+          current: () => {
+            throw new Error("x");
+          },
+        },
+      },
     });
     expect(r.source).toBe("fallback");
-  });
-});
-
-describe("capFor 四级匹配", () => {
-  it("provider+model 精确最优先", () => {
-    expect(capFor(cfg, { provider: "as-one", model: "auto", source: "arguments" })).toBe(2);
-  });
-  it("provider/* 次之", () => {
-    expect(capFor(cfg, { provider: "as-one", model: "other", source: "arguments" })).toBe(5);
-  });
-  it("*/model 再次", () => {
-    expect(capFor(cfg, { provider: "trae", model: "glm-flash", source: "arguments" })).toBe(7);
-  });
-  it("*/* 兜底", () => {
-    expect(capFor(cfg, { provider: "trae", model: "unknown", source: "arguments" })).toBe(8);
-  });
-  it("无规则用 defaultLimit", () => {
-    const bare = { ...SUBAGENT_LIMIT_DEFAULTS, defaultLimit: 3, limits: [] };
-    expect(capFor(bare, { provider: "x", model: "y", source: "arguments" })).toBe(3);
   });
 });
 
@@ -79,41 +55,5 @@ describe("limitError 不可重试", () => {
     expect(err.name).toBe("AbortedError");
     expect(err.message).toContain("as-one/auto");
     expect(err.message).toContain("2/2");
-  });
-});
-
-describe("readConfig", () => {
-  it("空设置用默认值", () => {
-    const c = readConfig(() => null);
-    expect(c.enabled).toBe(true);
-    expect(c.defaultLimit).toBe(4);
-    expect(c.limits).toEqual([]);
-    expect(c.countMainAgent).toBe(true);
-  });
-  it("读 JSON 规则与布尔开关", () => {
-    const store: Record<string, string> = {
-      "subagentLimit.enabled": "false",
-      "subagentLimit.defaultLimit": "6",
-      "subagentLimit.limits": '[{"provider":"as-one","model":"auto","max":2}]',
-      "subagentLimit.countMainAgent": "false",
-    };
-    const c = readConfig((k) => store[k] ?? null);
-    expect(c.enabled).toBe(false);
-    expect(c.defaultLimit).toBe(6);
-    expect(c.limits).toEqual([{ provider: "as-one", model: "auto", max: 2 }]);
-    expect(c.countMainAgent).toBe(false);
-  });
-  it("坏 JSON 不抛，回落空规则", () => {
-    const c = readConfig((k) => (k === "subagentLimit.limits" ? "{bad" : null));
-    expect(c.limits).toEqual([]);
-  });
-  it("bool 认面板存的 1/0", () => {
-    const c = readConfig((k) => {
-      if (k === "subagentLimit.enabled") return "0";
-      if (k === "subagentLimit.countMainAgent") return "1";
-      return null;
-    });
-    expect(c.enabled).toBe(false);
-    expect(c.countMainAgent).toBe(true);
   });
 });

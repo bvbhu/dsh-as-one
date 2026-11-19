@@ -26,16 +26,19 @@ import { rendererApi } from "../api";
 import {
   CooldownRuleRow,
   RULES_PRIORITY_KEYS,
-  TierRuleRow,
+  RuleRow,
   freshGroups,
+  parseProfiles,
   parseRules,
   ruleCard,
   rulesProblem,
   serializeCooldowns,
   serializeGroups,
+  serializeProfiles,
   serializeRulesByKey,
 } from "./settings-rules";
-import type { CooldownRule, RuleGroups, TierRule } from "./settings-rules";
+import type { CooldownRule, RuleGroups, TierRule, WindowProfileRow } from "./settings-rules";
+import { moveItemTo, insertIndexAt, outsideRect } from "../components/logical-model-dnd.js";
 import type {
   DeploymentItem,
   LogicalModelGroup,
@@ -76,6 +79,19 @@ const TIER_PANELS = [
   { badge: "P4", key: "degrade", title: "调度优先级" },
   { badge: "禁用", key: "disabled", title: "" },
 ] as const;
+
+/**
+ * 设置页顶层分段(2026-11-18 重设计):一次只显示一个任务域,不恢复左侧固定导航。
+ * 卡片内部一律「标签左 / 控件右」的紧凑行(settings-row),无说明段落。
+ */
+const SETTINGS_TABS = [
+  { key: "scheduler", label: "调度" },
+  { key: "policy", label: "策略" },
+  { key: "integration", label: "集成" },
+  { key: "ui", label: "界面" },
+  { key: "system", label: "系统" },
+] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number]["key"];
 
 const UNIT_BY_KEY: Record<string, string> = {
   "external_refresh.interval_hours": "小时",
@@ -202,12 +218,152 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+const WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"];
+
+/** 一条时段子规则的摘要:`工作日 09:00-12:00、14:00-18:00`。 */
+function segSummary(seg: { weekdays: number[]; times: Array<{ start: string; end: string }> }): string {
+  const days =
+    seg.weekdays.length === 0
+      ? "每天"
+      : seg.weekdays.length === 5 && [1, 2, 3, 4, 5].every((d) => seg.weekdays.includes(d))
+        ? "工作日"
+        : seg.weekdays.length === 2 && seg.weekdays.includes(6) && seg.weekdays.includes(7)
+          ? "周末"
+          : seg.weekdays.map((d) => WEEKDAY_LABELS[d - 1]).join("、");
+  const times =
+    seg.times.length === 0 ? "全天" : seg.times.map((t) => `${t.start}-${t.end}`).join("、");
+  return `${days} ${times}`;
+}
+
+/**
+ * 一条命名时段卡 —— **常展开**，内部可有**多条子规则**。
+ *
+ * 用户 2026-11 要求「不需要拆分」：梁文谷 = 工作日非高峰 + 周末全天，必须是一条
+ * 时段里的两段子规则，而不是两个独立时段。所以这里每张卡渲染
+ * 「名称 + 若干子规则（各自的星期方块 + 时间段）」，＋/× 增删子规则。
+ */
+function ProfileCard(props: {
+  profile: WindowProfileRow;
+  onPatch: (patch: Partial<WindowProfileRow>) => void;
+  onRemove: () => void;
+}): React.JSX.Element {
+  const p = props.profile;
+  const setSegs = (segs: WindowProfileRow["segments"]): void => props.onPatch({ segments: segs });
+  const patchSeg = (i: number, patch: Partial<WindowProfileRow["segments"][number]>): void =>
+    setSegs(p.segments.map((s, at) => (at === i ? { ...s, ...patch } : s)));
+  const toggleDay = (i: number, d: number): void => {
+    const cur = p.segments[i].weekdays;
+    patchSeg(i, { weekdays: cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d].sort() });
+  };
+  const patchTime = (i: number, ti: number, patch: Partial<{ start: string; end: string }>): void =>
+    patchSeg(i, { times: p.segments[i].times.map((t, at) => (at === ti ? { ...t, ...patch } : t)) });
+
+  return (
+    <li className="profileRow">
+      <div className="profileTop">
+        <input
+          className="input profileName"
+          value={p.name}
+          aria-label="时段名称"
+          title="时段名称(规则下拉里显示这个名字)"
+          onChange={(ev) => props.onPatch({ name: ev.target.value })}
+        />
+        <button type="button" className="rowBtn danger profileDel" onClick={props.onRemove}>
+          删除
+        </button>
+      </div>
+
+      {p.segments.map((seg, i) => (
+        <div className="profileSeg" key={i}>
+          <div className="profileSegDays">
+            <div className="rr-day-set" role="group" aria-label="生效星期">
+              {WEEKDAY_LABELS.map((label, di) => {
+                const d = di + 1;
+                const on = seg.weekdays.includes(d);
+                return (
+                  <button
+                    type="button"
+                    key={d}
+                    className={"rr-day" + (on ? " on" : "")}
+                    aria-pressed={on}
+                    aria-label={`周${label}`}
+                    onClick={() => toggleDay(i, d)}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {seg.weekdays.length === 0 ? <span className="profileNote">每天</span> : null}
+          </div>
+          <div className="profileSegTimes">
+            {seg.times.map((t, ti) => (
+              <span className="profileTime" key={ti}>
+                <input
+                  type="time"
+                  className="input"
+                  value={t.start}
+                  aria-label="开始时间"
+                  onChange={(ev) => patchTime(i, ti, { start: ev.target.value })}
+                />
+                <span className="profileNote">–</span>
+                <input
+                  type="time"
+                  className="input"
+                  value={t.end}
+                  aria-label="结束时间"
+                  onChange={(ev) => patchTime(i, ti, { end: ev.target.value })}
+                />
+                <button
+                  type="button"
+                  className="rowBtn danger"
+                  aria-label="删除该时间段"
+                  onClick={() => patchSeg(i, { times: seg.times.filter((_, at) => at !== ti) })}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <button
+              type="button"
+              className="rowBtn"
+              onClick={() => patchSeg(i, { times: [...seg.times, { start: "09:00", end: "18:00" }] })}
+            >
+              ＋ 时间段
+            </button>
+          </div>
+        </div>
+      ))}
+
+      <div className="profileActions">
+        <button
+          type="button"
+          className="rowBtn"
+          onClick={() => setSegs([...p.segments, { weekdays: [], times: [] }])}
+        >
+          ＋ 添加子规则
+        </button>
+        {p.segments.length > 1 ? (
+          <button
+            type="button"
+            className="rowBtn danger"
+            onClick={() => setSegs(p.segments.slice(0, -1))}
+          >
+            删除最后一段
+          </button>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
 export default function SettingsPage(): React.JSX.Element {
   const [data, setData] = React.useState<SettingsRead | null>(null);
   const [draft, setDraft] = React.useState<Record<string, Record<string, string>>>({});
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState("");
   const [err, setErr] = React.useState("");
+  const [activeTab, setActiveTab] = React.useState<SettingsTab>("scheduler");
 
   // 调度规则编辑器状态
   const [ruleGroups, setRuleGroups] = React.useState<RuleGroups>(freshGroups());
@@ -325,11 +481,16 @@ export default function SettingsPage(): React.JSX.Element {
     // ⚠️ 不能只 setDraft 再读 draft —— React 状态是异步的,changedPayload() 会读到旧值。
     const rulesFields = serializeRulesByKey(groups);
     const cooldownJson = serializeCooldowns(groups);
+    const profilesJson = serializeProfiles(groups);
     // 用户要求:保存时打印/导出清洗后的最终 JSON(净化:空 model / 空到期时间 / 空 window 均省略)。
     console.log(
       "[调度规则] 保存 - 清洗后最终 JSON:",
       JSON.stringify(
-        { ...JSON.parse(serializeGroups(groups)), "scheduler.cooldown_overrides": JSON.parse(cooldownJson) },
+        {
+          ...JSON.parse(serializeGroups(groups)),
+          "scheduler.cooldown_overrides": JSON.parse(cooldownJson),
+          "scheduler.window_profiles": JSON.parse(profilesJson),
+        },
         null,
         2,
       ),
@@ -340,6 +501,7 @@ export default function SettingsPage(): React.JSX.Element {
         ...(d.scheduler ?? {}),
         ...rulesFields,
         "scheduler.cooldown_overrides": cooldownJson,
+        "scheduler.window_profiles": profilesJson,
       },
     }));
     const payload = changedPayload();
@@ -353,6 +515,9 @@ export default function SettingsPage(): React.JSX.Element {
     }
     if (JSON.stringify(cooldownJson) !== JSON.stringify(origScheduler["scheduler.cooldown_overrides"] ?? "")) {
       schedOut["scheduler.cooldown_overrides"] = cooldownJson;
+    }
+    if (JSON.stringify(profilesJson) !== JSON.stringify(origScheduler["scheduler.window_profiles"] ?? "")) {
+      schedOut["scheduler.window_profiles"] = profilesJson;
     }
     if (Object.keys(schedOut).length > 0) payload["scheduler"] = { ...(payload["scheduler"] ?? {}), ...schedOut };
     if (Object.keys(payload).length === 0) {
@@ -426,52 +591,56 @@ export default function SettingsPage(): React.JSX.Element {
     return data.specs.find((s) => !s.hidden && s.key === key);
   }
 
+  /** 字段行:复用全站 `.kv-grid`(左 140px 标签 / 右控件),紧凑整齐。 */
   function field(section: string, spec: SettingSpec, wide = false): React.JSX.Element {
     const value = draft[section]?.[spec.key] ?? "";
     const kind = spec.kind;
     const unit = UNIT_BY_KEY[spec.key] || "";
     const on = value === "true" || value === "1";
-    return (
-      <div key={spec.key} className={"ui-field" + (wide || kind === "json" ? " wide" : "")}>
-        <div className="ui-field-head">
-          <span className="ui-field-label">{spec.label}</span>
-          {unit ? <span className="ui-field-unit">{unit}</span> : null}
-        </div>
-        {kind === "bool" ? (
-          <label className="ui-check">
-            <input
-              type="checkbox"
-              checked={on}
-              disabled={busy}
-              onChange={(ev) => setValue(section, spec, ev.target.checked)}
-            />
-            {on ? "已启用" : "已关闭"}
-          </label>
-        ) : kind === "enum" ? (
-          <select
-            className="ui-select"
-            value={value}
-            disabled={busy}
-            onChange={(ev) => setValue(section, spec, ev.target.value)}
-          >
-            {(spec.options ?? []).map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
-        ) : kind === "json" ? (
-          // 3 行起步即可看清空数组/短对象；内容多的自己往下拖（CSS 限最大 200px）。
-          <textarea
-            className="ui-jsonbox"
-            rows={3}
-            value={value}
-            disabled={busy}
-            onChange={(ev) => setValue(section, spec, ev.target.value)}
-          />
-        ) : (
+    let control: React.JSX.Element;
+    if (kind === "bool") {
+      control = (
+        <label className="setting-check">
           <input
-            className="ui-input"
+            type="checkbox"
+            className="checkInput"
+            checked={on}
+            disabled={busy}
+            onChange={(ev) => setValue(section, spec, ev.target.checked)}
+          />
+          {on ? "已启用" : "已关闭"}
+        </label>
+      );
+    } else if (kind === "enum") {
+      control = (
+        <select
+          className="input selectInput"
+          value={value}
+          disabled={busy}
+          onChange={(ev) => setValue(section, spec, ev.target.value)}
+        >
+          {(spec.options ?? []).map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      );
+    } else if (kind === "json") {
+      control = (
+        <textarea
+          className="input setting-json"
+          rows={3}
+          value={value}
+          disabled={busy}
+          onChange={(ev) => setValue(section, spec, ev.target.value)}
+        />
+      );
+    } else {
+      control = (
+        <span className="setting-input-unit">
+          <input
+            className="input"
             type={kind === "int" || kind === "float" ? "number" : "text"}
             min={spec.min}
             max={spec.max}
@@ -480,8 +649,15 @@ export default function SettingsPage(): React.JSX.Element {
             disabled={busy}
             onChange={(ev) => setValue(section, spec, ev.target.value)}
           />
-        )}
-      </div>
+          {unit ? <span className="setting-unit">{unit}</span> : null}
+        </span>
+      );
+    }
+    return (
+      <React.Fragment key={spec.key}>
+        <span className={"k" + (wide ? " kv-wide" : "")}>{spec.label}</span>
+        <span className={"v" + (wide ? " kv-wide" : "")}>{control}</span>
+      </React.Fragment>
     );
   }
 
@@ -502,13 +678,11 @@ export default function SettingsPage(): React.JSX.Element {
       // (写死在 core 的 `ACCOUNT_MIN_INTERVAL_MS` = 4 秒)—— 它是账号安全下限,
       // 不该让用户调成 0 把节流关掉(那正是 11140 封号的成因)。
       {
-        title: "重试次数与冷却",
-        fields: pick([
-          "real.wait_budget_s",
-          "retry.logical_max",
-          "retry.real_max",
-          "retry.logical_cooldown",
-        ]),
+        // ⚠️ `retry.logical_cooldown` **不在这里** —— 2026-11 用户定案移到「冷却」卡
+        // （同为「失败后多久不选」的语境）。`specOf` 只按 key 查、不看 section，
+        // 所以两边都写就会重复渲染同一个字段。
+        title: "重试次数",
+        fields: pick(["real.wait_budget_s", "retry.logical_max", "retry.real_max"]),
       },
     ];
   }
@@ -524,6 +698,86 @@ export default function SettingsPage(): React.JSX.Element {
     return [...new Set(src.map((d) => d.model))].sort();
   }
 
+  /** 规则行引用的命名时段表(只读视图)。 */
+  const ruleProfiles = ruleGroups.profiles;
+
+  /* ── 拖动排序状态(与逻辑模型档链同一套手势) ── */
+  const schedListRef = React.useRef<HTMLUListElement | null>(null);
+  const dragSrcRef = React.useRef<{ tier: TierKey; index: number; handled: boolean } | null>(null);
+  const lastPointRef = React.useRef<{ x: number; y: number } | null>(null);
+  const [dragSrc, setDragSrc] = React.useState<{ tier: TierKey; index: number } | null>(null);
+  const [dropTarget, setDropTarget] = React.useState<{ tier: TierKey; insertAt: number } | null>(null);
+  const [dragOutside, setDragOutside] = React.useState(false);
+
+  React.useEffect(() => {
+    if (dragSrc === null) return;
+    const onDocDragOver = (e: DragEvent): void => {
+      lastPointRef.current = { x: e.clientX, y: e.clientY };
+      const rect = schedListRef.current?.getBoundingClientRect();
+      setDragOutside(rect ? outsideRect(rect, e.clientX, e.clientY, 8) : false);
+    };
+    document.addEventListener("dragover", onDocDragOver);
+    return () => document.removeEventListener("dragover", onDocDragOver);
+  }, [dragSrc]);
+
+  /**
+   * 某段内各行的上下边界(算插入缝隙)。
+   *
+   * ⚠️ 直接查 DOM 而不是按 index 存 ref:拖动重排后 index 整体错位,
+   * 存下来的 ref 数组会指向旧行,落点就会算到别处(这正是"拖动有 bug"的成因)。
+   * 用 `data-tier` 现查,永远与当前渲染顺序一致。
+   */
+  function bandsOf(tier: TierKey): Array<{ top: number; bottom: number }> {
+    const root = schedListRef.current;
+    if (root === null) return [];
+    return [...root.querySelectorAll<HTMLElement>(`li[data-tier="${tier}"]`)].map((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom };
+    });
+  }
+
+  function onRuleDragStart(tier: TierKey, index: number, e: React.DragEvent<HTMLSpanElement>): void {
+    dragSrcRef.current = { tier, index, handled: false };
+    lastPointRef.current = { x: e.clientX, y: e.clientY };
+    setDragSrc({ tier, index });
+    setDropTarget(null);
+    setDragOutside(false);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", `${tier}:${index}`);
+  }
+
+  function onSegDragOver(tier: TierKey, e: React.DragEvent<HTMLElement>): void {
+    if (dragSrcRef.current === null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDropTarget({ tier, insertAt: insertIndexAt(bandsOf(tier), e.clientY) });
+  }
+
+  function onSegDrop(tier: TierKey, e: React.DragEvent<HTMLElement>): void {
+    e.preventDefault();
+    const d = dragSrcRef.current;
+    if (d === null) return;
+    d.handled = true;
+    dragMoveRule({ tier: d.tier, index: d.index }, { tier, insertAt: insertIndexAt(bandsOf(tier), e.clientY) });
+  }
+
+  function onRuleDragEnd(e: React.DragEvent<HTMLSpanElement>): void {
+    const d = dragSrcRef.current;
+    dragSrcRef.current = null;
+    setDragSrc(null);
+    setDropTarget(null);
+    setDragOutside(false);
+    if (d === null || d.handled) return;
+    const rect = schedListRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const p =
+      e.clientX !== 0 || e.clientY !== 0
+        ? { x: e.clientX, y: e.clientY }
+        : (lastPointRef.current ?? { x: e.clientX, y: e.clientY });
+    // 拖出整个列表松手 = 删除(与逻辑模型档链同一语义)。
+    if (outsideRect(rect, p.x, p.y, 8)) removeTier(d.tier, d.index);
+  }
+
   function updateRules(next: RuleGroups): void {
     setRuleGroups(next);
     const rulesFields = serializeRulesByKey(next);
@@ -533,15 +787,64 @@ export default function SettingsPage(): React.JSX.Element {
         ...(d.scheduler ?? {}),
         ...rulesFields,
         "scheduler.cooldown_overrides": serializeCooldowns(next),
+        "scheduler.window_profiles": serializeProfiles(next),
       },
     }));
   }
 
-  // 2026-10-24 五档统一形状:一个 patch / add / remove 函数覆盖全部档位。
-  const TIER_KEYS = ["free", "expiry", "consume", "degrade", "disabled"] as const;
-  type TierKey = (typeof TIER_KEYS)[number];
+  /**
+   * 拖动换位(2026-11 用户定案:排序**完全靠拖动**,不放 ↑↓ 按钮)。
+   *
+   * - 段内拖动 = 调整该段内的先后(数组顺序即优先级);
+   * - 拖到别的段 = 整条规则改优先级(等价于之前的下拉换档);
+   * - 拖出整个列表松手 = 删除该条(与逻辑模型档链同一手势)。
+   */
+  function dragMoveRule(from: { tier: TierKey; index: number }, to: { tier: TierKey; insertAt: number }): void {
+    const fromList = tierList(from.tier);
+    const rule = fromList[from.index];
+    if (rule === undefined) return;
+    if (from.tier === to.tier) {
+      updateRules({ ...ruleGroups, [from.tier]: moveItemTo(fromList, from.index, to.insertAt) });
+      return;
+    }
+    const targetList = [...tierList(to.tier)];
+    const at = Math.max(0, Math.min(targetList.length, to.insertAt));
+    targetList.splice(at, 0, rule);
+    updateRules({
+      ...ruleGroups,
+      [from.tier]: fromList.filter((_, i) => i !== from.index),
+      [to.tier]: targetList,
+    });
+  }
 
-  function tierList(key: TierKey): TierRule[] {
+  /** 时段表增删改(设置页「时段配置」卡)。 */
+  function patchProfile(id: string, patch: Partial<WindowProfileRow>): void {
+    updateRules({
+      ...ruleGroups,
+      profiles: ruleGroups.profiles.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+    });
+  }
+  function addProfile(): void {
+    // id 用时间戳保证唯一(用户可见名可改;id 是规则引用键,不随改名变)。
+    const id = `custom-${Date.now().toString(36)}`;
+    updateRules({
+      ...ruleGroups,
+      profiles: [...ruleGroups.profiles, { id, name: "新时段", segments: [] }],
+    });
+  }
+  function removeProfile(id: string): void {
+    updateRules({ ...ruleGroups, profiles: ruleGroups.profiles.filter((p) => p.id !== id) });
+  }
+
+  // 2026-11 用户定案:五档统一形状;P3 已从界面**移除** —— 没有规则就是 P3(基线档)。
+  // 保留 "consume" 键只为解析旧库数据能读到(见 tierList),界面上不再出现。
+  const TIER_KEYS = ["free", "expiry", "degrade", "disabled"] as const;
+  /** 界面可编辑的四个段(P3 不在其中)。 */
+  type TierKey = (typeof TIER_KEYS)[number];
+  /** 读取包含 P3(旧库数据的 consume 组仍要能解析与往返保留)。 */
+  type AnyTierKey = TierKey | "consume";
+
+  function tierList(key: AnyTierKey): TierRule[] {
     switch (key) {
       case "free":
         return ruleGroups.free;
@@ -560,7 +863,7 @@ export default function SettingsPage(): React.JSX.Element {
     updateRules(next);
   }
   function addTier(key: TierKey): void {
-    updateRules({ ...ruleGroups, [key]: [...tierList(key), { provider: "", model: "", expires_at: "", weekdays: [], times: [] }] });
+    updateRules({ ...ruleGroups, [key]: [...tierList(key), { provider: "", model: "", expires_at: "", profile: "" }] });
   }
   function removeTier(key: TierKey, i: number): void {
     updateRules({ ...ruleGroups, [key]: tierList(key).filter((_, at) => at !== i) });
@@ -608,88 +911,232 @@ export default function SettingsPage(): React.JSX.Element {
     }
     const raw = JSON.stringify(merged, null, 2);
     const res = parseRules(raw);
-    const groups = parseCooldowns(s.scheduler?.["scheduler.cooldown_overrides"], res.ok ? res.groups : freshGroups());
+    const base = parseCooldowns(s.scheduler?.["scheduler.cooldown_overrides"], res.ok ? res.groups : freshGroups());
+    // 命名时段表(独立键):规则通过 window.profile 引用它。
+    const groups: RuleGroups = { ...base, profiles: parseProfiles(s.scheduler?.["scheduler.window_profiles"]) };
     setRuleGroups(groups);
   }
 
   /**
-   * 调度规则面板组 —— 五档(P1~P4 + 禁用)+ 冷却各自一张平级卡片。
+   * 调度列表（2026-11 用户定案：整合成**一个列表**，用分隔占位符分段）。
    *
-   * 2026-11-03 用户定案:移除「调度规则」总卡框。原先 rulesEditor() 返回的
-   * 单个 .asone-scheduler 容器被拆成 7 张与「外部数据刷新」同级的 .ui-card,
-   * 保存逻辑(ruleGroups → serializeRulesByKey)完全不变。
-   *
-   * 2026-11-03 用户定案(二):卡片标题口径统一 —— P1~P4 副标题一律「调度优先级」,
-   * 「禁用」「冷却」两张卡只留徽标(副标题传空串,ruleCard 不渲染副标题 span)。
-   * 2026-11-07 起不再传任何行为说明(hint),档位差异只由徽标承载。
-   *
-   * 2026-11-18 重做:一条规则 = 一行(`TierRuleRow`),不再是一条规则 5 个 .box
-   * 纵向堆叠。星期与时段在这行里是**两个独立段**,可只设其一。
+   * 结构：分隔 · P1 · 分隔 · P2 · 分隔 · P4 · 分隔 · 禁用
+   *   - 分隔条既是**段标题**（高优先 / 次优先 / 低优先 / 禁用），也是**添加位**；
+   *   - P3 不显示 —— 没有规则就是 P3（引擎里 P3 是基线档）；
+   *   - 排序**完全靠拖动**：段内拖动改先后，拖到别的段即改优先级，拖出列表即删除。
    */
   function schedulerPanels(): React.JSX.Element[] {
-    const g = ruleGroups;
     const out: React.JSX.Element[] = [];
+    const segments: Array<{ key: TierKey; badge: string; title: string }> = [
+      { key: "free", badge: "P1", title: "高优先" },
+      { key: "expiry", badge: "P2", title: "次优先" },
+      { key: "degrade", badge: "P4", title: "低优先" },
+      { key: "disabled", badge: "禁用", title: "禁用" },
+    ];
+    const rows: React.JSX.Element[] = [];
+    for (const seg of segments) {
+      const list = tierList(seg.key);
+      rows.push(
+        <li
+          key={`sep-${seg.key}`}
+          className="sched-sep"
+          onDragOver={(e) => onSegDragOver(seg.key, e)}
+          onDrop={(e) => onSegDrop(seg.key, e)}
+        >
+          <span className="rowTag sched-sep-badge">{seg.badge}</span>
+          <span className="sched-sep-title">{seg.title}</span>
+          <span className="card-extra">{list.length} 条</span>
+          <button type="button" className="rowBtn sched-sep-add" onClick={() => addTier(seg.key)}>
+            ＋ 添加
+          </button>
+        </li>,
+      );
+      for (const [i, r] of list.entries()) {
+        rows.push(
+          <li
+            key={`${seg.key}-${r.provider}-${r.model}-${i}`}
+            className="schedRowOuter"
+            data-tier={seg.key}
+            onDragOver={(e) => onSegDragOver(seg.key, e)}
+            onDrop={(e) => onSegDrop(seg.key, e)}
+          >
+            <RuleRow
+              rule={r}
+              profiles={ruleProfiles}
+              providerOptions={providerOptions}
+              modelOptions={modelOptionsFor(r.provider)}
+              dragging={dragSrc !== null && dragSrc.tier === seg.key && dragSrc.index === i}
+              dropBefore={dropTarget !== null && dropTarget.tier === seg.key && dropTarget.insertAt === i}
+              onDragStart={(e) => onRuleDragStart(seg.key, i, e)}
+              onDragEnd={onRuleDragEnd}
+              onPatch={(patch) => patchTier(seg.key, i, patch)}
+              onRemove={() => removeTier(seg.key, i)}
+            />
+          </li>,
+        );
+      }
+      // 段内末位的落点标记(拖到该段最末)。
+      if (dropTarget !== null && dropTarget.tier === seg.key && dropTarget.insertAt === list.length) {
+        rows.push(<li key={`drop-${seg.key}`} className="dropMarker" aria-hidden="true" />);
+      }
+    }
+    out.push(
+      <section key="sched-list" className="card setting-card">
+        <div className="card-head">
+          <h2>调度优先级</h2>
+          {/* 只保留**动态反馈**(拖出列表时警告);静态说明交给 ⠿ 的 title 悬浮提示。 */}
+          {dragOutside ? <span className="chainHint chainHintDanger">松手即删除</span> : null}
+        </div>
+        <ul
+          className={`rows sched-rows${dragOutside ? " schedRowsOutside" : ""}`}
+          ref={(el) => {
+            schedListRef.current = el;
+            if (el === null) return;
+            // 每段一个隐藏的「段容器」标记,供 bandsOf 按段取行。
+            void el;
+          }}
+          onDragOver={(e) => {
+            // 列表空白处也接受拖动:按指针落在哪段来决定。
+            if (dragSrcRef.current === null) return;
+            e.preventDefault();
+          }}
+        >
+          {rows}
+        </ul>
+      </section>,
+    );
+    return out;
+  }
 
-    for (const p of TIER_PANELS) {
-      const key = p.key as TierKey;
-      const list = tierList(key);
-      out.push(
-        <React.Fragment key={p.key}>
-          {ruleCard(
-            p.badge,
-            p.title,
-            list.length,
-            () => addTier(key),
-            list.map((r, i) => (
-              <TierRuleRow
+  /**
+   * 命名时段配置卡 —— **常展开**,一条时段可含多条子规则。
+   *
+   * 与「调度优先级」并列成两张主卡(而不是跟会话粘性、路由挤在一起),
+   * 因为它是规则的直接依赖:规则行里的「时段」下拉选项就来自这里。
+   */
+  function profilesCard(): React.JSX.Element {
+    const list = ruleGroups.profiles;
+    return (
+      <section key="profiles" className="card setting-card">
+        <div className="card-head">
+          <h2>时段配置</h2>
+          <button type="button" className="btn btn-sm" onClick={addProfile}>
+            ＋ 添加时段
+          </button>
+        </div>
+        {list.length === 0 ? null : (
+          <ul className="rows profileRows">
+            {list.map((p) => (
+              <ProfileCard
+                key={p.id}
+                profile={p}
+                onPatch={(patch) => patchProfile(p.id, patch)}
+                onRemove={() => removeProfile(p.id)}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
+    );
+  }
+
+  /**
+   * 「辅助请求路由」+ 会话粘性 + 压缩模式 —— 合成一张卡。
+   *
+   * 2026-11 用户定案:
+   * - 压缩增强只剩「压缩模式」一个下拉,并进本卡(逻辑模型复用上面的「压缩摘要」);
+   * - **不同的项目不分列**:每个字段一行,标签左、控件右,同一组横向铺开;
+   * - 不再有子代理并发限制、不再有压缩启用开关/压缩模型/tiers。
+   */
+  function miscSchedCard(): React.JSX.Element | null {
+    const routeSpecs = ROUTE_KEYS.map((k) => specOf(k)).filter((s): s is SettingSpec => s !== undefined);
+    const modeSpec = specOf("compaction.promptMode");
+    if (pinSecondsSpec === undefined && routeSpecs.length === 0 && modeSpec === undefined) return null;
+    const names = logicalModels.map((m) => m.model).filter((m) => m !== "").sort();
+    const labelOf = (name: string): string => {
+      const hit = logicalModels.find((m) => m.model === name);
+      return hit?.display_name && hit.display_name !== name ? `${hit.display_name}(${name})` : name;
+    };
+    return (
+      <section key="misc" className="card setting-card">
+        <div className="card-head">
+          <h2>辅助请求路由</h2>
+        </div>
+        <div className="kv-grid kv-wide-grid">
+          {/* 三条重路由车道 */}
+          {routeSpecs.map((spec) => {
+            const value = draft.route?.[spec.key] ?? "";
+            // 历史值(库里配的、但当前逻辑模型列表里没有)也要留在选项里,
+            // 否则下拉框会显示成第一项「不重路由」,用户一保存就把配置抹了。
+            const options = value === "" || names.includes(value) ? names : [value, ...names];
+            return (
+              <React.Fragment key={spec.key}>
+                <span className="k">{spec.label}</span>
+                <span className="v">
+                  <select
+                    className="input selectInput"
+                    value={value}
+                    disabled={busy}
+                    onChange={(ev) => setValue("route", spec, ev.target.value)}
+                  >
+                    <option value="">不重路由</option>
+                    {options.map((n) => (
+                      <option key={n} value={n}>
+                        {labelOf(n)}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+              </React.Fragment>
+            );
+          })}
+
+          {/* 压缩模式(逻辑模型取自上面的「压缩摘要」) */}
+          {modeSpec !== undefined ? field("compaction", modeSpec) : null}
+
+          {/* 会话粘性 */}
+          {pinSecondsSpec !== undefined ? field("scheduler", pinSecondsSpec) : null}
+        </div>
+      </section>
+    );
+  }
+
+  /**
+   * 冷却卡 —— 供应商级冷却覆盖 + 逻辑模型成员冷却，合成一张。
+   *
+   * 2026-11 用户定案:
+   * - 样式参考调度卡（行式，但**没有拖动排序** —— 冷却顺序无意义）;
+   * - `retry.logical_cooldown` 从重试卡移到这里（同为「失败后多久不选」语境）。
+   */
+  function cooldownCard(): React.JSX.Element {
+    const g = ruleGroups;
+    const memberSpec = specOf("retry.logical_cooldown");
+    return (
+      <section className="card setting-card">
+        <div className="card-head">
+          <h2>冷却</h2>
+          <button type="button" className="btn btn-sm" onClick={addCooldown}>
+            ＋ 添加供应商
+          </button>
+        </div>
+        <div className="kv-grid kv-wide-grid">
+          {memberSpec !== undefined ? field(sectionOf(memberSpec), memberSpec) : null}
+        </div>
+        {g.cooldown.length > 0 ? (
+          <ul className="rows sched-rows cooldownRows">
+            {g.cooldown.map((r, i) => (
+              <CooldownRuleRow
                 key={i}
                 rule={r}
                 providerOptions={providerOptions}
-                modelOptions={modelOptionsFor(r.provider)}
-                onPatch={(patch) => patchTier(key, i, patch)}
-                onRemove={() => removeTier(key, i)}
+                onPatch={(patch) => patchCooldown(i, patch)}
+                onRemove={() => removeCooldown(i)}
               />
-            )),
-          )}
-        </React.Fragment>,
-      );
-    }
-
-    // 供应商级冷却覆盖(独立设置键 scheduler.cooldown_overrides)
-    out.push(
-      <React.Fragment key="cooldown">
-        {ruleCard(
-          "冷却",
-          "",
-          g.cooldown.length,
-          addCooldown,
-          g.cooldown.map((r, i) => (
-            <CooldownRuleRow
-              key={i}
-              rule={r}
-              providerOptions={providerOptions}
-              onPatch={(patch) => patchCooldown(i, patch)}
-              onRemove={() => removeCooldown(i)}
-            />
-          )),
-        )}
-      </React.Fragment>,
+            ))}
+          </ul>
+        ) : null}
+      </section>
     );
-
-    // 会话粘性(独立设置键 scheduler.pin_seconds):同样拆成平级卡片,字段仍可编辑
-    if (pinSecondsSpec) {
-      out.push(
-        <section key="pin" id="sched-pin" className="ui-card">
-          <div className="ui-card-head">
-            <h2 className="ui-card-title">会话粘性</h2>
-            <span className="ui-card-sub">同一会话在粘性时长内保持同一后端</span>
-          </div>
-          <div className="ui-fields">{field("scheduler", pinSecondsSpec)}</div>
-        </section>,
-      );
-    }
-
-    return out;
   }
 
   /* ── 辅助请求路由(route.*)─────────────────────────────────────── */
@@ -703,112 +1150,6 @@ export default function SettingsPage(): React.JSX.Element {
    */
   const ROUTE_KEYS = ["route.compact", "route.vision", "route.session_title"] as const;
 
-  function routingCard(): React.JSX.Element | null {
-    const specs = ROUTE_KEYS.map((k) => specOf(k)).filter((s): s is SettingSpec => s !== undefined);
-    if (specs.length === 0) return null;
-    const names = logicalModels.map((m) => m.model).filter((m) => m !== "").sort();
-    const labelOf = (name: string): string => {
-      const hit = logicalModels.find((m) => m.model === name);
-      return hit?.display_name && hit.display_name !== name ? `${hit.display_name}(${name})` : name;
-    };
-    return (
-      <section key="route" id="route" className="ui-card">
-        <div className="ui-card-head">
-          <h2 className="ui-card-title">辅助请求路由</h2>
-        </div>
-        {/* 2026-11-18 用户定案：副标题与整段说明都去掉 —— 卡片标题 + 三个下拉
-            已经自解释（每行左侧就是「压缩摘要 / 图片解析 / 会话标题」）。 */}
-        <div className="ui-fields">
-          {specs.map((spec) => {
-            const value = draft.route?.[spec.key] ?? "";
-            // 历史值(库里配的、但当前逻辑模型列表里没有)也要留在选项里,
-            // 否则下拉框会显示成第一项「不重路由」,用户一保存就把配置抹了。
-            const options = value === "" || names.includes(value) ? names : [value, ...names];
-            return (
-              <div key={spec.key} className="ui-field">
-                <div className="ui-field-head">
-                  <span className="ui-field-label">{spec.label}</span>
-                </div>
-                <select
-                  className="ui-select"
-                  value={value}
-                  disabled={busy}
-                  onChange={(ev) => setValue("route", spec, ev.target.value)}
-                >
-                  <option value="">不重路由(跟随客户端)</option>
-                  {options.map((n) => (
-                    <option key={n} value={n}>
-                      {labelOf(n)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-    );
-  }
-
-  /**
-   * subagent 并发限制（嵌入式组件，代码在 src/components/subagent-limit.ts）。
-   * 按 provider/model 限制同时存在的 subagent 数；超限返回不可重试的 ABORTED。
-   */
-  function subagentLimitCard(): React.JSX.Element | null {
-    const keys = [
-      "subagentLimit.enabled",
-      "subagentLimit.defaultLimit",
-      "subagentLimit.limits",
-      "subagentLimit.countMainAgent",
-    ] as const;
-    const specs = keys.map((k) => specOf(k)).filter((s): s is SettingSpec => s !== undefined);
-    if (specs.length === 0) return null;
-    return (
-      <section key="subagentLimit" id="subagentLimit" className="ui-card">
-        <div className="ui-card-head">
-          <h2 className="ui-card-title">子代理并发限制</h2>
-          <span className="ui-card-sub">按模型限制可同时运行的 subagent 数</span>
-        </div>
-        <p className="ui-field-hint">
-          同一模型同时运行的子代理超过上限时，新的 subagent 调用会被直接拒绝（不可重试）。
-          配额按 <b>provider/model</b> 匹配，可用 <code>*</code> 通配；主会话占用可计入名额但不拦截。
-        </p>
-        <div className="ui-fields">
-          {specs.map((s) => field("subagentLimit", s, s.kind === "json"))}
-        </div>
-      </section>
-    );
-  }
-
-  /** 压缩增强（嵌入式组件，代码在 src/components/compaction/）。 */
-  function compactionCard(): React.JSX.Element | null {
-    const keys = [
-      "compaction.enabled",
-      "compaction.promptMode",
-      "compaction.logicalModel",
-      "compaction.tiers",
-    ] as const;
-    const specs = keys.map((k) => specOf(k)).filter((s): s is SettingSpec => s !== undefined);
-    if (specs.length === 0) return null;
-    return (
-      <section key="compaction" id="compaction" className="ui-card">
-        <div className="ui-card-head">
-          <h2 className="ui-card-title">压缩增强（quilt 分层摘要）</h2>
-          <span className="ui-card-sub">分块摘要 + 归并，可选 session-search 锚点</span>
-        </div>
-        <p className="ui-field-hint">
-          <b>default</b>：挑一个上下文装得下整段历史的模型一次压完，提示词与 DSH 自带压缩完全一致，窗口都不够时回退宿主摘要。
-          <b>anchored</b>：分块摘要再归并，结果附 <code>&lt;session-search-anchors&gt;</code> 锚点块，可按 seq 取回原文。
-          <b>quilt</b>：同样分块归并，但不附锚点块（纯降 token 成本）。
-          任何一步失败都回退宿主原摘要。模型池 <code>tiers</code> 为空时用<b>压缩逻辑模型</b>的 members。
-        </p>
-        <div className="ui-fields">
-          {specs.map((s) => field("compaction", s, s.kind === "json"))}
-        </div>
-      </section>
-    );
-  }
-
   /** 单张设置卡(外部数据刷新 / 重试策略 / 界面)。 */
   function sectionCard(section: "external_refresh" | "retry" | "ui"): React.JSX.Element | null {
     const specs = specsOf(section);
@@ -817,33 +1158,31 @@ export default function SettingsPage(): React.JSX.Element {
     let body: React.JSX.Element;
     if (section === "retry") {
       body = (
-        <div className="ui-rule-groups">
+        <div className="setting-groups">
           {retryGroups().map((grp) => (
-            <div key={grp.title} className="ui-group">
-              <div className="ui-group-head">
-                <span className="ui-group-title">{grp.title}</span>
-              </div>
-              <div className="ui-fields">
+            <div key={grp.title} className="setting-group">
+              <div className="setting-group-title">{grp.title}</div>
+              <div className="kv-grid">
                 {grp.fields.map((s) => field("retry", s))}
               </div>
             </div>
           ))}
-          {/* 可重试错误码(独立宽卡) */}
-          {codesField ? field("retry", codesField, true) : null}
+          {/* 可重试错误码(独占整行) */}
+          <div className="kv-grid">{codesField ? field("retry", codesField, true) : null}</div>
           {chartBlock}
         </div>
       );
     } else {
       body = (
-        <div className="ui-fields">
+        <div className="kv-grid">
           {specs.map((s) => field(section, s))}
         </div>
       );
     }
     return (
-      <section key={section} id={section} className="ui-card">
-        <div className="ui-card-head">
-          <h2 className="ui-card-title">{meta.title}</h2>
+      <section key={section} id={section} className="card setting-card">
+        <div className="card-head">
+          <h2>{meta.title}</h2>
         </div>
         {body}
       </section>
@@ -900,118 +1239,143 @@ export default function SettingsPage(): React.JSX.Element {
         <p>{chart.seqText}</p>
         <p>{chart.budgetKText}</p>
         <p>{chart.budgetMText}</p>
-        <p>每次 ×2 递增并在「最大退避」处封顶;抖动使每一档在 [80%, 100%] × 确定值 内随机。</p>
       </div>
     </div>
   );
 
   return (
-    <div className="ui-shell">
-      <h1 className="ui-page-title">设置</h1>
+    <div className="content settings-page">
+      <h1 className="page-title">设置</h1>
       {busy ? <p className="hint">加载中…</p> : null}
-      {err ? <p className="ui-err">{err}</p> : null}
+      {err ? <p className="ov-err">{err}</p> : null}
 
       {data ? (
-        <div className="ui-layout">
-          <div className="ui-content">
-            {/* 设置卡:外部数据刷新 → 调度规则(每档一张平级面板)→ 重试策略 → 界面 */}
-            {sectionCard("external_refresh")}
-            {schedulerPanels()}
-            {routingCard()}
-            {subagentLimitCard()}
-            {compactionCard()}
-            {sectionCard("retry")}
-            {sectionCard("ui")}
+        <>
+          {/* 顶层分段:调度=选什么模型,策略=怎么请求(含冷却),一次只显示一个域。 */}
+          <div className="usage-seg settings-seg" role="tablist" aria-label="设置分类">
+            {SETTINGS_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === t.key}
+                className={activeTab === t.key ? "on" : ""}
+                onClick={() => setActiveTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-            {/* 请求日志(独立端点,立即生效) */}
-            {reqLog ? (
-              <section id="request-log" className="ui-card">
-                <div className="ui-card-head">
-                  <h2 className="ui-card-title">请求日志</h2>
+          <div className="settings-body">
+            {/* 调度:选什么模型(优先级列表 / 时段配置 / 其它调度参数) */}
+            {activeTab === "scheduler" ? (
+              <>
+                {schedulerPanels()}
+                {profilesCard()}
+                {miscSchedCard()}
+              </>
+            ) : null}
+            {/* 策略:怎么请求(重试+退避 / 冷却) */}
+            {activeTab === "policy" ? (
+              <>
+                {sectionCard("retry")}
+                {cooldownCard()}
+              </>
+            ) : null}
+            {activeTab === "integration" ? <>{sectionCard("external_refresh")}</> : null}
+            {activeTab === "ui" ? (
+              <>
+                {sectionCard("ui")}
+                {/* 请求日志(独立端点,立即生效) */}
+                {reqLog ? (
+                  <section id="request-log" className="card setting-card">
+                    <div className="card-head">
+                      <h2>请求日志</h2>
+                    </div>
+                    <div className="kv-grid">
+                      <span className="k">记录档位</span>
+                      <span className="v">
+                        <select
+                          className="input selectInput"
+                          value={reqLog.content_mode}
+                          disabled={busy}
+                          onChange={(ev) => void saveReqLog(ev.target.value as RequestLogContentMode)}
+                        >
+                          {reqLog.content_modes.map((m) => (
+                            <option key={m.value} value={m.value}>
+                              {m.label}
+                            </option>
+                          ))}
+                        </select>
+                      </span>
+                      <span className="k kv-wide">落盘位置</span>
+                      <span className="v kv-wide">
+                        <span className="setting-key-row">
+                          <code className="setting-key">{reqLog.path}</code>
+                          <span className="pill">{reqLog.counters?.written ?? 0} 条</span>
+                          <span className="pill">{reqLog.size_bytes} 字节</span>
+                        </span>
+                        {reqLog.last_error ? <span className="ov-err">上次记录失败:{reqLog.last_error}</span> : null}
+                      </span>
+                    </div>
+                    {logMsg ? <p className="hint">{logMsg}</p> : null}
+                  </section>
+                ) : null}
+              </>
+            ) : null}
+            {activeTab === "system" ? (
+              <section id="readonly" className="card setting-card">
+                <div className="card-head">
+                  <h2>只读信息</h2>
                 </div>
-                <div className="ui-fields">
-                  <div className="ui-field">
-                    <div className="ui-field-head">
-                      <span className="ui-field-label">记录档位</span>
-                    </div>
-                    <select
-                      className="ui-select"
-                      value={reqLog.content_mode}
-                      disabled={busy}
-                      onChange={(ev) => void saveReqLog(ev.target.value as RequestLogContentMode)}
-                    >
-                      {/* 契约从一开始就是 {value,label}:label 是中文说明,
-                          摆 value(off/structure/…)等于把说明丢掉。 */}
-                      {reqLog.content_modes.map((m) => (
-                        <option key={m.value} value={m.value}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="ui-field wide">
-                    <div className="ui-field-head">
-                      <span className="ui-field-label">落盘位置</span>
-                    </div>
-                    <div className="ui-key-row">
-                      <code className="ui-key">{reqLog.path}</code>
-                      <span className="ui-badge">已写 {reqLog.counters?.written ?? 0} 条</span>
-                      <span className="ui-badge">{reqLog.size_bytes} 字节</span>
-                    </div>
-                    {reqLog.last_error ? <p className="ui-field-err">上次记录失败:{reqLog.last_error}</p> : null}
-                  </div>
+                <div className="kv-grid">
+                  <span className="k">ONE_API_KEY</span>
+                  <span className="v">
+                    {data.master_key ? (
+                      <span className="setting-key-row">
+                        <code className="setting-key">{data.master_key}</code>
+                        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void copyKey()}>
+                          {keyCopied ? "已复制 ✓" : "复制"}
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="ov-err">未设置</span>
+                    )}
+                  </span>
                 </div>
-                {logMsg ? <p className="ui-field-hint">{logMsg}</p> : null}
               </section>
             ) : null}
-
-            {/* 只读信息 */}
-            <section id="readonly" className="ui-card">
-              <div className="ui-card-head">
-                <h2 className="ui-card-title">只读信息</h2>
-                <span className="ui-card-sub">环境变量 ONE_API_KEY · 只读</span>
-              </div>
-              {data.master_key ? (
-                <div className="ui-key-row">
-                  <code className="ui-key">{data.master_key}</code>
-                  <button type="button" className="ui-btn-ghost" disabled={busy} onClick={() => void copyKey()}>
-                    {keyCopied ? "已复制 ✓" : "复制"}
-                  </button>
-                </div>
-              ) : (
-                <span className="ui-field-hint">未设置 ONE_API_KEY:当前无鉴权(所有请求放行)</span>
-              )}
-            </section>
-
-            {/* 底部常驻保存栏 */}
-            <div className="ui-savebar">
-              <span className="ui-savebar-count">
-                {totalChanged() > 0 ? (
-                  <>
-                    <span className="ui-savebar-dot" />
-                    {totalChanged()} 项未保存
-                  </>
-                ) : (
-                  "没有未保存的改动"
-                )}
-              </span>
-              {msg ? <span className="ui-savebar-msg">{msg}</span> : null}
-              <div className="ui-savebar-btns">
-                <button type="button" className="ui-btn-ghost" disabled={busy} onClick={discard}>
-                  放弃改动
-                </button>
-                <button
-                  type="button"
-                  className="ui-btn-primary"
-                  disabled={busy || totalChanged() === 0}
-                  onClick={() => void save()}
-                >
-                  保存设置
-                </button>
-              </div>
-            </div>
           </div>
-        </div>
+
+          {/* 底部保存栏:静态 footer,不遮挡卡片(复用全站按钮)。 */}
+          <div className="setting-savebar">
+            <span className="setting-savebar-count">
+              {totalChanged() > 0 ? (
+                <>
+                  <span className="setting-savebar-dot" />
+                  {totalChanged()} 项未保存
+                </>
+              ) : (
+                "没有未保存的改动"
+              )}
+            </span>
+            {msg ? <span className="setting-savebar-msg">{msg}</span> : null}
+            <span className="setting-savebar-btns">
+              <button type="button" className="secondaryButton" disabled={busy} onClick={discard}>
+                放弃改动
+              </button>
+              <button
+                type="button"
+                className="primaryButton"
+                disabled={busy || totalChanged() === 0}
+                onClick={() => void save()}
+              >
+                保存设置
+              </button>
+            </span>
+          </div>
+        </>
       ) : null}
     </div>
   );

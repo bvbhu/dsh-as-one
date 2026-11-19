@@ -18,9 +18,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "cordis";
 import type { CapacityView } from "./capacity.js";
-import type { SubagentLimitRule } from "../../core/config/types.js";
-
-const FALLBACK = "*";
 const DEFAULT_TOOL_NAMES = ["subagent", "subagent_fork"];
 
 /**
@@ -36,22 +33,18 @@ export class AbortedError extends Error {
   }
 }
 
-/** 组件配置（从 setting 表读，热读）。 */
-export interface SubagentLimitConfig {
-  enabled: boolean;
-  defaultLimit: number;
-  limits: SubagentLimitRule[];
-  countMainAgent: boolean;
-  toolNames: string[];
-}
-
-export const SUBAGENT_LIMIT_DEFAULTS: SubagentLimitConfig = {
-  enabled: true,
-  defaultLimit: 4,
-  limits: [],
-  countMainAgent: true,
-  toolNames: [...DEFAULT_TOOL_NAMES],
-};
+/**
+ * 某模型的总并发容量（= 启用凭据数 × 每凭据并发；逻辑模型取成员之和）。
+ * 返回 `null` 表示查不到 → **不限制**。
+ *
+ * 2026-11 用户定案：「子代理并发限制的设置项整体移除，只按模型的并发限制
+ * 限制子代理（逻辑模型的并发取所有成员模型的并发之和）」—— 所以这里不再有任何
+ * setting 开关/默认值/规则表，唯一依据就是模型自己的容量。
+ */
+export type SubagentCapOf = (
+  provider: string | undefined,
+  model: string | undefined,
+) => number | null;
 
 /* ------------------------------------------------------------ 模型解析 */
 
@@ -96,33 +89,6 @@ export function resolveModel(exec: {
   return { provider: undefined, model: undefined, source: "fallback" };
 }
 
-/* ------------------------------------------------------------ 配额匹配 */
-
-/** 四级匹配：精确 provider+model → provider 通配 → model 通配 → 全通配 → defaultLimit。 */
-export function capFor(cfg: SubagentLimitConfig, resolved: ResolvedModel): number {
-  const provider = resolved.provider ?? FALLBACK;
-  const model = resolved.model ?? FALLBACK;
-  const find = (p: string, m: string): number | undefined => {
-    for (const rule of cfg.limits) {
-      if (rule.provider === p && rule.model === m) return rule.max;
-    }
-    return undefined;
-  };
-  if (model !== FALLBACK) {
-    const exact = find(provider, model);
-    if (exact !== undefined) return exact;
-  }
-  const byProvider = find(provider, FALLBACK);
-  if (byProvider !== undefined) return byProvider;
-  if (model !== FALLBACK) {
-    const byModel = find(FALLBACK, model);
-    if (byModel !== undefined) return byModel;
-  }
-  const any = find(FALLBACK, FALLBACK);
-  if (any !== undefined) return any;
-  return cfg.defaultLimit;
-}
-
 function display(resolved: ResolvedModel): string {
   if (resolved.model === undefined) return "当前模型";
   return resolved.provider !== undefined
@@ -138,53 +104,6 @@ export function limitError(resolved: ResolvedModel, used: number, limit: number)
   );
 }
 
-/* ------------------------------------------------------------ 配置读取 */
-
-export type SettingReader = (key: string) => string | null;
-
-export function readConfig(getSetting: SettingReader): SubagentLimitConfig {
-  const bool = (key: string, def: boolean): boolean => {
-    const v = getSetting(key);
-    if (v === null) return def;
-    const t = v.trim().toLowerCase();
-    // 面板 saveSettings 把 bool 存成 "1"/"0"（见 panel/overview.ts），
-    // 手工改库也可能写 "true"/"false"，两种都认。
-    return t === "true" || t === "1";
-  };
-  const int = (key: string, def: number): number => {
-    const v = getSetting(key);
-    if (v === null) return def;
-    const n = Number(v);
-    return Number.isSafeInteger(n) && n >= 1 ? n : def;
-  };
-  const json = (key: string): SubagentLimitRule[] => {
-    const v = getSetting(key);
-    if (v === null || v.trim() === "") return [];
-    try {
-      const parsed = JSON.parse(v);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter(
-        (r): r is SubagentLimitRule =>
-          r !== null &&
-          typeof r === "object" &&
-          typeof r.provider === "string" &&
-          typeof r.model === "string" &&
-          Number.isSafeInteger(r.max) &&
-          r.max >= 1,
-      );
-    } catch {
-      return [];
-    }
-  };
-  return {
-    enabled: bool("subagentLimit.enabled", SUBAGENT_LIMIT_DEFAULTS.enabled),
-    defaultLimit: int("subagentLimit.defaultLimit", SUBAGENT_LIMIT_DEFAULTS.defaultLimit),
-    limits: json("subagentLimit.limits"),
-    countMainAgent: bool("subagentLimit.countMainAgent", SUBAGENT_LIMIT_DEFAULTS.countMainAgent),
-    toolNames: [...DEFAULT_TOOL_NAMES],
-  };
-}
-
 /* ------------------------------------------------------------ 安装 */
 
 /** 一次预留的句柄，交给 subagent/start 认领、subagent/end 释放。 */
@@ -197,7 +116,7 @@ interface Reservation {
 export function applySubagentLimit(
   ctx: Context,
   capacity: CapacityView,
-  getSetting: SettingReader,
+  capOf: SubagentCapOf,
 ): () => void {
   const toolNames = new Set(DEFAULT_TOOL_NAMES);
   /** 把本次调用的预留句柄传给 subagent/start（异步上下文）。 */
@@ -219,19 +138,15 @@ export function applySubagentLimit(
     };
     if (!e.name || !toolNames.has(e.name)) return next();
 
-    const cfg = readConfig(getSetting);
-    if (!cfg.enabled) return next();
-
     const resolved = resolveModel(e);
-    const limit = capFor(cfg, resolved);
+    // 限制 = 该模型的总并发容量(启用凭据数 × 每凭据并发;逻辑模型取成员之和)。
+    // 查不到容量 → 不拦截(没有并发信息就不该凭猜测拦人)。
+    const limit = capOf(resolved.provider, resolved.model);
+    if (limit === null) return next();
 
-    // 主会话占用是否计入：countMainAgent=false 时排除当前父会话在 ledger 里的租约。
-    // 子会话有自己的 sessionId，不会被误排除。
-    const parentSessionId =
-      !cfg.countMainAgent && typeof (e.agent as { session?: { id?: unknown } } | undefined)?.session?.id === "string"
-        ? String((e.agent as { session: { id: unknown } }).session.id)
-        : undefined;
-    const used = capacity.usage(resolved.provider, resolved.model, parentSessionId);
+    // 占用口径统一为「该模型上所有在途」—— 主会话对同一模型的占用也算在内,
+    // 因为它同样消耗模型的并发名额(不再有「主会话是否计入」这个设置项)。
+    const used = capacity.usage(resolved.provider, resolved.model);
     if (used >= limit) throw limitError(resolved, used, limit);
 
     // 放行：预留一个名额。
