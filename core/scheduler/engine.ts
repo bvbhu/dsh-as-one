@@ -47,8 +47,10 @@ import {
   LOAD_AWARE_STRATEGIES,
   QUOTA_REFRESH_PROVIDERS,
   RULES_PRIORITY_KEYS,
+  SETTING_WINDOW_PROFILES,
   STRATEGIES,
   TIER_NAMES,
+  WINDOW_PROFILES_DEFAULTS_JSON,
 } from "./engine-constants.js";
 import { ChainItem } from "./engine-models.js";
 import {
@@ -69,6 +71,7 @@ import {
   rulesKeyOf,
   stableBy,
   validRules,
+  windowProfilesMap,
 } from "./engine-utils.js";
 import type { Pair } from "./engine-utils.js";
 
@@ -137,6 +140,12 @@ export class Scheduler {
 
   // ------------------------------------------------------------- 播种
   private _seedConfigSettings(): void {
+    // 2026-11:命名时段表独立播种(键缺失才写,不覆盖用户值)—— 与 cooldown 同款
+    // 守卫。必须独立于下面的 anyKey 粗粒度守卫,否则存量库永远拿不到预置的
+    // 梁文峰/梁文谷。
+    if (this.repo.getSetting(SETTING_WINDOW_PROFILES) === null) {
+      this.repo.setSetting(SETTING_WINDOW_PROFILES, WINDOW_PROFILES_DEFAULTS_JSON);
+    }
     // 2026-10-22 起调度规则拆 5 键(priority 1/2/3/4/0 各一个键,键名即档位)。
     // 任一档位键已存在 → 用户已配过,整体不覆盖(单档单独改也在面板侧完成)。
     const anyKey = RULES_PRIORITY_KEYS.some((p) => this.repo.getSetting(rulesKeyOf(p)) !== null);
@@ -257,24 +266,52 @@ export class Scheduler {
     // 2026-11-07 修 P4 未生效:无时段的档位规则曾在此被整条丢弃。
     // 现在为它们建一条独立通路(staticRules),供 _degraded / chain 使用。
     const staticRules: StaticRule[] = [];
+    // 2026-11:命名时段表 —— 规则里的 window.profile 在这里**展开**成内联 weekdays/times,
+    // 下游 _rulesFor/_staticRulesFor/_degraded/_order/chain 零改动。
+    // 一个 profile 可含多条子规则(段),全部展开(OR 语义)。
+    const profiles = windowProfilesMap(this.repo);
+    /** 一条 profile 的展开结果:多段 weekdays/times(空时段 → 整天)。 */
+    const resolveWindows = (w: Rule["window"]): Array<NonNullable<Rule["window"]>> => {
+      if (w === undefined) return [];
+      const id = w.profile;
+      if (id === undefined) return [w];
+      const prof = profiles.get(id);
+      if (prof === undefined) {
+        // 悬空引用:按「无时段」处理(恒为该档)—— 与 validRules 的
+        // 「坏字段丢弃、不拖垮整条」哲学一致;保存侧会直接拒绝悬空引用。
+        return [];
+      }
+      const out: Array<NonNullable<Rule["window"]>> = [];
+      for (const seg of prof.segments) {
+        const item: NonNullable<Rule["window"]> = {};
+        if (seg.weekdays !== undefined) item.weekdays = [...seg.weekdays];
+        if (seg.times !== undefined) item.times = [...seg.times];
+        if (Object.keys(item).length > 0) out.push(item);
+      }
+      return out;
+    };
     for (const rule of rules) {
       const provider = rule.provider;
       const model = rule.model;
       const priority = rule.priority;
-      if (rule.window?.times) {
-        timeWindows.push({
-          logical: "*",
-          provider,
-          model: model ?? "",
-          times: rule.window.times,
-          // 2026-10-24:五个档位键都允许时段规则(设置页五张卡统一显示星期/时间段框)。
-          // 语义按档位分:priority 0 = 时段内**禁用**(整条从链里剔除),
-          // 其余档位(1/2/3/4)= 时段内**降级**(仍在链里,排到链末)——
-          // 只有「禁用档」这个名字承诺"不可用",其余档位只承诺"往后放"。
-          mode: priority === 0 ? "exclude" : "degrade",
-          priority: typeof priority === "number" ? priority : 0,
-          weekdays: rule.window.weekdays,
-        });
+      const windows = resolveWindows(rule.window);
+      // profile 展开后可能有多段:每段都要各自登记(命中任一段即算该规则生效)。
+      if (windows.length > 0 && windows.some((x) => x.times !== undefined)) {
+        for (const win of windows) {
+          if (win.times === undefined) continue;
+          timeWindows.push({
+            logical: "*",
+            provider,
+            model: model ?? "",
+            times: win.times,
+            // 2026-10-24:五个档位键都允许时段规则。
+            // 语义按档位分:priority 0 = 时段内**禁用**(整条从链里剔除),
+            // 其余档位(1/2/3/4)= 时段内**降级**(仍在链里,排到链末)。
+            mode: priority === 0 ? "exclude" : "degrade",
+            priority: typeof priority === "number" ? priority : 0,
+            weekdays: win.weekdays,
+          });
+        }
         // ⚠️ 带时段的规则若同时是 P1/P2 语义,仍要登记档位(免费档/积分到期),
         // 否则只是加个时段就会把「免费优先」悄悄弄丢。
         if (model && priority === 1) {
@@ -294,32 +331,26 @@ export class Scheduler {
         continue;
       }
       // 2026-11-07 修 P4 调度优先级未生效:无时段、非 P1/P2 语义的规则此前
-      // 在此被**整条丢弃**,从未进入任何 SchedulerConfig 视图 → 既不 exclude
-      // 也不 degrade。用户把 sensenova 配进 P4 却仍被优先调用,根因就在这里。
-      //
-      // ⚠️ 不是 DEGRADED_TIER 与档位号 4 撞车:那个 4 只是排序键(越大的 tier
-      // 越靠后,见 engine-constants 的 1<2<3<4),与用户配的「P4 档」是两个
-      // 独立概念;撞车假设不成立(时段 P4 规则一直工作正常,可作反证)。
-      //
-      // 只登记 P0 / P4:这两档才带「惩罚」语义(P0 剔除、P4 降到链末)。
-      // P3 是「普通消耗档」= 基线档位,不进 staticRules —— 否则把成员写进
-      // 缺省档反而被降级,与设置页「普通消耗」的说明相矛盾。
-      //
+      // 在此被**整条丢弃**。只登记 P0 / P4(带惩罚语义);P3 是基线档位,不进本表。
       // ⚠️ 面板允许「只勾星期、不填时间段」:这类规则没有 times,进不了
-      // timeWindows(isBlackout 要 times 非空才可能命中),所以星期必须带过来,
-      // 否则「只勾周三」会被当成「每天都降级」。
+      // timeWindows,所以星期必须带过来,否则「只勾周三」会被当成「每天都降级」。
       if (priority === 0 || priority === 4) {
-        const staticRule: StaticRule = {
-          provider,
-          model: model ?? "",
-          mode: priority === 0 ? "exclude" : "degrade",
-        };
-        if (rule.window?.weekdays !== undefined) staticRule.weekdays = rule.window.weekdays;
-        staticRules.push(staticRule);
+        // 多段 profile:每段的星期各登记一条静态规则(无段的走「无 weekdays」)。
+        const segs = windows.length > 0 ? windows : [undefined];
+        for (const seg of segs) {
+          const staticRule: StaticRule = {
+            provider,
+            model: model ?? "",
+            mode: priority === 0 ? "exclude" : "degrade",
+          };
+          if (seg?.weekdays !== undefined) staticRule.weekdays = seg.weekdays;
+          staticRules.push(staticRule);
+        }
+        continue;
       }
       // 其余规则(含纯 expires_at + model 的到期档、P3 普通档)由 plan 侧按档位解析。
     }
-    return { rules, freeModels, creditExpiry, timeWindows, staticRules };
+    return { rules, freeModels, creditExpiry, timeWindows, staticRules, windowProfiles: [...profiles.values()] };
   }
 
   /** 读 5 个档位键合并成扁平 rules(键名即档位,注入 priority);5 键全空 → null。 */

@@ -2,6 +2,7 @@
 // ========================================================================
 
 import type { Rule, StrategyName } from "./types.js";
+import { DEFAULT_SCHEDULER_WINDOW_PROFILES } from "../config/types.js";
 // 本节由第十刀从 engine.ts 按行段抽出;import/导出由外面接线。
 // ========================================================================
 
@@ -125,6 +126,15 @@ export const CONFIG_DEFAULT_RULES: Rule[] = [];
 export const CONFIG_DEFAULT_COOLDOWN_OVERRIDES: Record<string, number> = {};
 export const CONFIG_DEFAULTS_JSON = JSON.stringify({ rules: CONFIG_DEFAULT_RULES });
 export const COOLDOWN_DEFAULTS_JSON = JSON.stringify(CONFIG_DEFAULT_COOLDOWN_OVERRIDES);
+
+/**
+ * 命名时段配置的设置键(2026-11 用户定案)。
+ *
+ * 星期 + 时段从规则里拆出来,单独存成一张表;规则只存 `window.profile = <id>`。
+ * 引擎读配置时把 profile 展开成内联 weekdays/times,下游判定逻辑零改动。
+ */
+export const SETTING_WINDOW_PROFILES = "scheduler.window_profiles";
+export const WINDOW_PROFILES_DEFAULTS_JSON = JSON.stringify(DEFAULT_SCHEDULER_WINDOW_PROFILES);
 
 /**
  * 档位 → 设置键名(2026-10-22 用户定案拆 5 键:priority 1/2/3/4/0 各一个键)。

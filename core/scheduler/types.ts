@@ -90,6 +90,28 @@ export interface Rule {
 export interface RuleWindow {
   weekdays?: number[];
   times?: TimeSpan[];
+  /**
+   * 引用命名时段配置(`scheduler.window_profiles` 里的 id)。
+   *
+   * 2026-11 用户定案:星期/时段拆成独立配置,规则只存 id。`_readConfig` 在构建
+   * 派生视图时把它**展开**成内联 weekdays/times,所以下游判定零改动。
+   * 给了 profile 就忽略内联 weekdays/times(解析见 `resolveWindowProfile`)。
+   */
+  profile?: string;
+}
+
+/** 命名时段配置(`scheduler.window_profiles` 表的元素,清洗后形状)。 */
+export interface WindowProfile {
+  id: string;
+  name: string;
+  /** 子规则(OR 语义):任一段命中即属于本时段。不拆分 profile 的表达力就靠它。 */
+  segments: WindowProfileSegment[];
+}
+
+/** 时段里的一条子规则。 */
+export interface WindowProfileSegment {
+  weekdays?: number[];
+  times?: TimeSpan[];
 }
 
 /** 派生视图:免费名单条目(config 顺序即名单序)。 */
@@ -145,6 +167,8 @@ export interface SchedulerConfig {
   timeWindows: WindowRule[];
   /** 无时段的静态档位规则(P4 降级 / P0 剔除)。 */
   staticRules: StaticRule[];
+  /** 命名时段表(设置页「时段配置」读取;规则通过 window.profile 引用)。 */
+  windowProfiles: WindowProfile[];
 }
 
 // ---------------------------------------------------------------------------

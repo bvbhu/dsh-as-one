@@ -410,6 +410,16 @@ export interface SchedulerWindow {
   weekdays?: number[];
   /** ``[["HH:MM","HH:MM"], ...]``;左闭右开,``start > end`` 表示跨午夜。 */
   times?: ReadonlyArray<readonly [string, string]>;
+  /**
+   * 引用 ``scheduler.window_profiles`` 里的命名时段(如 ``lwf`` / ``lwg``)。
+   *
+   * 2026-11 用户定案:星期与时段**从规则里拆出来**做独立配置项,规则只存 id。
+   * 引擎读取时把 profile **展开成内联 weekdays/times**(见 Scheduler._readConfig),
+   * 因此 _rulesFor / _staticRulesFor / 排序链全部零改动。
+   *
+   * 与内联 ``weekdays``/``times`` **互斥**:给了 profile 就忽略内联字段。
+   */
+  profile?: string;
 }
 
 /**
@@ -443,6 +453,95 @@ export const DEFAULT_SCHEDULER_RULES: readonly SchedulerRule[] = [];
  * 缺省统一走全局冷却(retry.logical_cooldown)。
  */
 export const DEFAULT_SCHEDULER_COOLDOWN_OVERRIDES: Readonly<Record<string, number>> = {};
+
+/**
+ * 命名时段配置(setting ``scheduler.window_profiles``)—— 2026-11 用户定案。
+ *
+ * 星期 + 时段**从调度规则里拆出来**单独配置:规则只存 ``window.profile = <id>``,
+ * 一处改动即可让所有引用它的规则生效。
+ *
+ * ## 「不拆分」原则(用户 2026-11 明确要求)
+ * 一个时段必须能**完整表达一个计费口径**,而不是被切成几条:
+ * - 「梁文谷」= 工作日非高峰 **加上** 周末全天 —— 这是**一个**时段,不是两条;
+ * - 「梁文峰」= 工作日 09:00-12:00、14:00-18:00 —— 一个时段,两段连续时间。
+ *
+ * 所以每个 profile 内部是 **若干条子规则**(`segments`),每条 = 自己的星期集合 +
+ * 时间集合。这样「工作日 0-9/12-14/18-24」与「周末 0-24」能并存于同一条梁文谷里,
+ * 且能同时表达其它供应商(如 minimax/trae)的峰谷口径,无需另造机制。
+ */
+export interface SchedulerWindowProfile {
+  /** 稳定 id(规则引用它);建议小写字母/数字/短横线。 */
+  id: string;
+  /** 展示名(中文,如「梁文峰」「梁文谷」)。 */
+  name: string;
+  /**
+   * 子规则列表(**OR** 语义:任一条命中即属于本时段)。
+   *
+   * 每条子规则各自带星期与时间;留空 weekdays = 每天,留空 times = 全天。
+   * 用它在不拆分 profile 的前提下表达「工作日非高峰 + 周末全天」这类口径。
+   */
+  segments: SchedulerWindowSegment[];
+}
+
+/** 时段里的一条子规则:星期集合 × 时间集合(都是 OR 语义)。 */
+export interface SchedulerWindowSegment {
+  /** ``1..7``(1 = 周一);缺省 = 每天。 */
+  weekdays?: number[];
+  /** ``[["HH:MM","HH:MM"], ...]``;左闭右开,``start > end`` 表示跨午夜。 */
+  times?: ReadonlyArray<readonly [string, string]>;
+}
+
+/** 工作日高峰:周一~周五 09:00-12:00、14:00-18:00。 */
+export const SCHEDULER_PROFILE_PEAK = "lwf";
+/** 低谷:工作日非高峰 + 周末全天(单条 profile,内部两条子规则)。 */
+export const SCHEDULER_PROFILE_VALLEY = "lwg";
+
+/** 工作日(周一~周五)。 */
+const WEEKDAYS_WORKDAYS = [1, 2, 3, 4, 5] as const;
+/** 周末(周六、周日)。 */
+const WEEKDAYS_WEEKEND = [6, 7] as const;
+
+/**
+ * 预置时段表 —— 初始化时写入 ``scheduler.window_profiles``。
+ *
+ * 两条都是**完整口径**(不拆分):
+ * - 梁文峰 = 工作日两段高峰;
+ * - 梁文谷 = 工作日三段非高峰 + 周末全天(两条子规则合成一个时段)。
+ */
+export const DEFAULT_SCHEDULER_WINDOW_PROFILES: readonly SchedulerWindowProfile[] = [
+  {
+    id: SCHEDULER_PROFILE_PEAK,
+    name: "梁文峰",
+    segments: [
+      {
+        weekdays: [...WEEKDAYS_WORKDAYS],
+        times: [
+          ["09:00", "12:00"],
+          ["14:00", "18:00"],
+        ],
+      },
+    ],
+  },
+  {
+    id: SCHEDULER_PROFILE_VALLEY,
+    name: "梁文谷",
+    segments: [
+      {
+        weekdays: [...WEEKDAYS_WORKDAYS],
+        times: [
+          ["00:00", "09:00"],
+          ["12:00", "14:00"],
+          ["18:00", "24:00"],
+        ],
+      },
+      {
+        weekdays: [...WEEKDAYS_WEEKEND],
+        // 周末全天:显式 00:00-24:00,便于在 UI 里看见「不是漏配」。
+        times: [["00:00", "24:00"]],
+      },
+    ],
+  },
+];
 
 // ===========================================================================
 // retry 缺省(setting ``retry.*``)

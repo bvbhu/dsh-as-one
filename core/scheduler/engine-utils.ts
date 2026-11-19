@@ -10,6 +10,8 @@ import type {
   SettingsRepo,
   StrategyName,
   TimeSpan,
+  WindowProfile,
+  WindowProfileSegment,
 } from "./types.js";
 import {
   CONFIG_DEFAULT_COOLDOWN_OVERRIDES,
@@ -20,7 +22,9 @@ import {
   FREE_TIER_ORDER,
   GRANT_TIERS,
   SETTING_DEFAULTS,
+  SETTING_WINDOW_PROFILES,
   STRATEGIES,
+  WINDOW_PROFILES_DEFAULTS_JSON,
 } from "./engine-constants.js";
 import { DEFAULT_PRIORITY } from "../config/types.js";
 import { performance } from "node:perf_hooks";
@@ -42,6 +46,11 @@ export function rulesDefaultsJson(priority: number): string {
 /** `scheduler.cooldown_overrides` 的播种值(2026-10-21 从 rules 拆出的独立键)。 */
 export function cooldownDefaultsJson(): string {
   return COOLDOWN_DEFAULTS_JSON;
+}
+
+/** `scheduler.window_profiles` 的播种值(2026-11 从规则里拆出的命名时段表)。 */
+export function windowProfilesDefaultsJson(): string {
+  return WINDOW_PROFILES_DEFAULTS_JSON;
 }
 
 // ===========================================================================
@@ -424,7 +433,13 @@ export function validRules(raw: unknown): Rule[] {
     ) {
       window.weekdays = wdRaw as number[];
     }
-    if (window.times !== undefined || window.weekdays !== undefined) rule.window = window;
+    // 命名时段引用(2026-11):profile 优先,给了它就不再解析内联 weekdays/times。
+    const profRaw = winSrc.profile;
+    if (typeof profRaw === "string" && profRaw.trim() !== "") {
+      rule.window = { profile: profRaw.trim() };
+    } else if (window.times !== undefined || window.weekdays !== undefined) {
+      rule.window = window;
+    }
     if (entry.priority !== undefined && entry.priority !== null) {
       if (typeof entry.priority === "number" && Number.isInteger(entry.priority) && entry.priority >= 0) {
         rule.priority = entry.priority;
@@ -433,6 +448,76 @@ export function validRules(raw: unknown): Rule[] {
     out.push(rule);
   }
   return out;
+}
+
+/**
+ * ``scheduler.window_profiles`` 校验 → 命名时段表(2026-11)。
+ *
+ * 元素形如 ``{id, name, weekdays?, times?}``;坏条目跳过,不拖垮整份
+ * (与 {@link validRules} 同一哲学)。id 重复时**先出现者胜**(稳定)。
+ */
+export function validWindowProfiles(raw: unknown): WindowProfile[] {
+  if (!Array.isArray(raw)) return [];
+  const out: WindowProfile[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (id === "" || seen.has(id)) continue;
+    const prof: WindowProfile = {
+      id,
+      name: typeof entry.name === "string" && entry.name.trim() !== "" ? entry.name.trim() : id,
+      segments: [],
+    };
+    // 兼容旧形态(顶层 weekdays/times 的单段)与新形态(segments 数组)。
+    const rawSegs = Array.isArray(entry.segments)
+      ? entry.segments
+      : [{ weekdays: entry.weekdays, times: entry.times }];
+    for (const seg of rawSegs) {
+      if (!isRecord(seg)) continue;
+      const item: WindowProfileSegment = {};
+      const timesRaw = seg.times;
+      if (timesRaw !== undefined && timesRaw !== null && validSpans(timesRaw)) {
+        item.times = timesRaw as TimeSpan[];
+      }
+      const wdRaw = seg.weekdays;
+      if (
+        Array.isArray(wdRaw) &&
+        wdRaw.length > 0 &&
+        wdRaw.every((w) => typeof w === "number" && Number.isInteger(w) && w >= 1 && w <= 7)
+      ) {
+        item.weekdays = wdRaw as number[];
+      }
+      if (Object.keys(item).length > 0) prof.segments.push(item);
+    }
+    seen.add(id);
+    out.push(prof);
+  }
+  return out;
+}
+
+/**
+ * 读 ``scheduler.window_profiles`` → ``Map<id, profile>``。
+ *
+ * 坏 JSON 回落缺省预置表(与 {@link rulesCooldownMap} 同口径)。
+ */
+export function windowProfilesMap(repo: { getSetting(key: string): string | null | undefined }): Map<string, WindowProfile> {
+  const map = new Map<string, WindowProfile>();
+  const fallback = validWindowProfiles(JSON.parse(WINDOW_PROFILES_DEFAULTS_JSON));
+  let rows = fallback;
+  try {
+    const raw = repo.getSetting(SETTING_WINDOW_PROFILES);
+    if (raw !== null && raw !== undefined && raw.trim() !== "") {
+      const parsed = JSON.parse(raw) as unknown;
+      const got = validWindowProfiles(parsed);
+      // 空表也接受(用户删光了时段)—— 只有坏 JSON/非数组才回落预置。
+      if (Array.isArray(parsed)) rows = got;
+    }
+  } catch {
+    rows = fallback;
+  }
+  for (const p of rows) map.set(p.id, p);
+  return map;
 }
 
 /**
