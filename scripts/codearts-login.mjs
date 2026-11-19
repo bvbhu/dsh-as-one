@@ -2,14 +2,11 @@
 /**
  * CodeArts 登录准备 / 凭据导入（一次性工具）。
  *
- * 两条路都支持，覆盖 A/B 两族：
+ * 两条路都支持（都落到 B 族 AK/SK，签到/推理共用同一份凭据）：
  *
- *   # B 族（推理）：OAuth2 授权码 + PKCE + DPoP → STS 临时 AK/SK
+ *   # OAuth2 授权码 + PKCE + DPoP → STS 临时 AK/SK
  *   node scripts/codearts-login.mjs --oauth
  *   node scripts/codearts-login.mjs --print-url        # 只打印授权链接（不监听本地回调）
- *
- *   # A 族（签到/积分）：网页 Cookie（必须含 devclouddevuibjtcftk）
- *   node scripts/codearts-login.mjs --cookie "a=1; devclouddevuibjtcftk=xxx; ..."
  *
  *   # 导入别人导出的 session JSON（含 refresh_token 的形态）
  *   node scripts/codearts-login.mjs --from-json path/to/session.json
@@ -34,8 +31,6 @@ const STS_TOKENS = "https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens";
 const AUTHORIZE = "https://codearts.huaweicloud.com/portal/authorize";
 const PLUGIN_NAME = "snap_AIIDE";
 const PLUGIN_VERSION = "26.9.902";
-const WEB_BASE = "https://devcloud.cn-north-4.huaweicloud.com";
-const OVERVIEW_PATH = "/chat/snap-manager/v1/package/overview";
 const DSH_DB = join(homedir(), ".as-one", "as-one.db");
 
 const argv = process.argv.slice(2);
@@ -129,49 +124,6 @@ async function exchangeCode(code, verifier, redirectUri, dpopKey) {
 }
 
 /* ------------------------------------------------------------------ *
- * A 族：Cookie 校验
- * ------------------------------------------------------------------ */
-
-async function validateCookie(cookies) {
-  const cftk = /(?:^|;\s*)(devclouddevuibjtcftk|cftk)=([^;]+)/.exec(cookies)?.[2];
-  if (!cftk) {
-    throw new Error('Cookie 里没有 cftk：必须包含 "devclouddevuibjtcftk"（上游会回 invalid channel, group not found）');
-  }
-  const res = await fetch(`${WEB_BASE}${OVERVIEW_PATH}`, {
-    headers: {
-      Cookie: cookies,
-      cftk,
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
-      Accept: "application/json, text/plain, */*",
-      language: "zh-cn",
-      "x-codearts-doer-scenario-type": "web",
-      "x-requested-with": "XMLHttpRequest",
-      "Agent-Type": "PromptCenter",
-      Referer: `${WEB_BASE}/chat/home`,
-    },
-    signal: AbortSignal.timeout(30_000),
-  });
-  const text = await res.text();
-  if (res.status === 401 || res.status === 403 || text.trim() === "") {
-    throw new Error(`Cookie 无效（HTTP ${res.status}，body ${text.length} 字节）—— 请重新登录 CodeArts 网页版再复制整串 Cookie`);
-  }
-  let json = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error(`积分接口返回非 JSON：${text.slice(0, 200)}`);
-  }
-  const pkg = json?.all_credit_package ?? json?.data?.all_credit_package ?? {};
-  say(
-    `✓ Cookie 可用：套餐总额 ${pkg.package_credit_amount ?? "?"} / 已用 ${pkg.package_credit_used ?? "?"} / 剩余 ${
-      pkg.package_credit_remain ?? "?"
-    }`,
-  );
-  return { cftk };
-}
-
-/* ------------------------------------------------------------------ *
  * 写库
  * ------------------------------------------------------------------ */
 
@@ -181,7 +133,7 @@ function maskLabel(label) {
   return s.replace(/[^\p{L}\p{N}_.@-]/gu, "_").slice(0, 40);
 }
 
-function saveCredential({ username, accessKey, secretKey, securityToken, refreshToken, expiresAtMs, domainId, cookies, dpopPrivatePem, pkceVerifier }) {
+function saveCredential({ username, accessKey, secretKey, securityToken, refreshToken, expiresAtMs, domainId, dpopPrivatePem, pkceVerifier }) {
   const db = new DatabaseSync(DSH_DB);
   try {
     db.prepare(
@@ -195,7 +147,6 @@ function saveCredential({ username, accessKey, secretKey, securityToken, refresh
       expiresAtMs: expiresAtMs ?? null,
       refreshToken: refreshToken ?? null,
       domainId: domainId ?? null,
-      cookies: cookies ?? null,
       dpopPrivatePem: dpopPrivatePem ?? null,
       pkceVerifier: pkceVerifier ?? null,
     };
@@ -208,7 +159,7 @@ function saveCredential({ username, accessKey, secretKey, securityToken, refresh
     ).run(
       "codearts",
       username,
-      accessKey ?? cookies ?? "",
+      accessKey ?? "",
       refreshToken ?? null,
       expiresAtMs ? Math.floor(expiresAtMs / 1000) : null,
       JSON.stringify(raw),
@@ -217,18 +168,6 @@ function saveCredential({ username, accessKey, secretKey, securityToken, refresh
   } finally {
     db.close();
   }
-}
-
-/* ------------------------------------------------------------------ *
- * 模式：--cookie
- * ------------------------------------------------------------------ */
-
-async function runCookie(cookies) {
-  say("→ 校验 Cookie（只打积分总览接口，不发写请求）…");
-  await validateCookie(cookies);
-  const label = maskLabel(val("--label") ?? `codearts-web-${Date.now().toString(36)}`);
-  saveCredential({ username: label, cookies });
-  say(`✓ 已写入凭据：codearts/${label}（A 族签到用）`);
 }
 
 /* ------------------------------------------------------------------ *
@@ -343,14 +282,12 @@ async function runOauth(printOnly) {
 
 async function main() {
   try {
-    if (val("--cookie")) return await runCookie(val("--cookie"));
     if (val("--from-json")) return await runFromJson(val("--from-json"));
     if (has("--print-url")) return await runOauth(true);
     if (has("--oauth")) return await runOauth(false);
     say("用法：");
     say("  node scripts/codearts-login.mjs --oauth                 # B 族：开浏览器登录 → 自动换 STS");
     say("  node scripts/codearts-login.mjs --print-url             # 只打印授权链接");
-    say("  node scripts/codearts-login.mjs --cookie \"<整串 Cookie>\"  # A 族：签到用的网页 Cookie");
     say("  node scripts/codearts-login.mjs --from-json <file>        # 导入 session JSON");
     say("\n可选：--label <账号名>  --port <端口>");
   } catch (err) {

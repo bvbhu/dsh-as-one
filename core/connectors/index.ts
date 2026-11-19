@@ -80,12 +80,4 @@ export {
   createCodeartsTranslator,
   codeartsBusinessError,
 } from "./codearts-wire.js";
-export {
-  codeartsWebHeaders,
-  codeartsCredits,
-  codeartsCampaigns,
-  pickCheckinCampaign,
-  codeartsClaimCheckin,
-  codeartsCheckinOne,
-} from "./codearts-signin.js";
 export type { AuthConnector, ConnectorCredentials, RequestDecoration, TokenState, UpstreamError, UpstreamErrorKind } from "./types.js";

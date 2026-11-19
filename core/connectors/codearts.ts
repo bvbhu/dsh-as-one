@@ -4,10 +4,10 @@
  * 协议事实（置信度与出处见 `docs/third-party-sources.md` §2.3 与参考实现的
  * `docs/UPSTREAM.md`）：
  *
- * - **两条互不相通的族**。本文件只服务 **B 族（IDE/CLI）**：
+ * - 本文件服务 **B 族（IDE/CLI）**：
  *   `https://snap-access.cn-north-4.myhuaweicloud.com`，鉴权是
  *   OAuth2 PKCE + DPoP → STS 临时 AK/SK → 每请求 `SDK-HMAC-SHA256` 签名。
- *   A 族（网页 Cookie + `cftk`）只能签到/积分，见 `codearts-signin.ts`。
+ *   签到也走这一族（见 `codearts-ide.ts`）。
  * - 签名在 {@link ./codearts-sign.ts}；这里只管**身份头**与**错误语义**。
  * - ⚠️ 上游用 **HTTP 200 + `error_code`** 表达业务失败，真实状态码编码在
  *   `error_code` 里（纯数字 / 复合码 `服务.业务号.状态码`）。**HTTP 状态码本身

@@ -34,7 +34,6 @@ import {
 } from "@as-one/core/src/connectors/checkin.js";
 import { invalidateCheckinCache } from "./checkin-cache.js";
 import { codeartsIdeCheckin } from "@as-one/core/src/connectors/codearts-ide.js";
-import { codeartsCheckinOne } from "@as-one/core/src/connectors/codearts-signin.js";
 import { minimaxSigninStatus } from "@as-one/core/src/connectors/minimax-signin.js";
 import { minimaxAccountFor } from "./minimax-renew.js";
 import { panelClaimedToday, panelTodayPoints } from "@as-one/core/src/connectors/minimax-wire.js";
@@ -1097,45 +1096,16 @@ export function createChannelsMethods(ctx: PanelContext, deps: ChannelsMethodsDe
         }
         if (protocol === "codearts") {
           // CodeArts 两族：A 族网页 Cookie（签到/积分）与 B 族 AK/SK（IDE/CLI 推理）
-          // 互不相通，签到走 A 族；B 族只读状态仍走 ide 那条干跑。
-          // ⚠️ 不能落进下面的兜底分支 wbCheckinStatus —— 那会把 AK/Cookie 当 Bearer
-          // 发给 workbuddy,回 401,并把别人的错误挂到 CodeArts 行上。
+          // CodeArts 签到状态只走 AK/SK 签名网关（B 族，见 codearts-ide.ts），
+          // 与 workbuddy JWT 完全独立。不能落进下面的兜底分支 wbCheckinStatus ——
+          // 那会把 AK 当 Bearer 发给 workbuddy，回 401 并把错误挂到 CodeArts 行上。
           const raw = (acc.extra ?? {}) as Record<string, unknown>;
-          // A 族（网页 Cookie，签到/积分）：凭据由 scripts/codearts-login.mjs --cookie
-          // 导入，raw.cookies 必含 devclouddevuibjtcftk。这里只读状态，用
-          // codeartsCheckinOne dryRun（只发 overview + delivery 两个 GET）。
-          // ⚠️ 先判 A 族再判 B 族：A 族凭据的 secret 是整串 Cookie，不是 AK/SK，
-          // 落进 B 族会拿它当 AK 去签名网关，报「缺少 accessKey/secretKey」而
-          // 显示成「未签」，这正是用户截图里的问题。
-          const cookies = String(raw["cookies"] ?? "").trim();
-          if (cookies !== "") {
-            const res = await codeartsCheckinOne(
-              { cookies, label: acc.username },
-              { ...(checkinBaseOf(pdef) ? { baseUrl: checkinBaseOf(pdef)! } : {}), dryRun: true },
-            );
-            const credit = res.campaign?.benefitAmount ?? 0;
-            const campaign = res.campaign;
-            const detail = campaign === undefined
-              ? res.message
-              : campaign.status === "CLAIMED"
-                ? `今日已领取但尚未确认(活动 ${campaign.campaignId});请点签到补确认`
-                : res.signed
-                  ? `今日已签到(活动 ${campaign.campaignId}, +${credit} 积分)`
-                  : `今日可领取 ${credit} 积分(活动 ${campaign.campaignId},未签)`;
-            return flat({
-              supported: true,
-              active: campaign !== undefined,
-              checked_in: res.signed,
-              daily_credit: credit > 0 ? credit : null,
-              reason: detail,
-            });
-          }
           const accessKey = String(raw["accessKey"] ?? "");
           const secretKey = String(raw["secretKey"] ?? "");
           if (accessKey === "" || secretKey === "") {
             return flat({
               supported: true,
-              reason: "该账号既无网页 Cookie(缺 devclouddevuibjtcftk)也无 accessKey/secretKey，无法查询签到；请重新导入 A 族 Cookie",
+              reason: "该账号缺少 accessKey/secretKey，无法查询签到",
             });
           }
           // B 族（AK/SK 签名网关）签到 —— 只读状态也走这条干跑。

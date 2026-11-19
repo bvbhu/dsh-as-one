@@ -56,7 +56,6 @@ import {
 } from "@as-one/core/src/connectors/minimax-signin.js";
 import { minimaxAccountFor } from "./minimax-renew.js";
 import { codeartsIdeCheckin } from "@as-one/core/src/connectors/codearts-ide.js";
-import { codeartsCheckinOne } from "@as-one/core/src/connectors/codearts-signin.js";
 import { panelClaimedToday, panelTodayPoints } from "@as-one/core/src/connectors/minimax-wire.js";
 import { discoverTraeAccounts } from "@as-one/core/src/connectors/discover.js";
 import {
@@ -622,59 +621,16 @@ export function createChannelsDomain(
   ): Promise<CheckinClaimRow> => {
     const baseRow = { index: acc.index, provider: pid, username: acc.username, region: acc.region };
     if (protocol === "codearts") {
-      // B 族（AK/SK 签名网关）签到 —— 2026-11-16 实测三步全通（见 codearts-ide.ts）。
-      // 凭据就是推理用的那份 raw_json（accessKey/secretKey/...），没有令牌字段。
+      // CodeArts 签到只走 AK/SK 签名网关（B 族，见 codearts-ide.ts）。
+      // 凭据就是推理用的那份 raw_json（accessKey/secretKey/...）。
       const raw = (acc.extra ?? {}) as Record<string, unknown>;
-      const cookies = String(raw["cookies"] ?? "").trim();
-      // A 族（网页 Cookie，签到/积分）：必须含 devclouddevuibjtcftk。之前这里
-      // 只走 B 族 AK/SK，A 族凭据一律被判「缺少 accessKey/secretKey」→ failed，
-      // 面板看到的「未签/可领取(干跑，未写)」就是这条分支的假状态。
-      if (cookies !== "") {
-        try {
-          const res = await codeartsCheckinOne(
-            { cookies, label: acc.username },
-            { ...(base ? { baseUrl: base } : {}), dryRun: !confirm },
-          );
-          const credit = res.campaign?.benefitAmount ?? 0;
-          if (res.signed) {
-            // dryRun 时 CLAIMED 也算「已签」；confirm 时若尚未确认，补 confirm 成功
-            // 由 codeartsCheckinOne 内部完成（res.signed 仍为 true，claimed=false）。
-            return {
-              ...baseRow,
-              status: "already",
-              message: res.message,
-              ...(credit > 0 ? { credit } : {}),
-            };
-          }
-          if (!confirm) {
-            return {
-              ...baseRow,
-              status: "dry_run",
-              message: `未签到,今日可领 ${credit} 积分(未确认,不写)`,
-              would_claim: true,
-              daily_credit: credit,
-            };
-          }
-          if (res.claimed) {
-            return {
-              ...baseRow,
-              status: "claimed",
-              message: res.message,
-              credit,
-            };
-          }
-          return { ...baseRow, status: "failed", message: res.message };
-        } catch (err) {
-          return { ...baseRow, status: "failed", message: checkinErrText(err) };
-        }
-      }
       const accessKey = String(raw["accessKey"] ?? "");
       const secretKey = String(raw["secretKey"] ?? "");
       if (accessKey === "" || secretKey === "") {
         return {
           ...baseRow,
           status: "failed",
-          message: "该账号既无网页 Cookie(缺 devclouddevuibjtcftk)也无 accessKey/secretKey，无法签到；请重新导入 A 族 Cookie",
+          message: "该账号缺少 accessKey/secretKey，无法签到",
         };
       }
       try {

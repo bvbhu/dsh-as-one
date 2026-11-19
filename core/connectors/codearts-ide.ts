@@ -1,13 +1,8 @@
 /**
  * 华为云 CodeArts **IDE 族（B 族，AK/SK 签名网关）签到 + 积分**网络层。
  *
- * 与 {@link ./codearts-signin.ts}（A 族，网页 Cookie）的分工：
- * - A 族：`devcloud.cn-north-4.huaweicloud.com` + Cookie/cftk —— 面板里没有这种凭据，
- *   网关也无法用它做推理；
- * - B 族：`snap-access.cn-north-4.myhuaweicloud.com` + AK/SK `SDK-HMAC-SHA256` 签名
- *   —— 就是**网关推理用的那份凭据**（`credential.raw_json` 的
- *   `accessKey`/`secretKey`/`securityToken`/`domainId`），2026-11-16 实测可完整走通
- *   签到三步。所以面板签到走这里，A 族那套保留给「网页态补充签到」的场景。
+ * 这是 CodeArts 唯一的签到路径 —— AK/SK 就是网关推理用的那份凭据
+ * （`credential.raw_json` 的 `accessKey`/`secretKey`/`securityToken`/`domainId`）。
  *
  * ## 协议事实（全部 2026-11-16 实测，签名用 {@link signCodeartsRequest}）
  * - `GET  /v1/ops/delivery?channel=IDE` 活动列表（需 `Agent-Type: PromptCenter`）；
@@ -33,7 +28,25 @@ import {
 } from "./codearts.js";
 import { signCodeartsRequest } from "./codearts-sign.js";
 import { CheckinError } from "./checkin.js";
-import type { CodeartsCampaign } from "./codearts-signin.js";
+
+// ---------------------------------------------------------------------------
+// 活动模型
+// ---------------------------------------------------------------------------
+
+/** CodeArts 运营活动（AK/SK 网关形态）。 */
+export interface CodeartsCampaign {
+  campaignId: number;
+  title: string;
+  type: string;
+  benefitAmount: number;
+  claimable: boolean;
+  /** 不可领时为 `null`（上游就是这么给的，不是空串）。 */
+  status: string | null;
+  /** 活动开始时刻（epoch 秒，来自 `extra.startTime`）；读不到为 null。 */
+  startAt: number | null;
+  /** 活动结束时刻（epoch 秒，来自 `extra.endTime`）；读不到为 null。 */
+  endAt: number | null;
+}
 
 // ---------------------------------------------------------------------------
 // 常量（实测）
@@ -199,7 +212,7 @@ export async function codeartsIdeCampaigns(
       ? ((data as Record<string, unknown>)["items"] as unknown[])
       : null;
   if (items === null) throw new CheckinError("活动列表缺少 data.items(上游应答形态变了)");
-  // 与 A 族 parseCodeartsCampaigns 同形的行解析（B 族额外字段少一些，但 extra 同形）。
+  // 行解析：campaignId 数字优先、extra 里取 start/end 时刻。
   const out: CodeartsCampaign[] = [];
   for (const raw of items) {
     if (raw === null || typeof raw !== "object") continue;

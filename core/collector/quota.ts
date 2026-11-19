@@ -45,10 +45,6 @@ import {
 } from "../connectors/minimax-signin.js";
 import { CODEARTS_BASE_CN, codeartsIdentityHeaders } from "../connectors/codearts.js";
 import { signCodeartsRequest } from "../connectors/codearts-sign.js";
-import {
-  CODEARTS_DELIVERY_PATH,
-  parseCodeartsCampaigns,
-} from "../connectors/codearts-signin.js";
 
 // ---------------------------------------------------------------------------
 // 错误类型
