@@ -27,7 +27,8 @@ import { ModelChain, chunkJob, mergeJob, type ChainAgent, type ChainContext } fr
 import { MemoryCooldownStore } from "./cooldown.js";
 import { runStage0, lineTokenCost, sliceNextChunk } from "./stage0.js";
 import { computeChunkBudget, computeUsableInputTokens } from "./budget.js";
-import { ANCHOR_PROMPT_INSTRUCTION, buildAnchorBlock } from "./summarize.js";
+import { ANCHOR_PROMPT_INSTRUCTION, SINGLE_CHUNK_PROMPT, buildAnchorBlock } from "./summarize.js";
+import { toAsOneStreamOptions } from "./as-one-call.js";
 
 interface LlmStreamOptions {
   purpose?: string;
@@ -192,6 +193,10 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
   const chainCtx: ChainContext = {
     llm: (ctx as unknown as { llm?: ChainContext["llm"] }).llm as ChainContext["llm"],
     logger: ctx.logger as unknown as ChainContext["logger"],
+    // ⚠️ as-one 适配（2026-11）：组件调 ctx.llm.stream 前必须把 provider/model
+    // 翻译成 as-one 适配器能识别的「provider=as-one + model=provider/model +
+    // 无 purpose」，否则真实 provider 会 NO_ADAPTER（压缩失败根因）。
+    asOneCall: true,
   };
   if (!chainCtx.llm || typeof chainCtx.llm.stream !== "function") {
     ctx.logger?.warn?.("[as-one compaction] no llm service available, enhancement disabled");
@@ -311,7 +316,10 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     // 关键：直接把 options 里的 messages 传下去，不替换、不加后缀 ——
     // 这就是"与自带压缩一致"的全部含义。inflight>0 保证不递归。
     const blocks: Array<{ type: string; text?: string }> = [];
-    const request = { ...options, provider: chosen.provider, model: chosen.model };
+    const rawRequest = { ...options, provider: chosen.provider, model: chosen.model };
+    // as-one：翻译成 provider=as-one + model=provider/model + 无 purpose，
+    // 直连选中的真实成员。
+    const request = toAsOneStreamOptions(rawRequest);
     for await (const chunk of chainCtx.llm.stream(request as never)) {
       if (chunk.type === "text-delta") {
         const last = blocks[blocks.length - 1];
@@ -362,17 +370,28 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     const chain = new ModelChain(chainCtx, quilt, store, {}, capacities, capacity);
     const mergeChain = new ModelChain(chainCtx, quilt, store, {}, capacities, capacity);
 
-    // 按当前路由模型的窗口切块（per-model budget）。
+    // ── 2026-11 用户定案「先选模型，再切块」（模型列表各窗口不同）────────────
+    // 1. 先按调度顺序（tier→成员）选一个主模型；它的窗口决定切块预算。
+    // 2. 用该窗口算 budget 切块，每块都 preferredKey=主模型（锁定成员）。
+    // 3. 若只切出一块 → 用 SINGLE_CHUNK_PROMPT 一次成稿，不走 tier-1 digest→merge。
+    // 4. 归并模型另选窗口 >= 192k 的成员（用户定案）。
+    const primary = chain.pickPrimaryModel(0, capacities);
+    if (primary === undefined) {
+      ctx.logger?.warn?.("[as-one compaction] no healthy model in pool; delegating to host summary");
+      return undefined;
+    }
+    const primaryWindow = chain.modelWindow(primary, capacities);
+    const budget = computeChunkBudget(primaryWindow, quilt.chunkRatio);
+    const overlap = Math.max(0, Math.floor(budget * quilt.chunkOverlapRatio));
+    ctx.logger?.info?.(
+      `[as-one compaction] primary model ${primary.key} window=${primaryWindow} chunkBudget=${budget} regionTokens~=${regionTokens}`,
+    );
+
     const jobs: ReturnType<typeof chunkJob>[] = [];
     let cursor = 0;
     let coreStart = 0;
     let index = 0;
     while (cursor < stage0Lines.length) {
-      const model = chain.pickChunkModel(capacities);
-      if (model === undefined) break;
-      const window = chain.modelWindow(model, capacities);
-      const budget = computeChunkBudget(window, quilt.chunkRatio);
-      const overlap = Math.max(0, Math.floor(budget * quilt.chunkOverlapRatio));
       const { end, next } = sliceNextChunk(stage0Lines, cursor, budget, overlap);
       const slice = stage0Lines.slice(cursor, end);
       if (slice.length === 0) break;
@@ -380,7 +399,7 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
       const coreTokens = stage0Lines.slice(coreStart, end).reduce((sum, line) => sum + lineTokenCost(line), 0);
       const cap = Math.max(1, Math.floor((mergeUsableInput * coreTokens) / Math.max(1, regionTokens)));
       index += 1;
-      jobs.push(chunkJob(`chunk ${index}`, slice.join("\n"), {
+      const meta = {
         chunk: index,
         lineStart: cursor,
         lineEnd: end,
@@ -391,11 +410,25 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
         sessionId: span.sessionId,
         seqStart: span.seqStart,
         seqEnd: span.seqEnd,
-      }, model.key, cap));
+      };
+      // 单块专用提示词：只有一块时一次成稿，不套 tier-1 chunk digest。
+      // 先按常规切完再判断（sliceNextChunk 保证一次到尾即单块）。
+      jobs.push(chunkJob(`chunk ${index}`, slice.join("\n"), meta, primary.key, cap));
       cursor = next;
       coreStart = end;
     }
     if (jobs.length === 0) return undefined;
+    // 单块 → 替换 buildMessages 为单块专用提示词（anchored/quilt 都受益；
+    // anchored 后续还会附锚点块）。
+    if (jobs.length === 1) {
+      const only = jobs[0] as ReturnType<typeof chunkJob>;
+      const text = String(only.text ?? "");
+      only.buildMessages = () => [
+        { role: "user" as const, content: [{ type: "text" as const, text }] },
+        { role: "user" as const, content: [{ type: "text" as const, text: SINGLE_CHUNK_PROMPT }] },
+      ];
+      ctx.logger?.info?.("[as-one compaction] single chunk → one-pass prompt (no merge)");
+    }
     const total = jobs.reduce((sum, job) => sum + (job.capTokens ?? 0), 0);
     if (total > mergeUsableInput) {
       const scale = mergeUsableInput / total;
@@ -443,9 +476,17 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
 
     let finalText: string | undefined;
     if (digests.length === 1) {
+      // 单块：SINGLE_CHUNK_PROMPT 一次成稿，无需归并。
       finalText = digests[0];
     } else if (mergeChain.canHoldMerge(mergeWindow, capacities)) {
-      const mergeResult = await mergeChain.run([mergeJob(digests, { sourceChunks: digests.length })], agent, options.signal, fallbackOptions);
+      // 多块归并：优先用窗口 >= 192k 的成员（用户 2026-11 定案）。
+      const mergeModel = mergeChain.pickMergeModel(capacities);
+      const merge = mergeJob(digests, { sourceChunks: digests.length });
+      if (mergeModel !== undefined) merge.preferredKey = mergeModel.key;
+      ctx.logger?.info?.(
+        `[as-one compaction] merge via ${mergeModel?.key ?? "auto"} window=${mergeModel ? mergeChain.modelWindow(mergeModel, capacities) : "?"} chunks=${digests.length}`,
+      );
+      const mergeResult = await mergeChain.run([merge], agent, options.signal, fallbackOptions);
       finalText = mergeResult[0]?.text;
     } else {
       return undefined;

@@ -10,6 +10,7 @@
  */
 
 import { CompactLlmError } from "./errors.js";
+import { toAsOneStreamOptions } from "./as-one-call.js";
 
 export const DEFAULT_MAX_TOKENS = 32768;
 
@@ -68,6 +69,30 @@ export const MERGE_PROMPT = [
   "- Write \"(none)\" for an empty section; never drop a section.",
   "- If the conversation already contains a <compacted-summary> block, it is a PRIOR checkpoint: preserve still-true facts, drop stale ones, and merge newer information into this single consolidated summary.",
   "- If the conversation contains a <session-search-anchors> block, copy that block verbatim into the final checkpoint; it points to the original indexed events. Never invent or rewrite session ids or seq numbers.",
+  "- Do NOT mention this summarization request or that the context was compacted.",
+  "- Output only the checkpoint text: do not call any tool or take any other action.",
+].join("\n");
+
+/**
+ * 单块专用提示词（anchored 模式，只有一块时）。
+ *
+ * 2026-11 用户定案：先选模型、再按该模型窗口切块；**只有一块**时不再走
+ * 「chunk digest → merge」两段式（那会给单块套 tier-1 的精简提示词，丢细节），
+ * 而是用这份**一次成稿**的提示词直接产出最终 checkpoint（含与多块路径相同的
+ * 结构章节与检索键要求），最后再由 intercept 附上锚点块。
+ */
+export const SINGLE_CHUNK_PROMPT = [
+  "You are a compaction engine condensing ONE contiguous excerpt of a conversation into a single consolidated checkpoint that lets another model resume with no loss of essential context.",
+  "",
+  "Output terse markdown under these sections, in order:",
+  "## Primary Request and Intent, ## Key Technical Concepts, ## Files and Code, ## Errors and Fixes, ## Pending Work, ## Current Work, ## Next Step, ## Critical Context.",
+  "",
+  "Rules:",
+  "- Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.",
+  "- Capture user feedback and corrections faithfully.",
+  "- Keep 2-5 distinctive literal retrieval keys per topic (project names, model/chip numbers, exact error strings) for full-text session search; avoid generic words.",
+  "- Write \"(none)\" for an empty section; never drop a section, never invent facts.",
+  "- If a prior <compacted-summary> block is present, preserve still-true facts and merge newer information into this one checkpoint.",
   "- Do NOT mention this summarization request or that the context was compacted.",
   "- Output only the checkpoint text: do not call any tool or take any other action.",
 ].join("\n");
@@ -139,14 +164,26 @@ export function frameSummary(summary: string): string {
   return `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}\n${summary}\n${SUMMARY_CLOSE_TAG}`;
 }
 
-/** 运行一次 ctx.llm.stream 并收齐 text 块。 */
+/**
+ * 运行一次 ctx.llm.stream 并收齐 text 块。
+ *
+ * ⚠️ as-one 适配（2026-11）：若 ctx 上挂了 `asOneCall=true`（由 intercept 注入），
+ * 调用前把「组件视角的 provider/model + purpose=compaction」翻译成 as-one
+ * 适配器能识别的「provider=as-one + model=provider/model + 无 purpose」。
+ * 不挂开关时保持原样（兼容 quilt 原插件的单测与调用方）。
+ */
 export async function streamText(
-  ctx: { llm: { stream(options: Record<string, unknown>): AsyncIterable<Record<string, unknown>> } },
+  ctx: {
+    llm: { stream(options: Record<string, unknown>): AsyncIterable<Record<string, unknown>> };
+    asOneCall?: boolean;
+    asOneProvider?: string;
+  },
   options: Record<string, unknown>,
 ): Promise<{ summary: Array<{ type: string; text?: string }>; usage?: unknown }> {
   const blocks: Array<{ type: string; text?: string }> = [];
   let usage: unknown;
-  for await (const chunk of ctx.llm.stream(options)) {
+  const callOptions = ctx.asOneCall === true ? toAsOneStreamOptions(options, ctx.asOneProvider) : options;
+  for await (const chunk of ctx.llm.stream(callOptions)) {
     if (chunk.type === "text-delta") {
       const last = blocks[blocks.length - 1];
       if (last?.type === "text") last.text = (last.text ?? "") + String(chunk.text ?? "");
@@ -179,6 +216,8 @@ export async function streamTextWithRetry(
       stream(options: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
       providerRetryPolicy?: (provider: string) => unknown;
     };
+    asOneCall?: boolean;
+    asOneProvider?: string;
     logger?: { warn?(message: string): void };
   },
   options: Record<string, unknown>,
