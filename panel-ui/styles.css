@@ -2126,25 +2126,32 @@ body {
   background: var(--surface);
   padding: 12px 14px;
 }
-/* 「逻辑模型成员冷却」标签与「供应商」下拉同宽,两种行严格同构/对齐。 */
+/* 「逻辑模型成员冷却」标签 —— 做成**带边框的只读框**，外观与同行的
+ * 「供应商」下拉框一致（用户 2026-11 参考图定案）：同样的宽度、高度、
+ * 圆角、内边距、背景。这样两行第一列视觉上是同一种控件。 */
 .cooldownFieldLabel {
   flex: 0 0 128px;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
   color: var(--text);
   font-size: 12px;
-  line-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised, var(--surface));
   white-space: nowrap;
 }
 .cooldownRows .ruleProvider {
   flex: 0 0 128px;
 }
 .cooldownRows .ruleNum {
+  /* ⚠️ 必须是 `flex: 0 0 92px` 而不只是 `width`：在 flex 行里纯 width 会被
+   * 收缩到 22px（实测），数字框窄到看不全内容。 */
+  flex: 0 0 92px;
   width: 92px;
   text-align: right;
-}
-/* 成员冷却是「标签 + 输入框」两段,供应商行是「下拉 + 输入框 + 删除」三段。
- * 让成员行的输入框与供应商行的输入框**左边缘对齐**:标签宽 = 下拉宽 + gap。 */
-.cooldownFieldLabel {
-  flex: 0 0 128px;
 }
 .cooldownRows .ruleRowLine > .ruleNum,
 .cooldownRows .ruleRowLine > .cooldownMinute > .ruleNum {

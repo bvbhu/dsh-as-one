@@ -1111,12 +1111,14 @@ export default function SettingsPage(): React.JSX.Element {
         </div>
         <ul className="rows sched-rows cooldownRows">
           {/* 逻辑模型成员冷却 —— 与供应商行**同构**(同一个 .rowCard + .ruleRowLine,
-           * 同样带边框、同一列宽,只是没有拖动与删除)。 */}
+           * 同样带边框、同一列宽,只是没有拖动与删除)。
+           * 2026-11 用户定案(参考图):标签本身是**带边框的框**(视觉上等同供应商
+           * 下拉框那一格),单位「分钟」落在输入框右侧,与供应商行一致。 */}
           {memberSpec !== undefined ? (
             <li className="rowCard ruleRowCard">
               <div className="ruleRowLine">
                 <span className="cooldownFieldLabel" title={memberSpec.label}>
-                  {memberSpec.label}（分钟）
+                  {memberSpec.label}
                 </span>
                 <input
                   type="number"
@@ -1128,6 +1130,7 @@ export default function SettingsPage(): React.JSX.Element {
                   disabled={busy}
                   onChange={(ev) => setValue(sectionOf(memberSpec), memberSpec, ev.target.value)}
                 />
+                <span className="ruleUnit">分钟</span>
               </div>
             </li>
           ) : null}
