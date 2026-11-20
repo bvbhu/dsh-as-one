@@ -27,7 +27,33 @@ export const ANCHOR_PROMPT_INSTRUCTION = [
   "Use business-specific keywords from the summary (paths, identifiers, error strings) as the query; avoid generic tool names.",
 ].join("\n");
 
-/** 渲染机器可读锚点块（单行 JSON）。 */
+/**
+ * 锚点指令（anchored 模式，2026-11 用户定案）：
+ *
+ * **所有文本处理由 LLM 完成，代码只做切分与合并后交给 LLM**。
+ * 因此锚点不再由代码用压缩块的 line 区间拼出，而是把"哪些小块以后可能有用、
+ * 它们的 session_id / seq 区间"作为指令写进提示词，由摘要模型自己在输出末尾
+ * 生成 <session-search-anchors> 块；代码对模型输出不再追加/重写任何文本。
+ *
+ * 保留 tag 常量供兼容测试使用；主流程不再调用 buildAnchorBlock。
+ */
+export function anchoredInstruction(sessionId: string | null, seqStart: number | null, seqEnd: number | null): string {
+  const sid = sessionId ?? "unknown";
+  const range = seqStart !== null && seqEnd !== null ? `${seqStart}-${seqEnd}` : "unknown";
+  return [
+    "The checkpoint must end with a recovery block produced by YOU (the model), written verbatim as your final output:",
+    "",
+    "<session-search-anchors>",
+    `{"sessionId":"${sid}","seqStart":${seqStart ?? "null"},"seqEnd":${seqEnd ?? "null"},"blocks":[{"label":"<short topic>","keys":["<literal keyword>","..."],"seq":[<from>,<to>]}]}`,
+    "</session-search-anchors>",
+    "",
+    `The original conversation is still indexed (including shadowed events) under session_id ${sid}, event seq range ${range}.`,
+    "For each `blocks` entry choose a SMALL, specific piece you judge potentially useful to revisit later (a decision, a bug fix, a user correction, a code path) — never a whole chunk range. Give distinctive literal keywords for full-text search and the exact inclusive seq numbers when known (null otherwise); never invent session ids or seq numbers outside the given range.",
+    "To recover exact wording later, call session_event_search(session_id, query, seq_from, seq_to) then session_event_read; use business keywords as the query, avoid generic tool names.",
+  ].join("\n");
+}
+
+/** @deprecated 主流程已改为由模型输出锚点；保留仅用于兼容旧测试。 */
 export function buildAnchorBlock(anchor: {
   id: string;
   sessionId: string | null;
@@ -68,6 +94,9 @@ export const MERGE_PROMPT = [
   "- Preserve the distinctive literal retrieval keys from the chunk digests (project names, model/chip numbers, branches, exact error strings). Do not replace them with vague descriptions.",
   "- Write \"(none)\" for an empty section; never drop a section.",
   "- If the conversation already contains a <compacted-summary> block, it is a PRIOR checkpoint: preserve still-true facts, drop stale ones, and merge newer information into this single consolidated summary.",
+  "- The '--- source N ---' labels above are internal input markers: NEVER echo them or write any 'part/segment N of M' / '片段 N/M' divider in the output.",
+  "- Write each fact ONCE. Never repeat a sentence, bullet, or whole section, and never restate the checkpoint after finishing it.",
+  "- Output plain checkpoint prose only: never emit tool-call markup such as <tool_call> or raw tool-argument JSON.",
   "- If the conversation contains a <session-search-anchors> block, copy that block verbatim into the final checkpoint; it points to the original indexed events. Never invent or rewrite session ids or seq numbers.",
   "- Do NOT mention this summarization request or that the context was compacted.",
   "- Output only the checkpoint text: do not call any tool or take any other action.",
@@ -93,6 +122,8 @@ export const SINGLE_CHUNK_PROMPT = [
   "- Keep 2-5 distinctive literal retrieval keys per topic (project names, model/chip numbers, exact error strings) for full-text session search; avoid generic words.",
   "- Write \"(none)\" for an empty section; never drop a section, never invent facts.",
   "- If a prior <compacted-summary> block is present, preserve still-true facts and merge newer information into this one checkpoint.",
+  "- Write each fact ONCE. Do not emit any 'part/segment N of M' / '片段 N/M' divider, do not repeat a bullet or section, and never restate the checkpoint after finishing it.",
+  "- Output plain checkpoint prose only: never emit tool-call markup such as <tool_call> or raw tool-argument JSON.",
   "- Do NOT mention this summarization request or that the context was compacted.",
   "- Output only the checkpoint text: do not call any tool or take any other action.",
 ].join("\n");
@@ -108,6 +139,8 @@ export const CHECKPOINT_PROMPT = [
   "- Capture user feedback and corrections faithfully.",
   "- Write \"(none)\" for an empty section; never drop a section.",
   "- If the conversation already contains a <compacted-summary> block, it is a PRIOR checkpoint: preserve still-true facts, drop stale ones, and merge newer information into this single consolidated summary.",
+  "- Write each fact ONCE. Do not emit any 'part/segment N of M' / '片段 N/M' divider, do not repeat a bullet or section, and never restate the checkpoint after finishing it.",
+  "- Output plain checkpoint prose only: never emit tool-call markup such as <tool_call> or raw tool-argument JSON.",
   "- Do NOT mention this summarization request or that the context was compacted.",
   "- Output only the checkpoint text: do not call any tool or take any other action.",
 ].join("\n");
@@ -147,7 +180,7 @@ export function chunkMessages(chunkText: string, config: QuiltPromptConfig, capT
 }
 
 export function mergeMessages(digests: readonly string[], config: QuiltPromptConfig): Array<{ role: "user"; content: Array<{ type: "text"; text: string }> }> {
-  const joined = digests.map((digest, index) => `--- digest ${index + 1} ---\n${digest}`).join("\n\n");
+  const joined = digests.map((digest, index) => `--- source ${index + 1} ---\n${digest}`).join("\n\n");
   return [
     { role: "user", content: [{ type: "text", text: joined }] },
     { role: "user", content: [{ type: "text", text: mergeInstruction(config) }] },
@@ -162,6 +195,47 @@ export function blocksToText(blocks: readonly { type: string; text?: string }[])
 /** 给最终摘要加上 durable checkpoint framing（与 dsh-compaction-basic 一致）。 */
 export function frameSummary(summary: string): string {
   return `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}\n${summary}\n${SUMMARY_CLOSE_TAG}`;
+}
+
+/**
+ * 把一个 DSH text stream 收集为文本块。
+ *
+ * ⚠️ 关键（2026-11 重复输出 bug 根因）：as-one 适配器的 `block-end` 带的是
+ * 该块**累积后的完整文本**（llm-adapter.ts `blockEndOf`），不是增量。因此：
+ * - 已有 `text-delta` 打开文本块时，`block-end` 必须忽略，否则整段摘要会被
+ *   再追加一遍（实测 checkpoint 正文重复两次）；
+ * - 只有上游**只发 block-end 不发 delta** 时才用 block-end 的文本兜底。
+ *
+ * 这个函数是三处收集点（compressOnce / fallback / streamText）的唯一实现，
+ * 保证行为一致、可被单测直接覆盖。
+ */
+export async function collectTextBlocks(
+  stream: AsyncIterable<Record<string, unknown>>,
+  onChunk?: (chunk: Record<string, unknown>) => void,
+): Promise<{ blocks: Array<{ type: string; text?: string }>; usage?: unknown; finish?: unknown }> {
+  const blocks: Array<{ type: string; text?: string }> = [];
+  let usage: unknown;
+  let finish: unknown;
+  let sawTextDelta = false;
+  for await (const chunk of stream) {
+    onChunk?.(chunk);
+    if (chunk.type === "text-delta") {
+      sawTextDelta = true;
+      const last = blocks[blocks.length - 1];
+      if (last?.type === "text") last.text = (last.text ?? "") + String(chunk.text ?? "");
+      else blocks.push({ type: "text", text: String(chunk.text ?? "") });
+    } else if (chunk.type === "block-end") {
+      const block = chunk.block as { type?: string; text?: string } | undefined;
+      if (block?.type === "text" && !sawTextDelta) {
+        blocks.push({ type: "text", text: String(block.text ?? "") });
+      }
+    } else if (chunk.type === "usage") {
+      usage = chunk.usage;
+    } else if (chunk.type === "finish") {
+      finish = chunk.reason;
+    }
+  }
+  return { blocks, usage, finish };
 }
 
 /**
@@ -180,30 +254,19 @@ export async function streamText(
   },
   options: Record<string, unknown>,
 ): Promise<{ summary: Array<{ type: string; text?: string }>; usage?: unknown }> {
-  const blocks: Array<{ type: string; text?: string }> = [];
-  let usage: unknown;
   const callOptions = ctx.asOneCall === true ? toAsOneStreamOptions(options, ctx.asOneProvider) : options;
-  for await (const chunk of ctx.llm.stream(callOptions)) {
-    if (chunk.type === "text-delta") {
-      const last = blocks[blocks.length - 1];
-      if (last?.type === "text") last.text = (last.text ?? "") + String(chunk.text ?? "");
-      else blocks.push({ type: "text", text: String(chunk.text ?? "") });
-    } else if (chunk.type === "block-end") {
-      const block = chunk.block as { type?: string; text?: string } | undefined;
-      if (block?.type === "text") blocks.push({ type: "text", text: String(block.text ?? "") });
-    } else if (chunk.type === "usage") {
-      usage = chunk.usage;
-    } else if (chunk.type === "finish") {
-      const reason = chunk.reason as { kind?: string; failure?: { message?: string; code?: string; providerRetryAfterMs?: number } } | undefined;
-      if (reason?.kind === "error" || reason?.kind === "aborted") {
-        const failure = reason.failure ?? { message: "stream aborted", code: "ABORTED" };
-        throw new CompactLlmError(failure.message ?? "stream failed", failure.code ?? "UNKNOWN", failure);
-      }
-      if (reason?.kind === "max-tokens") {
-        throw new CompactLlmError("summarization truncated at the token cap", "MAX_TOKENS");
-      }
+  const { blocks, usage, finish } = await collectTextBlocks(ctx.llm.stream(callOptions), (chunk) => {
+    if (chunk.type !== "finish") return;
+    const reason = chunk.reason as { kind?: string; failure?: { message?: string; code?: string; providerRetryAfterMs?: number } } | undefined;
+    if (reason?.kind === "error" || reason?.kind === "aborted") {
+      const failure = reason.failure ?? { message: "stream aborted", code: "ABORTED" };
+      throw new CompactLlmError(failure.message ?? "stream failed", failure.code ?? "UNKNOWN", failure);
     }
-  }
+    if (reason?.kind === "max-tokens") {
+      throw new CompactLlmError("summarization truncated at the token cap", "MAX_TOKENS");
+    }
+  });
+  void finish;
   const summary = blocks.filter((block) => block.type === "text" && (block.text ?? "").trim().length > 0);
   if (summary.length === 0) throw new Error("summarization produced no text summary content");
   return { summary, usage };

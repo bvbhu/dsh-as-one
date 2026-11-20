@@ -23,6 +23,8 @@ import {
   ANCHOR_OPEN_TAG,
   ANCHOR_CLOSE_TAG,
   ANCHOR_PROMPT_INSTRUCTION,
+  anchoredInstruction,
+  collectTextBlocks,
   buildAnchorBlock,
 } from "./summarize.js";
 import {
@@ -314,5 +316,51 @@ describe("interceptor predicates", () => {
     const region = regionMessagesForTest(options);
     expect(region).toHaveLength(2);
     expect(JSON.stringify(region)).not.toContain("acting as a compaction engine");
+  });
+});
+
+describe("checkpoint output fidelity (2026-11 重复输出 bug)", () => {
+  it("collectTextBlocks does NOT duplicate text when block-end carries cumulative text", async () => {
+    // 复刻 as-one 适配器的流语法：delta 分片 + block-end 带累积全文。
+    const stream = (async function* () {
+      yield { type: "block-start", index: 0, blockType: "text" };
+      yield { type: "text-delta", index: 0, text: "第一段。" };
+      yield { type: "text-delta", index: 0, text: "第二段。" };
+      yield { type: "block-end", index: 0, block: { type: "text", text: "第一段。第二段。" } };
+      yield { type: "finish", reason: { kind: "stop" } };
+    })();
+    const { blocks } = await collectTextBlocks(stream);
+    const text = blocks.map((b) => b.text ?? "").join("");
+    expect(text).toBe("第一段。第二段。");
+    expect(text).not.toBe("第一段。第二段。第一段。第二段。");
+  });
+
+  it("collectTextBlocks falls back to block-end text when there are no deltas", async () => {
+    const stream = (async function* () {
+      yield { type: "block-start", index: 0, blockType: "text" };
+      yield { type: "block-end", index: 0, block: { type: "text", text: "only block-end" } };
+      yield { type: "finish", reason: { kind: "stop" } };
+    })();
+    const { blocks } = await collectTextBlocks(stream);
+    expect(blocks.map((b) => b.text ?? "").join("")).toBe("only block-end");
+  });
+});
+
+describe("anchored 模式：锚点由 LLM 生成，代码只下指令", () => {
+  it("anchoredInstruction tells the model to emit the anchor block and SMALL blocks", () => {
+    const instruction = anchoredInstruction("session-1", 100, 200);
+    expect(instruction).toContain("<session-search-anchors>");
+    expect(instruction).toContain("session-1");
+    expect(instruction).toContain("100-200");
+    expect(instruction).toContain("SMALL, specific piece");
+    expect(instruction).toContain("never a whole chunk range");
+  });
+
+  it("anchoredInstruction exposes seq numbers, not stage0 line numbers / token counts", () => {
+    const instruction = anchoredInstruction("s", 1, 2);
+    // seq 区间出现，但不带 stage0 的 lines:[...] / tokens:N 字段。
+    expect(instruction).toContain("1-2");
+    expect(instruction).not.toContain('"lines"');
+    expect(instruction).not.toContain('"tokens"');
   });
 });
