@@ -1139,7 +1139,7 @@ export default function SettingsPage(): React.JSX.Element {
   }
 
   /**
-   * 冷却卡 —— 供应商级冷却覆盖 + 逻辑模型成员冷却，合成一张。
+   * 冷却卡 —— 供应商级冷却覆盖 + 逻辑模型成员（冷却分钟），合成一张。
    *
    * 2026-11 用户定案:
    * - 样式参考调度卡（行式，但**没有拖动排序** —— 冷却顺序无意义）;
@@ -1157,7 +1157,7 @@ export default function SettingsPage(): React.JSX.Element {
           </button>
         </div>
         <ul className="rows sched-rows cooldownRows">
-          {/* 逻辑模型成员冷却 —— 与供应商行**同构**(同一个 .rowCard + .ruleRowLine,
+          {/* 逻辑模型成员（冷却分钟）—— 与供应商行**同构**(同一个 .rowCard + .ruleRowLine,
            * 同样带边框、同一列宽,只是没有拖动与删除)。
            * 2026-11 用户定案(参考图):标签本身是**带边框的框**(视觉上等同供应商
            * 下拉框那一格),单位「分钟」落在输入框右侧,与供应商行一致。 */}

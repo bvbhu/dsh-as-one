@@ -884,7 +884,7 @@ function CooldownRuleRow(props: {
             props.onPatch({ cooldown: ev.target.value === "" ? "" : Number(ev.target.value) })
           }
         />
-        {/* 单位与「逻辑模型成员冷却」行一致：都落在输入框右侧。 */}
+        {/* 单位与「逻辑模型成员」行一致：都落在输入框右侧。 */}
         <span className="ruleUnit">分钟</span>
 
         <button type="button" className="rowBtn danger ruleDel" title="删除这条冷却" onClick={props.onRemove}>
