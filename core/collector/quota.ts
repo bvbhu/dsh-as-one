@@ -45,6 +45,7 @@ import {
 } from "../connectors/minimax-signin.js";
 import { CODEARTS_BASE_CN, codeartsIdentityHeaders } from "../connectors/codearts.js";
 import { signCodeartsRequest } from "../connectors/codearts-sign.js";
+import { readCodeartsCheckin } from "../connectors/codearts-checkin-store.js";
 
 // ---------------------------------------------------------------------------
 // 错误类型
@@ -887,11 +888,30 @@ export async function probe_codearts_quota(
   //   2. 否则 → `end_date` 的**前一天 23:59:59**（end_date 是次日起始日；
   //      end_date 读不到时写死 2026-12-16 23:59:59 —— 当前唯一实测样本）。
   let expiresAt: number | null = null;
-  let expiryBasis: "expiring-tomorrow" | "period-end" | "period-end-fallback" | "unknown" =
-    "unknown";
+  let expiryBasis:
+    | "checkin-record"
+    | "expiring-tomorrow"
+    | "period-end"
+    | "period-end-fallback"
+    | "unknown" = "unknown";
   if (credits.expiring > 0) {
-    expiresAt = fetchedAt + 86_400;
-    expiryBasis = "expiring-tomorrow";
+    // 2026-11 用户定案：优先用签到时落库的**真实领取时刻 +24h**（上游 claim
+    // 响应的 expireAt）。签到时把 expire_at_ms 写进了该凭据的 raw_json.checkin；
+    // `account.extras` 就是 raw_json 全量（见 channels-sync.ts extras: raw）。
+    // 只有没签到记录（历史数据 / 别处领的分）才退回「查询时刻 +24h」粗估。
+    let fromCheckin: number | null = null;
+    try {
+      const rec = readCodeartsCheckin(raw);
+      if (rec !== null) {
+        const sec = Math.floor(rec.expire_at_ms / 1000);
+        // 已过期的签到积分不该被当作「即将到期」—— 让调用方看到 null 而不是过去时刻。
+        if (sec > fetchedAt) fromCheckin = sec;
+      }
+    } catch {
+      /* 坏记录 → 退回粗估，不影响额度读数 */
+    }
+    expiresAt = fromCheckin ?? fetchedAt + 86_400;
+    expiryBasis = fromCheckin !== null ? "checkin-record" : "expiring-tomorrow";
   } else {
     // end_date 前一天 23:59:59：把 end_date 转 epoch 后减一天即得前一天，再压到
     // 当天 23:59:59 —— periodEndSecondsOf 本身返回「当天 23:59:59」，所以对
