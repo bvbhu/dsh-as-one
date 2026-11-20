@@ -1936,6 +1936,18 @@ body {
   flex-direction: column;
   gap: 14px;
 }
+/* 设置页的字段标签列加宽到 172px 并禁止断行。
+ *
+ * 全局 `.kv-grid` 是 140px，装不下「外部数据刷新时间（小时）」这类
+ * 「名称 + 全角括号单位」的 12 个全角字符 → 会断成两行（用户 2026-11 截图）。
+ * 单位既然按用户要求写进了标签，标签列就必须够宽，否则必然回退到换行。
+ * 只在设置页作用域覆盖，不改其它页面的现有布局。 */
+.settings-page .kv-grid {
+  grid-template-columns: 172px 1fr;
+}
+.settings-page .kv-grid .k {
+  white-space: nowrap;
+}
 .setting-card {
   /* .card 已是 8px 圆角/1px border/surface 底;这里只收紧间距求"紧凑整齐"。 */
   padding: 12px 16px;
