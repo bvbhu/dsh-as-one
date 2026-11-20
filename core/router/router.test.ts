@@ -39,6 +39,7 @@ import {
   SETTING_COOLDOWN_OVERRIDES,
   SETTING_LOGICAL_COOLDOWN,
   SETTING_RECENT_LIMIT,
+  SPORADIC_STATUS_GRACE,
   TRANSIENT_KINDS,
   UpstreamErrorKind,
   chainItemFrom,
@@ -1215,5 +1216,114 @@ describe("纯函数层", () => {
     expect([...TRANSIENT_KINDS].sort()).toEqual(
       [UpstreamErrorKind.Timeout, UpstreamErrorKind.Connection, "client_disconnected"].sort(),
     );
+  });
+
+  it("SPORADIC_STATUS_GRACE 哨兵:目前只有 codearts 的 502", () => {
+    // 与 TRANSIENT_KINDS 同款纪律:改名单必须同步改这里。
+    // 2026-11-21 补入:codearts 偶发 502 一次不冷却(用户报「一次 502 就冷却降级」)。
+    expect([...SPORADIC_STATUS_GRACE.keys()].sort()).toEqual(["codearts"]);
+    expect(SPORADIC_STATUS_GRACE.get("codearts")!).toEqual(new Set([502]));
+  });
+
+  it("偶发豁免:codearts 首次 502 只记账不冷却", () => {
+    const { router } = makeRouter();
+    const ch = chain([{ provider: "codearts", model: "deepseek-v41-flash-1017" }]);
+    const rec = failOnce(router, ch, "s", {
+      kind: UpstreamErrorKind.Upstream,
+      status: 502,
+      error: "CodeArts 上游 502",
+    });
+    expect(rec.fails).toBe(1);
+    expect(rec.cooldownUntil).toBe(0);
+  });
+
+  it("偶发豁免只免一次:codearts 连续第二次 502 照常熔断", () => {
+    const { router, clock } = makeRouter();
+    const ch = chain([{ provider: "codearts", model: "m0" }]);
+    // 第一次:豁免
+    const rec1 = failOnce(router, ch, "s1", {
+      kind: UpstreamErrorKind.Upstream,
+      status: 502,
+      error: "first",
+    });
+    expect(rec1.cooldownUntil).toBe(0);
+    // 第二次连续失败:fails 已是 1 → 不再豁免
+    const plan = router.plan({ chain: ch, sessionId: "s2" });
+    expect(plan.item, plan.reason).not.toBeNull();
+    const item = plan.item as ChainItem;
+    const leaseId = router.commit(item, { sessionId: "s2" });
+    router.finish(item, {
+      leaseId,
+      sessionId: "s2",
+      ok: false,
+      error: "second",
+      kind: UpstreamErrorKind.Upstream,
+      status: 502,
+    });
+    const rec2 = router.health.get(item.endpoint.endpointId);
+    expect(rec2.fails).toBe(2);
+    expect(rec2.cooldownUntil - clock.wallNow()).toBeCloseTo(GLOBAL_FLOOR_S, 6);
+  });
+
+  it("偶发豁免按 provider 收窄:其它供应商的 502 照旧冷却", () => {
+    const { router } = makeRouter();
+    const ch = chain([{ provider: "workbuddy", model: "m0" }]);
+    const rec = failOnce(router, ch, "s", {
+      kind: UpstreamErrorKind.Upstream,
+      status: 502,
+      error: "上游返回 HTTP 502",
+    });
+    expect(rec.cooldownUntil - rec.updatedAt).toBeCloseTo(GLOBAL_FLOOR_S, 6);
+  });
+
+  it("偶发豁免按状态码收窄:codearts 的 503 照旧冷却", () => {
+    const { router } = makeRouter();
+    const ch = chain([{ provider: "codearts", model: "m0" }]);
+    const rec = failOnce(router, ch, "s", {
+      kind: UpstreamErrorKind.Upstream,
+      status: 503,
+      error: "CodeArts 上游 503",
+    });
+    expect(rec.cooldownUntil - rec.updatedAt).toBeCloseTo(GLOBAL_FLOOR_S, 6);
+  });
+
+  it("上游给了 Retry-After 时,codearts 首次 502 也照样冷到那一刻(until 优先)", () => {
+    const { router, clock } = makeRouter();
+    const ch = chain([{ provider: "codearts", model: "m0" }]);
+    const t0 = clock.wallNow();
+    const rec = failOnce(router, ch, "s", {
+      kind: UpstreamErrorKind.Upstream,
+      status: 502,
+      error: "CodeArts 上游 502",
+      cooldownUntil: t0 + 60,
+    });
+    expect(rec.cooldownUntil - t0).toBeCloseTo(60, 6);
+  });
+
+  it("偶发豁免后一次成功即清账;下次 502 又是新的一轮「首次」", () => {
+    const { router, clock } = makeRouter();
+    const ch = chain([{ provider: "codearts", model: "m0" }]);
+    // 502(豁免)→ 成功(清账)→ 502(又是 fails=0,再豁免)
+    failOnce(router, ch, "s1", {
+      kind: UpstreamErrorKind.Upstream,
+      status: 502,
+      error: "first",
+    });
+    const okPlan = router.plan({ chain: ch, sessionId: "s2" });
+    const okLease = router.commit(okPlan.item as ChainItem, { sessionId: "s2" });
+    router.finish(okPlan.item as ChainItem, {
+      leaseId: okLease,
+      sessionId: "s2",
+      ok: true,
+      status: 200,
+    });
+    const rec = failOnce(router, ch, "s3", {
+      kind: UpstreamErrorKind.Upstream,
+      status: 502,
+      error: "second-episode",
+    });
+    expect(rec.fails).toBe(1);
+    expect(rec.cooldownUntil).toBe(0);
+    void clock;
   });
 });

@@ -382,6 +382,7 @@ export class Planner {
         status: opts.status ?? 0,
         policy: ok ? null : this._cooldownPolicy(ep.provider),
         until: ok ? null : (opts.cooldownUntil ?? null),
+        provider: ep.provider,
       });
       if (!ok) {
         // 粘性不换号一族:限流失败**不解除粘性**。解除的后果是「下一次请求

@@ -1320,6 +1320,32 @@ describe("配置与播种", () => {
     expect(h.known("e1")).toBe(false);
   });
 
+  it("偶发豁免:codearts 首次 502 只记账不冷却;连续第二次照常熔断(镜像 router 口径)", () => {
+    // 与 core/router/router.test.ts 同款哨兵纪律:改 SPORADIC_STATUS_GRACE 必须同步这里。
+    const h = new HealthRegistry();
+    const now = wallNow();
+    const policy = RetryPolicy.of(new InMemoryRepo(), { abstract: false });
+    // 首次 502:豁免
+    h.note("e1", { ok: false, kind: "upstream", status: 502, now, policy, provider: "codearts" });
+    const rec1 = h.get("e1");
+    expect(rec1.fails).toBe(1);
+    expect(rec1.cooldownUntil).toBe(0);
+    // 连续第二次:fails 已是 1 → 熔断
+    h.note("e1", { ok: false, kind: "upstream", status: 502, now: now + 10, policy, provider: "codearts" });
+    const rec2 = h.get("e1");
+    expect(rec2.fails).toBe(2);
+    expect(rec2.cooldownUntil - (now + 10)).toBeCloseTo(policy.cooldownFloorS, 6);
+    // 成功清账后再 502:又是新一轮「首次」,再豁免
+    h.note("e1", { ok: true, now: now + 20 });
+    h.note("e1", { ok: false, kind: "upstream", status: 502, now: now + 30, policy, provider: "codearts" });
+    expect(h.get("e1").cooldownUntil).toBe(0);
+    // 其它供应商 / 其它状态码:不豁免
+    h.note("e2", { ok: false, kind: "upstream", status: 502, now, policy, provider: "workbuddy" });
+    expect(h.get("e2").cooldownUntil).toBeGreaterThan(0);
+    h.note("e3", { ok: false, kind: "upstream", status: 503, now, policy, provider: "codearts" });
+    expect(h.get("e3").cooldownUntil).toBeGreaterThan(0);
+  });
+
 // ---------------------------------------------------------------------------
 // 直连抢占(m02240):直连请求 > 逻辑模型成员;逻辑内部 FCFS 不被打乱
 // ---------------------------------------------------------------------------

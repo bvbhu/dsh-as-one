@@ -103,6 +103,25 @@ export const TRANSIENT_KINDS: ReadonlySet<string> = new Set([
   "timeout",
   "connection",
 ]);
+/**
+ * 偶发 5xx 一次性豁免 —— 与 `core/router/types.ts` 的 `SPORADIC_STATUS_GRACE` 同口径。
+ *
+ * 只对登记的 `(provider, status)` 生效,且只在连续失败的第一次(`fails === 0`)
+ * 不熔断;持续失败照常冷却。目前只有 codearts 的 502(华为云侧网关偶发抖动)。
+ */
+export const SPORADIC_STATUS_GRACE: ReadonlyMap<string, ReadonlySet<number>> = new Map([
+  ["codearts", new Set([502])],
+]);
+
+/** 该 `(provider, status)` 是否命中「偶发一次性豁免」名单。 */
+export function isSporadicGraceStatus(
+  provider: string | null | undefined,
+  status: number,
+): boolean {
+  if (!provider) return false;
+  const set = SPORADIC_STATUS_GRACE.get(provider.trim().toLowerCase());
+  return set !== undefined && set.has(status);
+}
 export const PLAN_FAILURE_REASONS = ["all_blackout", "all_cooldown", "all_busy"];
 /** 被直连请求抢占的逻辑租约:记入账本失败记录的 error 文本(m02240)。 */
 export const PREEMPT_ERROR = "preempted by direct request";
