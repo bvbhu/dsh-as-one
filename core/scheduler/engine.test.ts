@@ -661,6 +661,32 @@ describe("Scheduler.due-first 档位排序", () => {
     ]);
   });
 
+  it("P2 带 model 的到期规则参与 due-first 排序(2026-11-21 修:此前被静默丢弃)", () => {
+    // 用户实测:设置页允许「P2 + 具体 model + 到期日」,但引擎只登记
+    // `expires_at && !model`,于是手填的两条到期(maas 11-30 / opencsg 12-01)
+    // 完全不参与排序,总是按 members 数组序走。
+    const repo = new InMemoryRepo();
+    const members: Array<[string, string]> = [
+      ["opencsg", "deepseek-v4.1-flash-1017"],
+      ["maas", "spark-x2.6"],
+    ];
+    repo.setLogicalModel("expiry-by-model", { strategy: "due-first" });
+    repo.setMembers("expiry-by-model", members.map(([p, m]) => ({ provider: p, model: m })));
+    repo.setChain("expiry-by-model", members.map(([p, m]) => endpointRow(p, m, SEAT[p] ?? "seat-1")));
+    // P2 规则:两条都带 model + 到期日;maas 更早(11-30 < 12-01)。
+    repo.setSetting("scheduler.rules_p2", JSON.stringify([
+      { provider: "opencsg", model: "deepseek-v4.1-flash-1017", expires_at: "2026-12-01" },
+      { provider: "maas", model: "spark-x2.6", expires_at: "2026-11-30" },
+    ]));
+    const sched = new Scheduler(repo);
+    // 修复前:两条规则被丢 → 到期全 null → 按 members 序(opencsg 先)。
+    // 修复后:maas 到期更早 → 必须排前。
+    expect(sched.chain("expiry-by-model", { now: at(23, 0) }).map((c) => c.endpoint.realModelKey)).toEqual([
+      "maas/spark-x2.6",
+      "opencsg/deepseek-v4.1-flash-1017",
+    ]);
+  });
+
   it("凭据自身没有到期时,回落 provider 级聚合到期(多账号取最早,用户 m34799)", () => {
     // 场景:workbuddy 有两个号,只有「石英的石英块」那个探到了到期(11-02);
     // trae 一个号探到 11-05。装配层会额外写一行 `quotas["workbuddy"]` =

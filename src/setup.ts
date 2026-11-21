@@ -54,7 +54,7 @@ import { quotaHub } from "@as-one/core/src/datahub/index.js";
 import { AppSchedulerRepo } from "./repo.js";
 import { buildResolveUpstream } from "./upstream.js";
 import { rerouteSettingsFrom } from "./reroute.js";
-import { listModelEntries, providersWithCredentials } from "./models.js";
+import { listModelEntries, providersWithCredentials, resolveModelEntry } from "./models.js";
 
 /** sensenova key 自愈结果(与 `@as-one/panel` 的 `PanelBundle["snRepairKey"]` 同形)。 */
 export interface SensenovaKeyRepairResult {
@@ -112,6 +112,11 @@ export interface AsOneRuntime {
   getSetting(key: string): string | null;
   resolveUpstream: (model: string) => Upstream | undefined;
   listModels: () => ModelEntry[] | Promise<ModelEntry[]>;
+  /**
+   * 运行期单模型解析(**不过滤 hidden / 不要求凭据在场**)。
+   * GUI 选择器用 `listModels`;运行期(`resolveModel`/压缩直连隐藏成员)用这个。
+   */
+  resolveModelEntry: (id: string) => ModelEntry | undefined;
   /**
    * 请求完成 → 明细日志 + stats_daily 聚合(与 electron `logRequestDone` 同口径)。
    *
@@ -710,6 +715,12 @@ export async function setupAsOne(options: SetupAsOneOptions): Promise<AsOneRunti
     syncRegistry,
     resolveUpstream,
     listModels: async () => listModelEntries(registry, db, await providersWithCredentials(registry, vault)),
+    /**
+     * 运行期单模型解析(**不过滤 hidden**)—— 与 GUI 清单分离。
+     * 压缩组件直连隐藏成员(如 maas/spark-x2.6-4b)必须能解析,否则 404。
+     * 见 `resolveModelEntry` 注释(2026-11-21 web profile 实测修复)。
+     */
+    resolveModelEntry: (id: string) => resolveModelEntry(registry, db, id),
     onRequestDone,
     startedAtMs,
     setSensenovaKeyRepair(fn) {

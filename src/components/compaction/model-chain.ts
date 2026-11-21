@@ -537,7 +537,10 @@ export class ModelChain {
               this.ctx.logger?.warn?.(`[as-one compaction] cooldown write failed for ${model.key}: ${errorChainOf(storeError)}; quarantining locally`);
             }
             const reason = errorChainOf(error);
-            this.ctx.logger?.warn?.(`[as-one compaction] route ${model.key} failed (${reason}) for job=${task.label}; cooling`);
+            // 带上错误正文:此前只有错误「族」,`As One 没有这个模型:xxx` 这类
+            // 关键线索被吞掉,只能靠加临时日志才发现(2026-11-21)。
+            const detail = String((error as Error)?.message ?? error).slice(0, 300);
+            this.ctx.logger?.warn?.(`[as-one compaction] route ${model.key} failed (${reason}: ${detail}) for job=${task.label}; cooling`);
             this.cooldownEvents.push({ model: model.key, job: task.label, error: reason, until, hours: model.cooldownHours });
             task.attempts.push({ model: model.key, error: reason });
             task.running = false;

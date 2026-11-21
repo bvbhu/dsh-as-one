@@ -211,6 +211,7 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     "llm/stream",
     (options, next) => {
       if (!isCompactionRequest(options)) return next();
+      ctx.logger?.debug?.(`[as-one compaction] intercept compaction request; mode=${config.promptMode} enabled=${config.enabled} tiers=${config.tiers.length}`);
       // 每次请求 hot-read 设置，面板保存后下一个请求即生效。
       try {
         config = readConfigSafe(getSetting);
@@ -223,7 +224,7 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
       return decide(options, next);    },
     { global: true, prepend: true },
   );
-
+  console.info(`[as-one compaction] listener registered mode=${config.promptMode} enabled=${config.enabled} tiers=${config.tiers.length} logicalModel=${config.logicalModel}`);
   async function* stream(options: LlmStreamOptions, next: NextStream): AsyncGenerator<Record<string, unknown>> {
     if (inflight > 0) {
       // 我们自己的 chunk/merge 调用：原样通过 waterfall。
@@ -328,9 +329,15 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     const span = deriveSpan(ctx, options);
     const rawRegion = messagesToRegion(messages);
     const stage0Lines = runStage0(messages, quilt.preprocessing);
-    if (stage0Lines.length === 0) return undefined;
+    if (stage0Lines.length === 0) {
+      ctx.logger?.info?.("[as-one compaction] stage0 lines empty; delegating to host summary");
+      return undefined;
+    }
     const regionTokens = stage0Lines.reduce((sum, line) => sum + lineTokenCost(line), 0);
-    if (regionTokens <= 0) return undefined;
+    if (regionTokens <= 0) {
+      ctx.logger?.info?.("[as-one compaction] region token count is zero; delegating to host summary");
+      return undefined;
+    }
 
     const capacities = new Map<string, { contextWindow: number; maxTokens: number }>();
     for (const tier of quilt.tiers) {
@@ -397,7 +404,10 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
       cursor = next;
       coreStart = end;
     }
-    if (jobs.length === 0) return undefined;
+    if (jobs.length === 0) {
+      ctx.logger?.info?.("[as-one compaction] no chunk produced; delegating to host summary");
+      return undefined;
+    }
     // 单块 → 替换 buildMessages 为单块专用提示词（anchored/quilt 都受益）。
     // anchored：把"锚点由模型自己生成"的指令并入提示词（LLM 做所有文本处理），
     // 代码不再向模型输出追加任何文本。
@@ -432,6 +442,7 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
       fallbackInput: { messages },
       defaultSummarize: async (input: { messages: unknown }, _agent: ChainAgent, abort?: AbortSignal) => {
         // 宿主原摘要流：经 ctx.llm.stream（此时 inflight>0，不再被我们接管）。
+        ctx.logger?.info?.("[as-one compaction] falling back to host summary path");
         const { blocks, usage } = await collectTextBlocks(chainCtx.llm.stream({
           ...options,
           messages: input.messages,
@@ -444,7 +455,10 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
 
     const chunkResults = await chain.run(jobs, agent, options.signal, fallbackOptions);
     const digests = chunkResults.filter((result) => result !== undefined).map((result) => result.text);
-    if (digests.length === 0 || digests.some((text) => !text || text.trim().length === 0)) return undefined;
+    if (digests.length === 0 || digests.some((text) => !text || text.trim().length === 0)) {
+      ctx.logger?.info?.("[as-one compaction] empty digest; delegating to host summary");
+      return undefined;
+    }
 
     let finalText: string | undefined;
     if (digests.length === 1) {
@@ -473,9 +487,13 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
       const mergeResult = await mergeChain.run([merge], agent, options.signal, fallbackOptions);
       finalText = mergeResult[0]?.text;
     } else {
+      ctx.logger?.info?.("[as-one compaction] no merge route can hold the digests; delegating to host summary");
       return undefined;
     }
-    if (!finalText || finalText.trim().length === 0) return undefined;
+    if (!finalText || finalText.trim().length === 0) {
+      ctx.logger?.info?.("[as-one compaction] final text empty; delegating to host summary");
+      return undefined;
+    }
 
     // 2026-11 用户定案：所有文本处理（含锚点块）由 LLM 完成；代码只切分/合并、
     // 忠实回传模型输出，不再追加或改写任何文本，便于排查模型原始结果。
@@ -485,6 +503,9 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
       ctx.logger?.info?.(`[as-one compaction] ${rawRegion.length} chars region would not shrink (digest ${text.length} chars); keeping host summary`);
       return undefined;
     }
+    ctx.logger?.info?.(
+      `[as-one compaction] checkpoint via component chunks=${digests.length} rawChars=${rawRegion.length} digestChars=${text.length} anchor=${text.includes("<session-search-anchors>") ? "model" : "none"}`,
+    );
     return text;
   }
 

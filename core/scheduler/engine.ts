@@ -262,6 +262,7 @@ export class Scheduler {
     }
     const freeModels: FreeEntry[] = [];
     const creditExpiry: Record<string, string> = {};
+    const creditExpiryByModel: Record<string, string> = {};
     const timeWindows: WindowRule[] = [];
     // 2026-11-07 修 P4 未生效:无时段的档位规则曾在此被整条丢弃。
     // 现在为它们建一条独立通路(staticRules),供 _degraded / chain 使用。
@@ -317,8 +318,12 @@ export class Scheduler {
         if (model && priority === 1) {
           freeModels.push({ provider, model, expiresAt: rule.expires_at ?? null });
         }
-        if (rule.expires_at !== undefined && !model) {
-          creditExpiry[provider] = rule.expires_at;
+        if (rule.expires_at !== undefined) {
+          // 2026-11-21 修:带 model 的 P2 到期也要登记 —— 否则设置页允许的
+          // 「P2 + 具体 model + 到期日」被静默丢弃(用户实测:maas/spark-x2.6
+          // 11-30、opencsg/deepseek-v4.1-flash-1017 12-01 都不参与排序)。
+          if (model) creditExpiryByModel[`${provider}/${model}`] = rule.expires_at;
+          else creditExpiry[provider] = rule.expires_at;
         }
         continue;
       }
@@ -326,8 +331,10 @@ export class Scheduler {
         freeModels.push({ provider, model, expiresAt: rule.expires_at ?? null });
         continue;
       }
-      if (rule.expires_at !== undefined && !model) {
-        creditExpiry[provider] = rule.expires_at;
+      if (rule.expires_at !== undefined) {
+        // 同上:model 级与 provider 级分别登记,互不覆盖。
+        if (model) creditExpiryByModel[`${provider}/${model}`] = rule.expires_at;
+        else creditExpiry[provider] = rule.expires_at;
         continue;
       }
       // 2026-11-07 修 P4 调度优先级未生效:无时段、非 P1/P2 语义的规则此前
@@ -350,7 +357,7 @@ export class Scheduler {
       }
       // 其余规则(含纯 expires_at + model 的到期档、P3 普通档)由 plan 侧按档位解析。
     }
-    return { rules, freeModels, creditExpiry, timeWindows, staticRules, windowProfiles: [...profiles.values()] };
+    return { rules, freeModels, creditExpiry, creditExpiryByModel, timeWindows, staticRules, windowProfiles: [...profiles.values()] };
   }
 
   /** 读 5 个档位键合并成扁平 rules(键名即档位,注入 priority);5 键全空 → null。 */
@@ -403,6 +410,10 @@ export class Scheduler {
   }
   private _creditExpiry(): Record<string, string> {
     return this._config().creditExpiry;
+  }
+  /** (provider/model) 级静态到期 —— 带 model 的 P2 规则(2026-11-21 修)。 */
+  private _creditExpiryByModel(): Record<string, string> {
+    return this._config().creditExpiryByModel;
   }
   private _windowRules(): WindowRule[] {
     return this._config().timeWindows;
@@ -652,6 +663,17 @@ export class Scheduler {
       if (rollup && typeof rollup === "object") {
         const exp = (rollup as Record<string, unknown>).expires_at;
         if (typeof exp === "number" && exp > 0) return exp;
+      }
+    }
+    // 静态到期:先看 (provider/model) 级,再看 provider 级。
+    // 2026-11-21 修:带 model 的 P2 规则此前完全没被登记,用户手填的到期
+    // (如 maas/spark-x2.6 → 11-30、opencsg/deepseek-v4.1-flash-1017 → 12-01)
+    // 不参与 due-first 排序。实时快照仍然优先(`_expiryOf` 上面两步先跑完)。
+    if (p[0] !== "" && p[1] !== "") {
+      const modelExp = this._creditExpiryByModel()[`${p[0]}/${p[1]}`];
+      if (modelExp) {
+        const epoch = expiryEpoch(modelExp);
+        if (epoch !== null) return epoch;
       }
     }
     const staticExp = this._creditExpiry()[p[0]];

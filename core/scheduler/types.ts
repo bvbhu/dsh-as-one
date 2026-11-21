@@ -163,7 +163,16 @@ export interface StaticRule {
 export interface SchedulerConfig {
   rules: Rule[];
   freeModels: FreeEntry[];
+  /** provider 级静态到期(不带 model 的 P2 规则)。 */
   creditExpiry: Record<string, string>;
+  /**
+   * **(provider/model) 级静态到期** —— 带 model 的 P2 规则(2026-11-21 修)。
+   *
+   * 此前 `_readConfig` 只登记 `expires_at && !model`,于是设置页允许保存的
+   * 「P2 + 具体 model + 到期日」规则**被静默丢弃**,用户手填的到期不参与
+   * due-first 排序。键形如 `"maas/spark-x2.6"`。
+   */
+  creditExpiryByModel: Record<string, string>;
   timeWindows: WindowRule[];
   /** 无时段的静态档位规则(P4 降级 / P0 剔除)。 */
   staticRules: StaticRule[];

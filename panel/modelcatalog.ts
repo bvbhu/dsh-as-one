@@ -232,3 +232,75 @@ export async function providersWithCredentials(
   }
   return out;
 }
+
+/**
+ * 按 id 解析**单个**模型条目(逻辑模型名或 `provider/model` 直连键)。
+ *
+ * ⚠️ 与 {@link listModelEntries} 的关键差别:**不过滤 `hidden`、不要求凭据在场**。
+ * 那份清单是给**模型选择器 GUI** 用的(藏起来的模型不显示是对的);但运行期
+ * 解析(`resolveModel`/`prepareCall`)不能用同一份清单 —— 压缩组件会直连
+ * 逻辑模型的**隐藏成员**(如 `maas/spark-x2.6-4b`),按清单解析会 404
+ * 「As One 没有这个模型」(2026-11-21 web profile 实测,free 三成员全挂)。
+ *
+ * 解析顺序:逻辑模型(db.logical_model,空成员不算)→ 真实模型
+ * (registry+db overlay,**无视 hidden**)。找不到 → undefined。
+ */
+export function resolveModelEntry(
+  registry: ProviderRegistry,
+  db: AsOneDatabase,
+  id: string,
+): ModelEntry | undefined {
+  const wanted = id.trim();
+  if (wanted === "") return undefined;
+
+  // ── 逻辑模型 ──
+  const logicalRow = db.logicalModel.get(wanted);
+  if (logicalRow !== null && logicalRow !== undefined) {
+    const members = parseDbMembers(logicalRow.members);
+    if (members.length === 0) return undefined;
+    const windowOf = new Map<string, number>();
+    const visionOf = new Map<string, boolean>();
+    for (const mv of realModelMapOf(registry, db).values()) {
+      windowOf.set(`${mv.provider}/${mv.model}`, mv.maxInputTokens ?? 0);
+      visionOf.set(`${mv.provider}/${mv.model}`, mv.supportsVision);
+    }
+    const windows = members
+      .map((m) => windowOf.get(`${m.provider}/${m.model}`) ?? 0)
+      .filter((w) => Number.isFinite(w) && w > 0);
+    return {
+      id: logicalRow.name,
+      object: "model",
+      owned_by: "as-one",
+      litenexus_kind: "logical",
+      name: (logicalRow.display_name ?? "").trim() || logicalRow.name,
+      display_name: (logicalRow.display_name ?? "").trim() || logicalRow.name,
+      max_input_tokens: windows.length > 0 ? Math.min(...windows) : undefined,
+      max_member_input_tokens: windows.length > 0 ? Math.max(...windows) : undefined,
+      supports_vision: members.some((m) => visionOf.get(`${m.provider}/${m.model}`) === true),
+      reasoning_efforts: LOGICAL_REASONING_EFFORTS,
+      reasoning_allows_off: true,
+    };
+  }
+
+  // ── 真实模型(直连键 provider/model;hidden 也解析)──
+  const slash = wanted.indexOf("/");
+  if (slash <= 0 || slash >= wanted.length - 1) return undefined;
+  const provider = wanted.slice(0, slash);
+  const model = wanted.slice(slash + 1);
+  const mv = realModelMapOf(registry, db).get(wanted);
+  if (!mv) return undefined;
+  const dbRealName = db.realModel.get(provider, model)?.name;
+  return {
+    id: wanted,
+    object: "model",
+    owned_by: provider,
+    litenexus_kind: "real",
+    name: (mv.name ?? "").trim() || mv.model,
+    display_name: ((dbRealName ?? mv.name ?? "") as string).trim() || mv.model,
+    max_input_tokens: mv.maxInputTokens ?? undefined,
+    max_output_tokens: mv.maxOutputTokens ?? undefined,
+    supports_vision: mv.supportsVision,
+    reasoning_efforts: mv.supportedReasoningEfforts,
+    reasoning_allows_off: mv.reasoningAllowsOff,
+  };
+}

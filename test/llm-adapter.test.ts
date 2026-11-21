@@ -805,6 +805,13 @@ function fakeRuntime(chunks: ChatCompletionChunk[], captured: Captured = {}): As
       entry({ id: "auto", litenexus_kind: "logical", owned_by: "router" }),
       entry({ id: "stub/m1" }),
     ],
+    // 运行期单模型解析(不过滤 hidden);fixture 按同样口径给两台。
+    resolveModelEntry: (id: string) =>
+      id === "auto"
+        ? entry({ id: "auto", litenexus_kind: "logical", owned_by: "router" })
+        : id === "stub/m1"
+          ? entry({ id: "stub/m1" })
+          : undefined,
     resolveUpstream: (model: string) => (model === "auto" || model === "stub/m1" ? upstream : undefined),
     onRequestDone: (info: RequestDoneInfo) => {
       captured.done = info;
@@ -947,6 +954,7 @@ describe("AsOneLlmAdapter", () => {
     const captured: Captured = {};
     const rt = {
       listModels: async () => [entry({ id: "auto" })],
+      resolveModelEntry: (id: string) => (id === "auto" ? entry({ id: "auto" }) : undefined),
       resolveUpstream: () =>
         ({
           stream() {
@@ -1046,6 +1054,12 @@ function compactRuntime(opts: {
       entry({ id: "free", litenexus_kind: "logical", owned_by: "router" }),
       entry({ id: "big", max_input_tokens: opts.windowTokens ?? 40_000 }),
     ],
+    resolveModelEntry: (id: string) =>
+      id === "free"
+        ? entry({ id: "free", litenexus_kind: "logical", owned_by: "router" })
+        : id === "big"
+          ? entry({ id: "big", max_input_tokens: opts.windowTokens ?? 40_000 })
+          : undefined,
     resolveUpstream: () => upstream,
     onRequestDone: () => undefined,
   } as unknown as AsOneRuntime;
