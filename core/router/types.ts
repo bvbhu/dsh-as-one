@@ -80,6 +80,42 @@ export const TRANSIENT_KINDS: ReadonlySet<string> = new Set<string>([
   "client_disconnected",
 ]);
 
+/**
+ * **偶发 5xx 一次性豁免**(2026-11-21 用户报「codearts 偶发 502 一次就冷却」)。
+ *
+ * 与 {@link TRANSIENT_KINDS} 的区别是**按状态码、且只豁免一次**,不是整类豁免:
+ * - 只对下面登记的 `(provider, status)` 生效 —— 目前是 `codearts` 的 **502**;
+ * - 只在**连续失败的第一次**(`fails === 0`)不熔断:第一次 502 只记账,
+ *   第二次连续的 502 起照常按 `cooldownFloorS` 冷却。
+ *
+ * 为什么不是直接加进 `TRANSIENT_KINDS`(整类豁免):
+ * - **502 是「Bad Gateway」,含义是网关/中间层抖了一下**,单发时确实像瞬时故障;
+ *   但持续 502 说明那台真的不可用,整类豁免等于把熔断关掉(一次失败的 15 分钟
+ *   冷却正是「别继续打一台坏机器」的那道闸)。
+ * - **按 provider 收窄**是因为不同上游的 5xx 语义不同:workbuddy/trae 的 5xx
+ *   往往伴随账号/额度状态,直接免掉会掩盖真问题;`codearts` 的 502 目前只来自
+ *   华为云侧网关,与账号无关。
+ *
+ * ⚠️ 上游给了显式 `Retry-After`(`hint.until`)时**仍然优先** —— 上游都说了
+ * 「到 X 之前别来」,就没有「这是偶发抖动」的解释空间。
+ * ⚠️ 成功一次会清零 `fails`,所以「偶发」= 两次 502 之间隔着成功,永远只吃到一次豁免;
+ * 连续两次 502 才会进冷却 —— 这正是「偶发不冷却、持续才熔断」。
+ */
+export const SPORADIC_STATUS_GRACE: ReadonlyMap<string, ReadonlySet<number>> = new Map<
+  string,
+  ReadonlySet<number>
+>([["codearts", new Set<number>([502])]]);
+
+/** 该 `(provider, status)` 是否命中「偶发一次性豁免」名单。 */
+export function isSporadicGraceStatus(
+  provider: string | null | undefined,
+  status: number,
+): boolean {
+  if (!provider) return false;
+  const set = SPORADIC_STATUS_GRACE.get(provider.trim().toLowerCase());
+  return set !== undefined && set.has(status);
+}
+
 /** 一个可被选中的端点 = (真实模型 × 该 provider 名下的一枚凭据)。 */
 export interface Endpoint {
   /** `"<provider>/<model>@<provider>/<username>"`,端点身份 */
@@ -287,6 +323,8 @@ export function noteFailure(
     status?: number;
     now?: number;
     hint?: CooldownHint | null;
+    /** 失败端点的 provider —— 用于「偶发 5xx 一次性豁免」按供应商收窄。 */
+    provider?: string;
   } = {},
 ): EndpointHealth {
   const now = opts.now ?? 0;
@@ -311,6 +349,15 @@ export function noteFailure(
   }
   if (TRANSIENT_KINDS.has(kind)) {
     // 已知瞬时故障:只记账,不熔断。⚠️ 不清零已有的 cooldownUntil。
+    return next;
+  }
+  // 偶发 5xx 一次性豁免:只在该 provider 的「连续失败第一次」生效。
+  // 成功会清零 fails,所以间隔成功的偶发 502 永远不冷却;连续第二次照样熔断。
+  if (
+    health.fails === 0 &&
+    isSporadicGraceStatus(opts.provider, status) &&
+    !TRANSIENT_KINDS.has(kind)
+  ) {
     return next;
   }
   const floor = opts.hint?.policy ? Number(opts.hint.policy.cooldownFloorS) : 0;

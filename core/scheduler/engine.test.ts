@@ -661,6 +661,32 @@ describe("Scheduler.due-first 档位排序", () => {
     ]);
   });
 
+  it("P2 带 model 的到期规则参与 due-first 排序(2026-11-21 修:此前被静默丢弃)", () => {
+    // 用户实测:设置页允许「P2 + 具体 model + 到期日」,但引擎只登记
+    // `expires_at && !model`,于是手填的两条到期(maas 11-30 / opencsg 12-01)
+    // 完全不参与排序,总是按 members 数组序走。
+    const repo = new InMemoryRepo();
+    const members: Array<[string, string]> = [
+      ["opencsg", "deepseek-v4.1-flash-1017"],
+      ["maas", "spark-x2.6"],
+    ];
+    repo.setLogicalModel("expiry-by-model", { strategy: "due-first" });
+    repo.setMembers("expiry-by-model", members.map(([p, m]) => ({ provider: p, model: m })));
+    repo.setChain("expiry-by-model", members.map(([p, m]) => endpointRow(p, m, SEAT[p] ?? "seat-1")));
+    // P2 规则:两条都带 model + 到期日;maas 更早(11-30 < 12-01)。
+    repo.setSetting("scheduler.rules_p2", JSON.stringify([
+      { provider: "opencsg", model: "deepseek-v4.1-flash-1017", expires_at: "2026-12-01" },
+      { provider: "maas", model: "spark-x2.6", expires_at: "2026-11-30" },
+    ]));
+    const sched = new Scheduler(repo);
+    // 修复前:两条规则被丢 → 到期全 null → 按 members 序(opencsg 先)。
+    // 修复后:maas 到期更早 → 必须排前。
+    expect(sched.chain("expiry-by-model", { now: at(23, 0) }).map((c) => c.endpoint.realModelKey)).toEqual([
+      "maas/spark-x2.6",
+      "opencsg/deepseek-v4.1-flash-1017",
+    ]);
+  });
+
   it("凭据自身没有到期时,回落 provider 级聚合到期(多账号取最早,用户 m34799)", () => {
     // 场景:workbuddy 有两个号,只有「石英的石英块」那个探到了到期(11-02);
     // trae 一个号探到 11-05。装配层会额外写一行 `quotas["workbuddy"]` =
@@ -1318,6 +1344,32 @@ describe("配置与播种", () => {
     expect(h.purgeExpired(now + 10_000)).toBe(1);
     expect(h.cooled(now + 10_001)).toEqual([]);
     expect(h.known("e1")).toBe(false);
+  });
+
+  it("偶发豁免:codearts 首次 502 只记账不冷却;连续第二次照常熔断(镜像 router 口径)", () => {
+    // 与 core/router/router.test.ts 同款哨兵纪律:改 SPORADIC_STATUS_GRACE 必须同步这里。
+    const h = new HealthRegistry();
+    const now = wallNow();
+    const policy = RetryPolicy.of(new InMemoryRepo(), { abstract: false });
+    // 首次 502:豁免
+    h.note("e1", { ok: false, kind: "upstream", status: 502, now, policy, provider: "codearts" });
+    const rec1 = h.get("e1");
+    expect(rec1.fails).toBe(1);
+    expect(rec1.cooldownUntil).toBe(0);
+    // 连续第二次:fails 已是 1 → 熔断
+    h.note("e1", { ok: false, kind: "upstream", status: 502, now: now + 10, policy, provider: "codearts" });
+    const rec2 = h.get("e1");
+    expect(rec2.fails).toBe(2);
+    expect(rec2.cooldownUntil - (now + 10)).toBeCloseTo(policy.cooldownFloorS, 6);
+    // 成功清账后再 502:又是新一轮「首次」,再豁免
+    h.note("e1", { ok: true, now: now + 20 });
+    h.note("e1", { ok: false, kind: "upstream", status: 502, now: now + 30, policy, provider: "codearts" });
+    expect(h.get("e1").cooldownUntil).toBe(0);
+    // 其它供应商 / 其它状态码:不豁免
+    h.note("e2", { ok: false, kind: "upstream", status: 502, now, policy, provider: "workbuddy" });
+    expect(h.get("e2").cooldownUntil).toBeGreaterThan(0);
+    h.note("e3", { ok: false, kind: "upstream", status: 503, now, policy, provider: "codearts" });
+    expect(h.get("e3").cooldownUntil).toBeGreaterThan(0);
   });
 
 // ---------------------------------------------------------------------------

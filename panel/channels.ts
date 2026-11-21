@@ -59,6 +59,7 @@ import {
   CODEARTS_IDE_CONFLICT_CODE,
   codeartsIdeCheckin,
 } from "@as-one/core/src/connectors/codearts-ide.js";
+import { markCodeartsCheckin } from "@as-one/core/src/connectors/codearts-checkin-store.js";
 import { panelClaimedToday, panelTodayPoints } from "@as-one/core/src/connectors/minimax-wire.js";
 import { discoverTraeAccounts } from "@as-one/core/src/connectors/discover.js";
 import {
@@ -668,6 +669,24 @@ export function createChannelsDomain(
               : res.code === -1 && res.message.includes("干跑")
                 ? "dry_run"
                 : "failed";
+        // 2026-11 用户定案：签到成功后把领取时刻写进凭据 raw_json.checkin，
+        // 供额度探针从**真实领取时刻**算 24h 积分到期（旧代码只能从查询时刻
+        // 粗估，误差可达一天）。already=今日已签也要刷新记录： claim 响应
+        // 带 expireAt 的绝对值，比「查到的那一刻 +24h」准。
+        if (confirm && (status === "claimed" || status === "already")) {
+          try {
+            markCodeartsCheckin(ctx.db, acc.username, {
+              claimedAtMs: Date.now(),
+              expireAtMs: res.expireAt,
+              credit: res.credit,
+            });
+          } catch (err) {
+            // 记账失败不影响签到本身（积分已入账），只写日志。
+            console.error(
+              `[as-one] codearts 签到时间落库失败(${acc.username}): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
         return {
           ...baseRow,
           status,

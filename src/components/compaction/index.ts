@@ -18,9 +18,12 @@ export {
   ANCHOR_OPEN_TAG,
   ANCHOR_CLOSE_TAG,
   ANCHOR_PROMPT_INSTRUCTION,
+  anchoredInstruction,
+  collectTextBlocks,
   buildAnchorBlock,
   CHUNK_PROMPT,
   MERGE_PROMPT,
+  SINGLE_CHUNK_PROMPT,
   chunkInstruction,
   mergeInstruction,
 } from "./summarize.js";

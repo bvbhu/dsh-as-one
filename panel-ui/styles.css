@@ -1936,6 +1936,18 @@ body {
   flex-direction: column;
   gap: 14px;
 }
+/* 设置页的字段标签列加宽到 172px 并禁止断行。
+ *
+ * 全局 `.kv-grid` 是 140px，装不下「外部数据刷新时间（小时）」这类
+ * 「名称 + 全角括号单位」的 12 个全角字符 → 会断成两行（用户 2026-11 截图）。
+ * 单位既然按用户要求写进了标签，标签列就必须够宽，否则必然回退到换行。
+ * 只在设置页作用域覆盖，不改其它页面的现有布局。 */
+.settings-page .kv-grid {
+  grid-template-columns: 172px 1fr;
+}
+.settings-page .kv-grid .k {
+  white-space: nowrap;
+}
 .setting-card {
   /* .card 已是 8px 圆角/1px border/surface 底;这里只收紧间距求"紧凑整齐"。 */
   padding: 12px 16px;
@@ -2126,25 +2138,32 @@ body {
   background: var(--surface);
   padding: 12px 14px;
 }
-/* 「逻辑模型成员冷却」标签与「供应商」下拉同宽,两种行严格同构/对齐。 */
+/* 「逻辑模型成员冷却」标签 —— 做成**带边框的只读框**，外观与同行的
+ * 「供应商」下拉框一致（用户 2026-11 参考图定案）：同样的宽度、高度、
+ * 圆角、内边距、背景。这样两行第一列视觉上是同一种控件。 */
 .cooldownFieldLabel {
   flex: 0 0 128px;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
   color: var(--text);
   font-size: 12px;
-  line-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised, var(--surface));
   white-space: nowrap;
 }
 .cooldownRows .ruleProvider {
   flex: 0 0 128px;
 }
 .cooldownRows .ruleNum {
+  /* ⚠️ 必须是 `flex: 0 0 92px` 而不只是 `width`：在 flex 行里纯 width 会被
+   * 收缩到 22px（实测），数字框窄到看不全内容。 */
+  flex: 0 0 92px;
   width: 92px;
   text-align: right;
-}
-/* 成员冷却是「标签 + 输入框」两段,供应商行是「下拉 + 输入框 + 删除」三段。
- * 让成员行的输入框与供应商行的输入框**左边缘对齐**:标签宽 = 下拉宽 + gap。 */
-.cooldownFieldLabel {
-  flex: 0 0 128px;
 }
 .cooldownRows .ruleRowLine > .ruleNum,
 .cooldownRows .ruleRowLine > .cooldownMinute > .ruleNum {

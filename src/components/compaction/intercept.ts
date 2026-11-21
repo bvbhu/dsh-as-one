@@ -11,9 +11,9 @@
  * - `default`：**一次压完**。挑一个上下文窗口装得下整段历史的模型（按调度顺序，
  *   在够大的模型里随机），用宿主原样提示词一次完成；都不够大则回退宿主原摘要
  *   （即会话模型兜底）。除"换了个够大的模型"外与 DSH 自带压缩一致。
- * - `anchored`：quilt 分块摘要 + 归并，结果附 `<session-search-anchors>` 锚点块
- *   + ANCHOR_PROMPT_INSTRUCTION（配合 session-search 按 seq 区间取回原文）。
- * - `quilt`：quilt 分块摘要 + 归并，**不**附锚点块（纯降 token 成本）。
+ * - `anchored`：分块摘要 + 归并，把"锚点由模型自己生成"的指令并入提示词；
+ *   代码只切分/合并并忠实回传模型输出，不追加/改写任何文本（含锚点块）。
+ * - `quilt`：分块摘要 + 归并，提示词里不要求锚点块（纯降 token 成本）。
  *
  * @module src/components/compaction/intercept
  */
@@ -27,7 +27,8 @@ import { ModelChain, chunkJob, mergeJob, type ChainAgent, type ChainContext } fr
 import { MemoryCooldownStore } from "./cooldown.js";
 import { runStage0, lineTokenCost, sliceNextChunk } from "./stage0.js";
 import { computeChunkBudget, computeUsableInputTokens } from "./budget.js";
-import { ANCHOR_PROMPT_INSTRUCTION, buildAnchorBlock } from "./summarize.js";
+import { anchoredInstruction, collectTextBlocks, SINGLE_CHUNK_PROMPT } from "./summarize.js";
+import { toAsOneStreamOptions } from "./as-one-call.js";
 
 interface LlmStreamOptions {
   purpose?: string;
@@ -137,17 +138,6 @@ function messagesToRegion(messages: readonly { role?: string; content?: unknown 
   }).join("\n");
 }
 
-/** 稳定的请求指纹（anchored 锚点 ID）。 */
-function requestFingerprint(options: LlmStreamOptions): string {
-  const parts = [String(options?.sessionId ?? ""), ...(options?.messages ?? []).map((m) => messageFingerprint(m))].join("\n");
-  let hash = 2166136261;
-  for (let i = 0; i < parts.length; i += 1) {
-    hash ^= parts.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36).toUpperCase();
-}
-
 /** 输出完整 text stream。 */
 async function* syntheticChunks(text: string, signal?: AbortSignal): AsyncGenerator<Record<string, unknown>> {
   if (signal?.aborted) return;
@@ -192,6 +182,10 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
   const chainCtx: ChainContext = {
     llm: (ctx as unknown as { llm?: ChainContext["llm"] }).llm as ChainContext["llm"],
     logger: ctx.logger as unknown as ChainContext["logger"],
+    // ⚠️ as-one 适配（2026-11）：组件调 ctx.llm.stream 前必须把 provider/model
+    // 翻译成 as-one 适配器能识别的「provider=as-one + model=provider/model +
+    // 无 purpose」，否则真实 provider 会 NO_ADAPTER（压缩失败根因）。
+    asOneCall: true,
   };
   if (!chainCtx.llm || typeof chainCtx.llm.stream !== "function") {
     ctx.logger?.warn?.("[as-one compaction] no llm service available, enhancement disabled");
@@ -217,6 +211,7 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     "llm/stream",
     (options, next) => {
       if (!isCompactionRequest(options)) return next();
+      ctx.logger?.debug?.(`[as-one compaction] intercept compaction request; mode=${config.promptMode} enabled=${config.enabled} tiers=${config.tiers.length}`);
       // 每次请求 hot-read 设置，面板保存后下一个请求即生效。
       try {
         config = readConfigSafe(getSetting);
@@ -229,7 +224,7 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
       return decide(options, next);    },
     { global: true, prepend: true },
   );
-
+  console.info(`[as-one compaction] listener registered mode=${config.promptMode} enabled=${config.enabled} tiers=${config.tiers.length} logicalModel=${config.logicalModel}`);
   async function* stream(options: LlmStreamOptions, next: NextStream): AsyncGenerator<Record<string, unknown>> {
     if (inflight > 0) {
       // 我们自己的 chunk/merge 调用：原样通过 waterfall。
@@ -310,17 +305,11 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     // 用**宿主原样的 messages + 原样的提示词**发一次压缩请求。
     // 关键：直接把 options 里的 messages 传下去，不替换、不加后缀 ——
     // 这就是"与自带压缩一致"的全部含义。inflight>0 保证不递归。
-    const blocks: Array<{ type: string; text?: string }> = [];
-    const request = { ...options, provider: chosen.provider, model: chosen.model };
-    for await (const chunk of chainCtx.llm.stream(request as never)) {
-      if (chunk.type === "text-delta") {
-        const last = blocks[blocks.length - 1];
-        if (last?.type === "text") last.text = (last.text ?? "") + String(chunk.text ?? "");
-        else blocks.push({ type: "text", text: String(chunk.text ?? "") });
-      } else if (chunk.type === "block-end" && (chunk.block as { type?: string })?.type === "text") {
-        blocks.push({ type: "text", text: String((chunk.block as { text?: unknown }).text ?? "") });
-      }
-    }
+    const rawRequest = { ...options, provider: chosen.provider, model: chosen.model };
+    // as-one：翻译成 provider=as-one + model=provider/model + 无 purpose，
+    // 直连选中的真实成员。
+    const request = toAsOneStreamOptions(rawRequest);
+    const { blocks } = await collectTextBlocks(chainCtx.llm.stream(request as never));
     const text = blocks.map((b) => b.text ?? "").join("").trim();
     if (text === "") return undefined;
     ctx.logger?.info?.(
@@ -340,9 +329,15 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     const span = deriveSpan(ctx, options);
     const rawRegion = messagesToRegion(messages);
     const stage0Lines = runStage0(messages, quilt.preprocessing);
-    if (stage0Lines.length === 0) return undefined;
+    if (stage0Lines.length === 0) {
+      ctx.logger?.info?.("[as-one compaction] stage0 lines empty; delegating to host summary");
+      return undefined;
+    }
     const regionTokens = stage0Lines.reduce((sum, line) => sum + lineTokenCost(line), 0);
-    if (regionTokens <= 0) return undefined;
+    if (regionTokens <= 0) {
+      ctx.logger?.info?.("[as-one compaction] region token count is zero; delegating to host summary");
+      return undefined;
+    }
 
     const capacities = new Map<string, { contextWindow: number; maxTokens: number }>();
     for (const tier of quilt.tiers) {
@@ -362,17 +357,28 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
     const chain = new ModelChain(chainCtx, quilt, store, {}, capacities, capacity);
     const mergeChain = new ModelChain(chainCtx, quilt, store, {}, capacities, capacity);
 
-    // 按当前路由模型的窗口切块（per-model budget）。
+    // ── 2026-11 用户定案「先选模型，再切块」（模型列表各窗口不同）────────────
+    // 1. 先按调度顺序（tier→成员）选一个主模型；它的窗口决定切块预算。
+    // 2. 用该窗口算 budget 切块，每块都 preferredKey=主模型（锁定成员）。
+    // 3. 若只切出一块 → 用 SINGLE_CHUNK_PROMPT 一次成稿，不走 tier-1 digest→merge。
+    // 4. 归并模型另选窗口 >= 192k 的成员（用户定案）。
+    const primary = chain.pickPrimaryModel(0, capacities);
+    if (primary === undefined) {
+      ctx.logger?.warn?.("[as-one compaction] no healthy model in pool; delegating to host summary");
+      return undefined;
+    }
+    const primaryWindow = chain.modelWindow(primary, capacities);
+    const budget = computeChunkBudget(primaryWindow, quilt.chunkRatio);
+    const overlap = Math.max(0, Math.floor(budget * quilt.chunkOverlapRatio));
+    ctx.logger?.info?.(
+      `[as-one compaction] primary model ${primary.key} window=${primaryWindow} chunkBudget=${budget} regionTokens~=${regionTokens}`,
+    );
+
     const jobs: ReturnType<typeof chunkJob>[] = [];
     let cursor = 0;
     let coreStart = 0;
     let index = 0;
     while (cursor < stage0Lines.length) {
-      const model = chain.pickChunkModel(capacities);
-      if (model === undefined) break;
-      const window = chain.modelWindow(model, capacities);
-      const budget = computeChunkBudget(window, quilt.chunkRatio);
-      const overlap = Math.max(0, Math.floor(budget * quilt.chunkOverlapRatio));
       const { end, next } = sliceNextChunk(stage0Lines, cursor, budget, overlap);
       const slice = stage0Lines.slice(cursor, end);
       if (slice.length === 0) break;
@@ -380,7 +386,7 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
       const coreTokens = stage0Lines.slice(coreStart, end).reduce((sum, line) => sum + lineTokenCost(line), 0);
       const cap = Math.max(1, Math.floor((mergeUsableInput * coreTokens) / Math.max(1, regionTokens)));
       index += 1;
-      jobs.push(chunkJob(`chunk ${index}`, slice.join("\n"), {
+      const meta = {
         chunk: index,
         lineStart: cursor,
         lineEnd: end,
@@ -391,11 +397,33 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
         sessionId: span.sessionId,
         seqStart: span.seqStart,
         seqEnd: span.seqEnd,
-      }, model.key, cap));
+      };
+      // 单块专用提示词：只有一块时一次成稿，不套 tier-1 chunk digest。
+      // 先按常规切完再判断（sliceNextChunk 保证一次到尾即单块）。
+      jobs.push(chunkJob(`chunk ${index}`, slice.join("\n"), meta, primary.key, cap));
       cursor = next;
       coreStart = end;
     }
-    if (jobs.length === 0) return undefined;
+    if (jobs.length === 0) {
+      ctx.logger?.info?.("[as-one compaction] no chunk produced; delegating to host summary");
+      return undefined;
+    }
+    // 单块 → 替换 buildMessages 为单块专用提示词（anchored/quilt 都受益）。
+    // anchored：把"锚点由模型自己生成"的指令并入提示词（LLM 做所有文本处理），
+    // 代码不再向模型输出追加任何文本。
+    const anchorInstruction = config.promptMode === "anchored"
+      ? anchoredInstruction(span.sessionId, span.seqStart, span.seqEnd)
+      : "";
+    if (jobs.length === 1) {
+      const only = jobs[0] as ReturnType<typeof chunkJob>;
+      const text = String(only.text ?? "");
+      const finalPrompt = anchorInstruction === "" ? SINGLE_CHUNK_PROMPT : `${SINGLE_CHUNK_PROMPT}\n\n${anchorInstruction}`;
+      only.buildMessages = () => [
+        { role: "user" as const, content: [{ type: "text" as const, text }] },
+        { role: "user" as const, content: [{ type: "text" as const, text: finalPrompt }] },
+      ];
+      ctx.logger?.info?.("[as-one compaction] single chunk → one-pass prompt (no merge)");
+    }
     const total = jobs.reduce((sum, job) => sum + (job.capTokens ?? 0), 0);
     if (total > mergeUsableInput) {
       const scale = mergeUsableInput / total;
@@ -414,66 +442,70 @@ export function applyCompaction(opts: ApplyCompactionOptions): () => void {
       fallbackInput: { messages },
       defaultSummarize: async (input: { messages: unknown }, _agent: ChainAgent, abort?: AbortSignal) => {
         // 宿主原摘要流：经 ctx.llm.stream（此时 inflight>0，不再被我们接管）。
-        const result = await (async () => {
-          const blocks: Array<{ type: string; text?: string }> = [];
-          let usage: unknown;
-          for await (const chunk of chainCtx.llm.stream({
-            ...options,
-            messages: input.messages,
-            signal: abort ?? options.signal,
-          } as never)) {
-            if (chunk.type === "text-delta") {
-              const last = blocks[blocks.length - 1];
-              if (last?.type === "text") last.text = (last.text ?? "") + String(chunk.text ?? "");
-              else blocks.push({ type: "text", text: String(chunk.text ?? "") });
-            } else if (chunk.type === "block-end" && (chunk.block as { type?: string })?.type === "text") {
-              blocks.push({ type: "text", text: String((chunk.block as { text?: unknown }).text ?? "") });
-            } else if (chunk.type === "usage") usage = chunk.usage;
-          }
-          return { summary: blocks, usage };
-        })();
-        return result;
+        ctx.logger?.info?.("[as-one compaction] falling back to host summary path");
+        const { blocks, usage } = await collectTextBlocks(chainCtx.llm.stream({
+          ...options,
+          messages: input.messages,
+          signal: abort ?? options.signal,
+        } as never));
+        return { summary: blocks, usage };
       },
       capacities,
     };
 
     const chunkResults = await chain.run(jobs, agent, options.signal, fallbackOptions);
     const digests = chunkResults.filter((result) => result !== undefined).map((result) => result.text);
-    if (digests.length === 0 || digests.some((text) => !text || text.trim().length === 0)) return undefined;
+    if (digests.length === 0 || digests.some((text) => !text || text.trim().length === 0)) {
+      ctx.logger?.info?.("[as-one compaction] empty digest; delegating to host summary");
+      return undefined;
+    }
 
     let finalText: string | undefined;
     if (digests.length === 1) {
+      // 单块：SINGLE_CHUNK_PROMPT 一次成稿，无需归并。
       finalText = digests[0];
     } else if (mergeChain.canHoldMerge(mergeWindow, capacities)) {
-      const mergeResult = await mergeChain.run([mergeJob(digests, { sourceChunks: digests.length })], agent, options.signal, fallbackOptions);
+      // 多块归并：优先用窗口 >= 192k 的成员（用户 2026-11 定案）。
+      const mergeModel = mergeChain.pickMergeModel(capacities);
+      const merge = mergeJob(digests, { sourceChunks: digests.length });
+      if (anchorInstruction !== "") {
+        // 锚点由 LLM 在归并提示词里自行生成；代码不改模型输出。
+        const base = merge.buildMessages;
+        merge.buildMessages = (promptConfig) => {
+          const messages = base(promptConfig);
+          const last = messages.at(-1);
+          if (last?.content?.[0]?.type === "text") {
+            last.content[0].text = `${last.content[0].text ?? ""}\n\n${anchorInstruction}`;
+          }
+          return messages;
+        };
+      }
+      if (mergeModel !== undefined) merge.preferredKey = mergeModel.key;
+      ctx.logger?.info?.(
+        `[as-one compaction] merge via ${mergeModel?.key ?? "auto"} window=${mergeModel ? mergeChain.modelWindow(mergeModel, capacities) : "?"} chunks=${digests.length}`,
+      );
+      const mergeResult = await mergeChain.run([merge], agent, options.signal, fallbackOptions);
       finalText = mergeResult[0]?.text;
     } else {
+      ctx.logger?.info?.("[as-one compaction] no merge route can hold the digests; delegating to host summary");
       return undefined;
     }
-    if (!finalText || finalText.trim().length === 0) return undefined;
-
-    let text = finalText.trim();
-    if (config.promptMode === "anchored") {
-      const id = `QC-${requestFingerprint(options)}`;
-      const anchor = buildAnchorBlock({
-        id,
-        sessionId: span.sessionId,
-        seqStart: span.seqStart,
-        seqEnd: span.seqEnd,
-        chunks: jobs.map((job, i) => ({
-          i: i + 1,
-          lines: [(job.meta?.lineStart as number | null) ?? null, (job.meta?.lineEnd as number | null) ?? null],
-          tokens: (job.meta?.tokens as number | null) ?? null,
-          anchor: `${id}-${i + 1}`,
-        })),
-      });
-      text = `${text}\n\n${anchor}\n\n${ANCHOR_PROMPT_INSTRUCTION}`;
+    if (!finalText || finalText.trim().length === 0) {
+      ctx.logger?.info?.("[as-one compaction] final text empty; delegating to host summary");
+      return undefined;
     }
-    // 宿主要求摘要严格小于被替换区域；附加锚点有固定开销，小区域直接回退。
+
+    // 2026-11 用户定案：所有文本处理（含锚点块）由 LLM 完成；代码只切分/合并、
+    // 忠实回传模型输出，不再追加或改写任何文本，便于排查模型原始结果。
+    const text = finalText.trim();
+    // 宿主要求摘要严格小于被替换区域。
     if (text.length >= rawRegion.length) {
       ctx.logger?.info?.(`[as-one compaction] ${rawRegion.length} chars region would not shrink (digest ${text.length} chars); keeping host summary`);
       return undefined;
     }
+    ctx.logger?.info?.(
+      `[as-one compaction] checkpoint via component chunks=${digests.length} rawChars=${rawRegion.length} digestChars=${text.length} anchor=${text.includes("<session-search-anchors>") ? "model" : "none"}`,
+    );
     return text;
   }
 

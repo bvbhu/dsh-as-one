@@ -19,6 +19,7 @@ import {
   DEFAULT_PIN_SECONDS,
   PREEMPT_ERROR,
   TRANSIENT_KINDS,
+  isSporadicGraceStatus,
 } from "./engine-constants.js";
 import { RetryPolicy } from "./backoff.js";
 import { monotonic, wallNow } from "./engine-utils.js";
@@ -73,8 +74,11 @@ export class EndpointHealth {
     now?: number;
     policy?: RetryPolicy | null;
     until?: number | null;
+    /** 失败端点的 provider —— 用于「偶发 5xx 一次性豁免」按供应商收窄。 */
+    provider?: string;
   }): void {
     const t = opts.now ?? wallNow();
+    const wasClean = this.fails === 0;
     this.fails += 1;
     this.lastError = (opts.error ?? "").slice(0, 200);
     this.lastKind = opts.kind ?? "";
@@ -85,6 +89,8 @@ export class EndpointHealth {
       return;
     }
     if (TRANSIENT_KINDS.has(this.lastKind)) return;
+    // 偶发 5xx 一次性豁免:只在该 provider 连续失败的第一次生效(见 engine-constants)。
+    if (wasClean && isSporadicGraceStatus(opts.provider, this.lastStatus)) return;
     this.cooldownUntil = t + (opts.policy ? opts.policy.cooldownFloorS : 0);
   }
 
@@ -122,6 +128,8 @@ export class HealthRegistry {
       now?: number;
       policy?: RetryPolicy | null;
       until?: number | null;
+      /** 失败端点的 provider —— 用于「偶发 5xx 一次性豁免」按供应商收窄。 */
+      provider?: string;
     },
   ): EndpointHealth {
     let rec = this._items.get(endpointId);

@@ -1096,7 +1096,7 @@ export interface SettingSpec {
    * `kind: "enum"` 的候选项。
    *
    * 2026-11 从 `string[]` 改成 `{value,label}`:压缩模式要显示中文
-   * (「一次性压完」)而库里/代码里存的是英文机器键(`default`)——
+   * (「一次完成（DSH 默认方式）」)而库里/代码里存的是英文机器键(`default`)——
    * 纯字符串列表没法同时表达两者,前端就得自己维护一份映射表。
    */
   options?: Array<{ value: string; label: string }>;

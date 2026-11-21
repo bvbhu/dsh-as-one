@@ -14,5 +14,6 @@
 export {
   listModelEntries,
   providersWithCredentials,
+  resolveModelEntry,
   dedupeLabels,
 } from "@as-one/panel/src/modelcatalog.js";

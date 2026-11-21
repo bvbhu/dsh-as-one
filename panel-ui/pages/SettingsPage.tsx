@@ -694,6 +694,8 @@ export default function SettingsPage(): React.JSX.Element {
   /* ── 拖动排序状态(与逻辑模型档链同一套手势) ── */
   const schedListRef = React.useRef<HTMLUListElement | null>(null);
   const dragSrcRef = React.useRef<{ tier: TierKey; index: number; handled: boolean } | null>(null);
+  /** 最后一次有效落点（同步镜像 `dropTarget` 的 state）—— `dragend` 兜底要用。 */
+  const dropTargetRef = React.useRef<{ tier: TierKey; insertAt: number } | null>(null);
   const lastPointRef = React.useRef<{ x: number; y: number } | null>(null);
   const [dragSrc, setDragSrc] = React.useState<{ tier: TierKey; index: number } | null>(null);
   const [dropTarget, setDropTarget] = React.useState<{ tier: TierKey; insertAt: number } | null>(null);
@@ -708,6 +710,28 @@ export default function SettingsPage(): React.JSX.Element {
     };
     document.addEventListener("dragover", onDocDragOver);
     return () => document.removeEventListener("dragover", onDocDragOver);
+  }, [dragSrc]);
+
+  /**
+   * 文档级兜底：拖到页外/窗口失焦/浏览器取消拖拽时，行卡上的 `dragend` 可能
+   * 根本不派发，`dragSrc` 就一直挂着 → 那一行永远是灰的（用户截图里
+   * opencsg 半透明那行的成因）。这里在 drop/dragend 结束信号上统一清一次。
+   */
+  React.useEffect(() => {
+    if (dragSrc === null) return;
+    const clear = (): void => {
+      dragSrcRef.current = null;
+      dropTargetRef.current = null;
+      setDragSrc(null);
+      setDropTarget(null);
+      setDragOutside(false);
+    };
+    document.addEventListener("dragend", clear);
+    document.addEventListener("drop", clear);
+    return () => {
+      document.removeEventListener("dragend", clear);
+      document.removeEventListener("drop", clear);
+    };
   }, [dragSrc]);
 
   /**
@@ -728,6 +752,7 @@ export default function SettingsPage(): React.JSX.Element {
 
   function onRuleDragStart(tier: TierKey, index: number, e: React.DragEvent<HTMLSpanElement>): void {
     dragSrcRef.current = { tier, index, handled: false };
+    dropTargetRef.current = null;
     lastPointRef.current = { x: e.clientX, y: e.clientY };
     setDragSrc({ tier, index });
     setDropTarget(null);
@@ -740,7 +765,10 @@ export default function SettingsPage(): React.JSX.Element {
     if (dragSrcRef.current === null) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    setDropTarget({ tier, insertAt: insertIndexAt(bandsOf(tier), e.clientY) });
+    const insertAt = insertIndexAt(bandsOf(tier), e.clientY);
+    // state 给渲染用（画蓝线），ref 给 dragend 兜底用（state 是异步的）。
+    dropTargetRef.current = { tier, insertAt };
+    setDropTarget({ tier, insertAt });
   }
 
   function onSegDrop(tier: TierKey, e: React.DragEvent<HTMLElement>): void {
@@ -748,24 +776,43 @@ export default function SettingsPage(): React.JSX.Element {
     const d = dragSrcRef.current;
     if (d === null) return;
     d.handled = true;
-    dragMoveRule({ tier: d.tier, index: d.index }, { tier, insertAt: insertIndexAt(bandsOf(tier), e.clientY) });
+    const target = { tier, insertAt: insertIndexAt(bandsOf(tier), e.clientY) };
+    dropTargetRef.current = null;
+    dragMoveRule({ tier: d.tier, index: d.index }, target);
   }
 
   function onRuleDragEnd(e: React.DragEvent<HTMLSpanElement>): void {
     const d = dragSrcRef.current;
+    // ⚠️ 必须在清 ref **之前**取走最后落点。
+    const pending = dropTargetRef.current;
     dragSrcRef.current = null;
+    dropTargetRef.current = null;
     setDragSrc(null);
     setDropTarget(null);
     setDragOutside(false);
-    if (d === null || d.handled) return;
+    if (d === null) return;
+    // drop 已经处理过 → 不重复移动。
+    if (d.handled) return;
+
     const rect = schedListRef.current?.getBoundingClientRect();
-    if (!rect) return;
     const p =
       e.clientX !== 0 || e.clientY !== 0
         ? { x: e.clientX, y: e.clientY }
-        : (lastPointRef.current ?? { x: e.clientX, y: e.clientY });
-    // 拖出整个列表松手 = 删除(与逻辑模型档链同一语义)。
-    if (outsideRect(rect, p.x, p.y, 8)) removeTier(d.tier, d.index);
+        : (lastPointRef.current ?? null);
+
+    // 1) 拖出整个列表松手 = 删除(与逻辑模型档链同一语义)。
+    if (rect && p && outsideRect(rect, p.x, p.y, 8)) {
+      removeTier(d.tier, d.index);
+      return;
+    }
+    // 2) **drop 事件没到达时的兜底**。
+    //
+    // 用户 2026-11 报「拖动 bug 依旧」的实测成因：规则行里全是 <select>/<input>，
+    // 鼠标停在它们上面松手时，**表单控件会吞掉 drop 事件**（dragend 照常到达），
+    // 于是 handled 永远是 false、顺序一点没变 —— 但蓝线指示器是正常画的
+    // （那由 dragover 驱动），所以看起来「有反应却没效果」。
+    // 这里用最后一次有效落点补做移动，不依赖 drop。
+    if (pending !== null) dragMoveRule({ tier: d.tier, index: d.index }, pending);
   }
 
   function updateRules(next: RuleGroups): void {
@@ -1092,7 +1139,7 @@ export default function SettingsPage(): React.JSX.Element {
   }
 
   /**
-   * 冷却卡 —— 供应商级冷却覆盖 + 逻辑模型成员冷却，合成一张。
+   * 冷却卡 —— 供应商级冷却覆盖 + 逻辑模型成员（冷却分钟），合成一张。
    *
    * 2026-11 用户定案:
    * - 样式参考调度卡（行式，但**没有拖动排序** —— 冷却顺序无意义）;
@@ -1110,13 +1157,15 @@ export default function SettingsPage(): React.JSX.Element {
           </button>
         </div>
         <ul className="rows sched-rows cooldownRows">
-          {/* 逻辑模型成员冷却 —— 与供应商行**同构**(同一个 .rowCard + .ruleRowLine,
-           * 同样带边框、同一列宽,只是没有拖动与删除)。 */}
+          {/* 逻辑模型成员（冷却分钟）—— 与供应商行**同构**(同一个 .rowCard + .ruleRowLine,
+           * 同样带边框、同一列宽,只是没有拖动与删除)。
+           * 2026-11 用户定案(参考图):标签本身是**带边框的框**(视觉上等同供应商
+           * 下拉框那一格),单位「分钟」落在输入框右侧,与供应商行一致。 */}
           {memberSpec !== undefined ? (
             <li className="rowCard ruleRowCard">
               <div className="ruleRowLine">
                 <span className="cooldownFieldLabel" title={memberSpec.label}>
-                  {memberSpec.label}（分钟）
+                  {memberSpec.label}
                 </span>
                 <input
                   type="number"
@@ -1128,6 +1177,7 @@ export default function SettingsPage(): React.JSX.Element {
                   disabled={busy}
                   onChange={(ev) => setValue(sectionOf(memberSpec), memberSpec, ev.target.value)}
                 />
+                <span className="ruleUnit">分钟</span>
               </div>
             </li>
           ) : null}

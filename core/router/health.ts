@@ -57,6 +57,8 @@ export class HealthRegistry {
       policy?: RetryPolicy | null;
       until?: number | null;
       now?: number;
+      /** 失败端点的 provider —— 用于「偶发 5xx 一次性豁免」按供应商收窄。 */
+      provider?: string;
     },
   ): EndpointHealth {
     const now = opts.now ?? this.wallNow();
@@ -69,6 +71,7 @@ export class HealthRegistry {
           status: opts.status,
           now,
           hint: { until: opts.until ?? null, policy: opts.policy ?? null },
+          provider: opts.provider,
         });
     this.items.set(endpointId, rec);
     return rec;

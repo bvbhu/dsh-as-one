@@ -769,6 +769,7 @@ export class Router {
           status: opts.status,
           now: this.clock.wallNow(),
           hint,
+          provider: ep.provider,
         }),
       );
     }

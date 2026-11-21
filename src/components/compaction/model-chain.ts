@@ -173,6 +173,9 @@ export interface ChainContext {
     stream(options: DshGenerateLike): AsyncIterable<Record<string, unknown> & { type?: string; text?: string; block?: { type?: string; text?: string }; usage?: unknown; reason?: { kind?: string; failure?: { message?: string; code?: string; providerRetryAfterMs?: number } } }>;
     providerRetryPolicy?: (provider: string) => unknown;
   };
+  /** as-one 适配：调用前翻译 provider/model（见 as-one-call.ts）。 */
+  asOneCall?: boolean;
+  asOneProvider?: string;
   logger?: {
     debug?(message: string): void;
     info?(message: string): void;
@@ -307,6 +310,43 @@ export class ModelChain {
       }
     }
     return undefined;
+  }
+
+  /**
+   * anchored 模式「先选模型」：按调度顺序（tier→成员序）取第一个健康的模型，
+   * 用它决定是否切块及按它的窗口切块。用户 2026-11 定案「先选模型，再切块；
+   * 模型列表里各模型上下文窗口不同」—— 所以切块预算必须由这一个被选中的
+   * 模型的窗口决定，而不是每块各挑一个模型。
+   *
+   * @param minWindow 归并/单块要求的最小窗口；<=0 表示只要求健康即可。
+   *                  当有多个健康模型时优先选窗口 >= minWindow 的第一个；
+   *                  否则退回第一个健康模型（后续由 run 的 pickModel 按窗口
+   *                  重试/再切分兜底）。
+   */
+  pickPrimaryModel(minWindow = 0, capacities = this.capacities): QuiltPoolModel | undefined {
+    const now = this.now();
+    let fallback: QuiltPoolModel | undefined;
+    for (const tier of this.tiers) {
+      for (const model of tier.models) {
+        if (!this.isRouteHealthy(model.key, now)) continue;
+        fallback ??= model;
+        if (minWindow > 0 && this.modelWindow(model, capacities) >= minWindow) return model;
+      }
+    }
+    return fallback;
+  }
+
+  /**
+   * 归并模型（用户 2026-11 定案）：优先选窗口 >= 192k 的健康模型；
+   * 没有则选窗口最大的健康模型。`preferredKey` 让 run 的 pickModel 锁定它。
+   */
+  pickMergeModel(capacities = this.capacities): QuiltPoolModel | undefined {
+    const now = this.now();
+    const healthy = [...this.routes.values()].filter((m) => this.isRouteHealthy(m.key, now));
+    if (healthy.length === 0) return undefined;
+    const big = healthy.find((m) => this.modelWindow(m, capacities) >= 192_000);
+    if (big !== undefined) return big;
+    return [...healthy].sort((a, b) => this.modelWindow(b, capacities) - this.modelWindow(a, capacities))[0];
   }
 
   canHoldMerge(mergeWindow: number, capacities = this.capacities): boolean {
@@ -497,7 +537,10 @@ export class ModelChain {
               this.ctx.logger?.warn?.(`[as-one compaction] cooldown write failed for ${model.key}: ${errorChainOf(storeError)}; quarantining locally`);
             }
             const reason = errorChainOf(error);
-            this.ctx.logger?.warn?.(`[as-one compaction] route ${model.key} failed (${reason}) for job=${task.label}; cooling`);
+            // 带上错误正文:此前只有错误「族」,`As One 没有这个模型:xxx` 这类
+            // 关键线索被吞掉,只能靠加临时日志才发现(2026-11-21)。
+            const detail = String((error as Error)?.message ?? error).slice(0, 300);
+            this.ctx.logger?.warn?.(`[as-one compaction] route ${model.key} failed (${reason}: ${detail}) for job=${task.label}; cooling`);
             this.cooldownEvents.push({ model: model.key, job: task.label, error: reason, until, hours: model.cooldownHours });
             task.attempts.push({ model: model.key, error: reason });
             task.running = false;
@@ -701,6 +744,8 @@ export function chunkJob(
   meta: Record<string, unknown>,
   preferredKey: string,
   capTokens: number,
+  /** 单块专用提示词（anchored 只有一块时传；用一次成稿替代 tier-1 chunk digest）。 */
+  promptOverride?: string,
 ): ChainJob {
   const ownTokens = (meta.tokens as number | undefined) ?? textStats(text).tokens;
   const lineTokens = String(text).split("\n").reduce((sum, line) => sum + lineTokenCost(line), 0);
@@ -711,7 +756,11 @@ export function chunkJob(
     preferredKey,
     capTokens,
     inputTokens: ownTokens,
-    buildMessages: (config) => chunkMessages(text, config, job.capTokens),
+    buildMessages: (config) =>
+      promptOverride !== undefined
+        ? [{ role: "user" as const, content: [{ type: "text" as const, text }] },
+           { role: "user" as const, content: [{ type: "text" as const, text: promptOverride }] }]
+        : chunkMessages(text, config, job.capTokens),
     split: () => {
       const lines = String(text).split("\n");
       if (lines.length < 2) return undefined;

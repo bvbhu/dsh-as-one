@@ -267,7 +267,7 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     key: "retry.logical_cooldown",
     def: "15",
     kind: "int",
-    label: "逻辑模型成员冷却",
+    label: "逻辑模型成员",
     min: 1,
     max: 1440,
     section: "cooldown",
@@ -334,9 +334,11 @@ export const SETTING_FIELDS: SettingFieldSpec[] = [
     kind: "enum",
     label: "压缩模式",
     options: [
-      { value: "default", label: "一次性压完" },
-      { value: "anchored", label: "分块 + 锚点" },
-      { value: "quilt", label: "分块（quilt）" },
+      // 2026-11 用户定案文案：「一次完成」强调 DSH 原生行为，
+      // 「带锚点分块-合并」「分块-合并」直接描述做法（不再出现英文 quilt）。
+      { value: "default", label: "一次完成（DSH 默认方式）" },
+      { value: "anchored", label: "带锚点分块-合并" },
+      { value: "quilt", label: "分块-合并" },
     ],
     section: "compaction",
   },

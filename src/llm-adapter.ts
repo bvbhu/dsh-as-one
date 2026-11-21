@@ -1016,7 +1016,7 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
   private readonly warmup: { wait(): Promise<unknown> } | undefined;
 
   constructor(
-    private readonly rt: Pick<AsOneRuntime, "listModels" | "resolveUpstream" | "onRequestDone">,
+    private readonly rt: Pick<AsOneRuntime, "listModels" | "resolveModelEntry" | "resolveUpstream" | "onRequestDone">,
     opts: AsOneLlmAdapterOptions = {},
   ) {
     this.provider = opts.provider ?? AS_ONE_PROVIDER;
@@ -1107,8 +1107,11 @@ export class AsOneLlmAdapter implements DshLlmAdapter {
   }
 
   async resolveModel(provider: string, model: string): Promise<DshResolvedModelInfo> {
-    const entries = await this.rt.listModels();
-    const entry = entries.find((e) => e.id === model);
+    // ⚠️ 运行期解析**不能**用 GUI 清单(listModels):它过滤 hidden、要求凭据在场,
+    // 压缩组件直连隐藏成员(如 maas/spark-x2.6-4b)会 404「As One 没有这个模型」
+    // (2026-11-21 web profile 实测,free 三成员全挂 → 兜底走原生压缩)。
+    // resolveModelEntry 不过滤 hidden,专门给运行期用。
+    const entry = this.rt.resolveModelEntry(model);
     if (!entry) {
       throw new AsOneLlmError(`As One 没有这个模型:${model}`, "INVALID_REQUEST", { status: 404 });
     }
