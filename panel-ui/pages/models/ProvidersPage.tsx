@@ -731,11 +731,13 @@ export default function ProvidersPage(): React.JSX.Element {
               <button
                 type="button"
                 className="pv-linkButton"
-                disabled={busy || fetching || !hasBase}
+                disabled={busy || fetching || !hasBase || form.protocol === "anthropic"}
                 title={
-                  hasBase
-                    ? "连上游 GET /models,并把上游给的上下文窗口 / 最大输出 / 输入类型带回目录(只补没填过的)"
-                    : "请先填写 API 地址,再获取"
+                  form.protocol === "anthropic"
+                    ? "Anthropic Messages 渠道没有统一的模型列表接口,请用「＋ 添加模型」手动登记"
+                    : hasBase
+                      ? "连上游 GET /models,并把上游给的上下文窗口 / 最大输出 / 输入类型带回目录(只补没填过的)"
+                      : "请先填写 API 地址,再获取"
                 }
                 onClick={() => void fetchModels()}
               >
@@ -935,7 +937,15 @@ export default function ProvidersPage(): React.JSX.Element {
           onChange={(ev) => setForm((f) => ({ ...f, protocol: ev.target.value }))}
         >
           <option value="openai">OpenAI Chat Completions</option>
+          <option value="anthropic">Anthropic Messages</option>
         </select>
+        {form.protocol === "anthropic" ? (
+          <p className="pv-hint">
+            地址写到 <code>/v1</code> 或不写都可以（会自动补 <code>/v1/messages</code>）。
+            思考参数默认不主动发送、历史思考不回放；需要 MiniMax 那种行为时，在凭据里加{" "}
+            <code>quirks</code>。
+          </p>
+        ) : null}
       </div>
     );
   }

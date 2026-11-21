@@ -40,6 +40,7 @@
  */
 export const PROVIDER_PROTOCOLS = [
   "openai",
+  "anthropic",
   "workbuddy",
   "trae",
   "sensenova",

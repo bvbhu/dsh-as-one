@@ -34,6 +34,7 @@ import type {
   UpstreamRequest,
 } from "@as-one/core/src/gateway/types.js";
 import { UpstreamError } from "@as-one/core/src/gateway/types.js";
+import type { BlockMessage, BlockRequest, WireBlock } from "@as-one/core/src/wire/anthropic.js";
 import type { AsOneRuntime } from "./setup.js";
 import { buildMergePrompt, cleanDigest, joinDigests, needsMerge, planCompactChunks } from "./compact-chunk.js";
 import { estimateMessagesTokens } from "./gateway-upstream-context.js";
@@ -574,8 +575,65 @@ export function toChatMessages(options: DshGenerateOptions): ChatMessage[] {
   return messages;
 }
 
-/** DSH 工具定义 → OpenAI function 形状。 */
-function toChatTools(options: DshGenerateOptions): ChatToolDefinition[] | undefined {
+/**
+ * DSH 消息 → **块投影**（`UpstreamRequest.blocks`）。
+ *
+ * 为什么带它：网关内部是 chat 形状，而 Messages 线族要块。没有块投影时，
+ * DSH → minimax 是「blocks → chat → messages」两次形状转换；带上之后，
+ * Messages 渠道直接「blocks → messages」一次落地（跳数账见计划 §2）。
+ *
+ * 只做**形状搬运**，不做协议判断：要不要用、怎么落字段由 `core/wire` 决定。
+ * 图片沿用 `resolveImagesInMessages` 已经解析好的 data URL / http(s) 地址。
+ */
+export function toWireBlocks(options: DshGenerateOptions): BlockRequest {
+  const messages: BlockMessage[] = [];
+  for (const message of options.messages ?? []) {
+    const content: WireBlock[] = [];
+    if (message.role === "tool") {
+      const text = messageText(message);
+      if (text !== "") content.push({ type: "text", text });
+      for (const block of message.content ?? []) {
+        if (block.type !== "image") continue;
+        const url = imageUrlOf(block);
+        if (url !== null) content.push({ type: "image", url });
+      }
+      messages.push({
+        role: "tool",
+        content,
+        ...(message.toolCallId !== undefined && message.toolCallId !== "" ? { toolCallId: message.toolCallId } : {}),
+      });
+      continue;
+    }
+    for (const block of message.content ?? []) {
+      if (block.type === "text" || block.type === "reasoning") {
+        const text = blockText(block);
+        if (text !== "") content.push({ type: block.type, text });
+      } else if (block.type === "image") {
+        const url = imageUrlOf(block);
+        if (url !== null) content.push({ type: "image", url });
+      } else if (block.type === "tool-call") {
+        const call = block as { id?: unknown; name?: unknown; arguments?: unknown };
+        content.push({
+          type: "tool-call",
+          id: String(call.id ?? ""),
+          name: String(call.name ?? ""),
+          arguments: String(call.arguments ?? ""),
+        });
+      }
+    }
+    messages.push({ role: message.role, content });
+  }
+  const tools = (options.tools ?? [])
+    .filter((t) => typeof t?.name === "string" && t.name.length > 0)
+    .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
+  return {
+    ...(typeof options.system === "string" && options.system.trim() !== "" ? { system: options.system } : {}),
+    messages,
+    ...(tools.length > 0 ? { tools } : {}),
+  };
+}
+
+/** DSH 工具定义 → OpenAI function 形状。 */function toChatTools(options: DshGenerateOptions): ChatToolDefinition[] | undefined {
   const tools = options.tools;
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
   return tools
@@ -598,6 +656,8 @@ export function toUpstreamRequestFromOptions(options: DshGenerateOptions): Upstr
   return {
     model: options.model,
     messages: toChatMessages(options),
+    // 块投影：Messages 线族据此「blocks → messages」一次落地（chat 族不读它）。
+    blocks: toWireBlocks(options),
     stream: true,
     temperature: options.temperature,
     max_tokens: maxTokens,
@@ -634,14 +694,23 @@ function usageFromOpenAI(usage: Record<string, unknown>): DshUsage {
   const completionDetails = (usage.completion_tokens_details ?? {}) as Record<string, unknown>;
   const promptTokens = num(usage.prompt_tokens);
   const outputTokens = num(usage.completion_tokens);
-  const cacheReadTokens = num(details.cached_tokens);
-  const inputTokens = Math.max(0, promptTokens - cacheReadTokens);
+  /**
+   * 缓存拆分(M1):messages 方言会额外带 Anthropic 原名字段。
+   * 有就按「读/写分列」处理(那正是 DSH `DshUsage` 的口径),没有才回落到
+   * OpenAI 的 `cached_tokens` 单格。
+   */
+  const explicitRead = typeof usage.cache_read_input_tokens === "number" ? num(usage.cache_read_input_tokens) : undefined;
+  const explicitWrite = typeof usage.cache_creation_input_tokens === "number" ? num(usage.cache_creation_input_tokens) : undefined;
+  const cacheReadTokens = explicitRead ?? num(details.cached_tokens);
+  const cacheWriteTokens = explicitWrite ?? 0;
+  const inputTokens = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
   const out: DshUsage = {
     inputTokens,
     outputTokens,
     totalTokens: num(usage.total_tokens) || promptTokens + outputTokens,
   };
   if (cacheReadTokens > 0) out.cacheReadTokens = cacheReadTokens;
+  if (cacheWriteTokens > 0) out.cacheWriteTokens = cacheWriteTokens;
   const reasoningTokens = num(completionDetails.reasoning_tokens);
   if (reasoningTokens > 0) out.reasoningTokens = reasoningTokens;
   return out;

@@ -174,13 +174,45 @@ node scripts/minimax-device-login.mjs --db <path>            # 指定库(默认 
 
 ---
 
-## 6. 通用检查清单
+## 6. Anthropic Messages —— 自建渠道（base URL + key）
+
+### 需要什么
+一个说 **Anthropic Messages** 协议的端点地址，加一把 key。
+官方 Anthropic、公司网关、中转站都行；只要它认 `POST /v1/messages`。
+
+### 你要做什么
+面板「模型 → 供应商 → 新建」：
+1. **Provider ID**：小写，例如 `anthropic`、`my-anthropic`。
+2. **API 地址**：写 `https://api.anthropic.com` 或 `https://api.anthropic.com/v1` **都可以**
+   （没写 `/v1` 会自动补；两种写法都只补一次，不会拼出 `/v1/v1`）。
+3. **API 协议**：选 **Anthropic Messages**。
+4. **API 密钥**：官方 key（`sk-ant-…`）或中转站 key。
+5. **模型目录**：这个协议的「获取可用模型」是**关着的**（各家列表接口不统一），
+   用「＋ 添加模型」手动填模型 id。
+
+### 认证细节
+- 发 `anthropic-version: 2023-06-01`。
+- **同时**发 `x-api-key` 与 `Authorization: Bearer`：官方只认前者，大量中转只认后者。
+- 403 按 `auth` 处理（换号无用），429 按 `rate_limit` 可退避，529/5xx 可换档。
+
+### 坑
+- ⚠️ **不要在协议里乱选「OpenAI Chat Completions」**。地址对、key 对，但请求形状不同，
+  上游会回 404/400，看起来像 key 失效。
+- ⚠️ **思考参数默认不主动发送**（`effortField: none`），也**不回放历史思考** ——
+  真 Anthropic 校验思考签名，拿不签名的思考硬发会 400。
+  需要 MiniMax 那种「`output_config.effort` + 可回放 thinker」的行为时，
+  在凭据 raw 里加 `quirks`（JSON）：`{"effortField":"output_config","requiresSignature":false}`。
+- ⚠️ 服务器要求 `max_tokens` 必填；请求没给时兜底 8192（可用 `quirks.maxTokensDefault` 改）。
+
+---
+
+## 7. 通用检查清单
 
 接入任何渠道后，按这个顺序确认：
 
 1. **凭据进库了吗** —— 渠道页能看到账号行。
 2. **协议对了吗** —— 面板「供应商」里该 provider 的 protocol 必须是正确值
-   （`trae` / `workbuddy` / `qoder` / `codearts` / `minimax`，**不能**一律填 `openai`）。
+   （`trae` / `workbuddy` / `qoder` / `codearts` / `minimax` / `anthropic`，**不能**一律填 `openai`）。
 3. **额度能刷出来吗** —— 额度页有数字 = 凭据有效。
 4. **模型目录能拉吗** —— 渠道页展开卡片能看到模型列表。
 5. **真发一条消息** —— 这是最终验收。
@@ -190,7 +222,7 @@ node scripts/minimax-device-login.mjs --db <path>            # 指定库(默认 
 
 ---
 
-## 7. 风控红线（重要）
+## 8. 风控红线（重要）
 
 - **不要用不完整会话导入凭据**（WorkBuddy 9074、Trae 身份不全都由此而来）。
 - **不要靠换账号绕过设备级封禁**（WorkBuddy `11140`、Trae `11128`）。换号会指纹连坐。

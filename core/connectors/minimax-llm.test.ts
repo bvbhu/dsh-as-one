@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import {
   anthropicErrorOf,
+  anthropicUnmappedStopReasons,
   anthropicUsageOf,
   createAnthropicChunkTranslator,
   toAnthropicRequest,
@@ -44,6 +45,41 @@ describe("toAnthropicRequest:OpenAI → Anthropic Messages", () => {
   it("max_tokens 缺失时补 4096(Anthropic 必填,不补会 400)", () => {
     const out = toAnthropicRequest({ messages: [{ role: "user", content: "hi" }] }, "MiniMax-M3");
     expect(out["max_tokens"]).toBe(4096);
+  });
+
+  it("历史里的 reasoning_content 回放成 thinking 块(在 text 之前)", () => {
+    const out = toAnthropicRequest(
+      {
+        messages: [
+          { role: "user", content: "91 是质数吗" },
+          { role: "assistant", content: "不是", reasoning_content: "先试 7:91=7×13。" },
+          { role: "user", content: "谢谢" },
+        ],
+      },
+      "MiniMax-M3.1-Flash",
+    );
+    const messages = out["messages"] as Array<Record<string, unknown>>;
+    expect(messages[1]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "先试 7:91=7×13。" },
+        { type: "text", text: "不是" },
+      ],
+    });
+  });
+
+  it("reasoning_content 空/非字符串时不产生 thinking 块(不编造)", () => {
+    const out = toAnthropicRequest(
+      {
+        messages: [
+          { role: "user", content: "hi" },
+          { role: "assistant", content: "ok", reasoning_content: "   " },
+        ],
+      },
+      "MiniMax-M3.1-Flash",
+    );
+    const messages = out["messages"] as Array<Record<string, unknown>>;
+    expect(messages[1]).toEqual({ role: "assistant", content: [{ type: "text", text: "ok" }] });
   });
 
   it("tool 结果转 tool_result,tools 转 input_schema", () => {
@@ -118,6 +154,19 @@ describe("anthropicUsageOf:缓存 token 必须并回 prompt", () => {
     expect(u.prompt_tokens).toBe(0);
     expect(u.total_tokens).toBe(0);
   });
+
+  it("缓存两格单列带走(M1:DSH 要 cacheRead / cacheWrite 分开)", () => {
+    const u = anthropicUsageOf({
+      input_tokens: 92,
+      output_tokens: 64,
+      cache_read_input_tokens: 128,
+      cache_creation_input_tokens: 8,
+    });
+    expect(u.cache_read_input_tokens).toBe(128);
+    expect(u.cache_creation_input_tokens).toBe(8);
+    // OpenAI 口径的合集仍在,供不认 Anthropic 名字的消费方使用
+    expect(u.prompt_tokens_details.cached_tokens).toBe(136);
+  });
 });
 
 describe("createAnthropicChunkTranslator:Anthropic SSE → OpenAI chunk", () => {
@@ -171,11 +220,23 @@ describe("createAnthropicChunkTranslator:Anthropic SSE → OpenAI chunk", () => 
     });
     const choice = (final[0]["choices"] as Array<Record<string, unknown>>)[0];
     expect(choice["finish_reason"]).toBe("tool_calls");
-    expect(final[0]["usage"]).toMatchObject({ prompt_tokens: 8, completion_tokens: 12, total_tokens: 20 });
+    expect(final[0]["usage"]).toMatchObject({
+      prompt_tokens: 8,
+      completion_tokens: 12,
+      total_tokens: 20,
+      cache_read_input_tokens: 3,
+    });
 
     expect(tr.finished).toBe(false);
     tr.handle({ type: "message_stop" });
     expect(tr.finished).toBe(true);
+  });
+
+  it("refusal / pause_turn 退化 stop 并计数(Q4)", () => {
+    const tr = createAnthropicChunkTranslator(META);
+    const out = tr.handle({ type: "message_delta", delta: { stop_reason: "refusal" }, usage: {} });
+    expect((out[0]["choices"] as Array<Record<string, unknown>>)[0]["finish_reason"]).toBe("stop");
+    expect(anthropicUnmappedStopReasons()["refusal"]).toBeGreaterThanOrEqual(1);
   });
 
   it("max_tokens → finish_reason=length", () => {

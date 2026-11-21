@@ -7,7 +7,8 @@
  */
 
 import { UpstreamError, UpstreamErrorKind, type ChatCompletionChunk } from "@as-one/core/src/gateway/types.js";
-import { anthropicErrorOf, createAnthropicChunkTranslator } from "@as-one/core/src/connectors/minimax-llm.js";
+import { anthropicErrorOf, createAnthropicChunkTranslator } from "@as-one/core/src/wire/anthropic.js";
+import { wireFamilyOf } from "@as-one/core/src/wire/index.js";
 import { decodeTraeEvent, TraeChunkBuilder, TraeSseParser } from "@as-one/core/src/connectors/trae-wire.js";
 import {
   decorateWorkbuddyChunk,
@@ -122,10 +123,11 @@ export async function* iterUpstreamChunks(
     return;
   }
 
-  if (protocol === "minimax") {
+  if (wireFamilyOf(protocol) === "anthropic") {
     // Anthropic SSE → OpenAI chunk。帧仍是标准 `data: {json}`(只是事件语义是
     // Anthropic 那套:message_start / content_block_delta / message_delta …),
-    // 所以逐行喂解析器即可,不需要缓冲整块。
+    // 所以逐行喂解析器即可,不需要缓冲整块。按**线族**分支而不是按协议名:
+    // 以后新增 Messages 渠道不需要再改这里。
     //
     // ⚠️ 上游会在流中回 `type:"error"` 帧(比如额度耗尽),它不是 HTTP 错误,
     // 只能在这里中断——否则客户端会收到半截回答且 HTTP 200。
@@ -136,7 +138,7 @@ export async function* iterUpstreamChunks(
       if (obj === null || typeof obj !== "object") continue;
       const upstreamError = anthropicErrorOf(obj);
       if (upstreamError !== null) {
-        throw new UpstreamError(UpstreamErrorKind.Upstream, `[minimax] 流中错误:${upstreamError}`, {
+        throw new UpstreamError(UpstreamErrorKind.Upstream, `[${providerId || protocol}] 流中错误:${upstreamError}`, {
           statusCode: 502,
         });
       }

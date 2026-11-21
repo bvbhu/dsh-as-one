@@ -10,7 +10,7 @@
 export const GATEWAY_HOST = "127.0.0.1";
 export const DEFAULT_GATEWAY_PORT = 4000;
 
-export const KNOWN_PROTOCOLS = ["openai", "workbuddy", "trae", "sensenova", "qoder", "minimax", "codearts"] as const;
+export const KNOWN_PROTOCOLS = ["openai", "anthropic", "workbuddy", "trae", "sensenova", "qoder", "minimax", "codearts"] as const;
 
 /**
  * 请求日志记录档位 —— 逐字对齐既有中文说明。
@@ -29,6 +29,9 @@ export const REQUEST_LOG_CONTENT_MODES: Array<{
 ];
 export const KIND_BY_PROTOCOL: Record<string, "channel" | "endpoint"> = {
   openai: "endpoint",
+  // Anthropic Messages 是**自建端点**(base URL + key),没有签到/额度/账号池,
+  // 与 openai 同类 → "endpoint"。
+  anthropic: "endpoint",
   workbuddy: "channel",
   trae: "channel",
   sensenova: "channel",

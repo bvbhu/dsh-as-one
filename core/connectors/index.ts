@@ -8,6 +8,7 @@ import { TraeAdapter } from "./trae.js";
 import { WorkbuddyAdapter } from "./workbuddy.js";
 import { SensenovaAdapter } from "./sensenova.js";
 import { MinimaxAdapter } from "./minimax.js";
+import { AnthropicAdapter } from "./anthropic.js";
 import { QODER_ADAPTERS } from "./qoder.js";
 import { CODEARTS_ADAPTER } from "./codearts.js";
 
@@ -18,6 +19,7 @@ const defaultConnectors: AuthConnector[] = [
   new WorkbuddyAdapter(),
   new SensenovaAdapter(),
   new MinimaxAdapter(),
+  new AnthropicAdapter(),
   ...QODER_ADAPTERS,
   CODEARTS_ADAPTER as unknown as AuthConnector,
 ];
@@ -47,6 +49,14 @@ export { TraeAdapter } from "./trae.js";
 export { WorkbuddyAdapter } from "./workbuddy.js";
 export { SensenovaAdapter } from "./sensenova.js";
 export { MinimaxAdapter, MINIMAX_LLM_PATH, MINIMAX_ANTHROPIC_VERSION } from "./minimax.js";
+export {
+  AnthropicAdapter,
+  ANTHROPIC_VERSION,
+  ANTHROPIC_MESSAGES_PATH,
+  ANTHROPIC_QUIRKS,
+  anthropicMessagesUrl,
+  anthropicQuirksFrom,
+} from "./anthropic.js";
 export { MINIMAX_MODELS, minimaxModelOf, minimaxUpstreamModelOf, minimaxCallableOf } from "./minimax-models.js";
 export {
   toAnthropicRequest,

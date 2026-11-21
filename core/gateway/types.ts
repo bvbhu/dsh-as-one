@@ -104,6 +104,18 @@ export interface ChatUsage {
   total_tokens: number;
   prompt_tokens_details?: { cached_tokens?: number };
   completion_tokens_details?: Record<string, unknown>;
+  /**
+   * Anthropic 方言的缓存拆分(M1 私有通道)。
+   *
+   * OpenAI 口径只有 `prompt_tokens_details.cached_tokens`(读+写混在一起),
+   * 而 Anthropic 的 `input_tokens` **不含**缓存,读写还分两个字段。DSH 的
+   * `DshUsage` 要的是 `cacheReadTokens` / `cacheWriteTokens` 两格,所以这里
+   * **额外**带上原始字段名:有就用,没有就按 OpenAI 口径回落。
+   *
+   * 只由 messages 方言的连接器填;其它连接器保持 undefined,不改变既有行为。
+   */
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 }
 
 export interface ChatChoice {
@@ -438,6 +450,17 @@ export interface UpstreamRequest {
   discarded_fields?: string[];
   /** 协议特定扩展;`session_id` 是网关内部键,上游实现必须摘除不进报文体。 */
   extra?: Record<string, unknown>;
+  /**
+   * **块投影**（DSH 路径专用，可选）：把 DSH 的内容块原样带下来。
+   *
+   * 为什么要它：网关内部形状是 chat 消息，而 Messages 线族需要块。若只留 chat，
+   * 每次 DSH → minimax 都要走「blocks → chat → messages」两次形状转换；
+   * 有了块投影，Messages 渠道可以直接「blocks → messages」一次落地。
+   *
+   * ⚠️ 只有 DSH 那条进程内路径会填它（HTTP 客户端来的请求没有块）。chat 族上游
+   * **不读**它，`bodyFor` 的白名单构造也不会把它写进报文体。
+   */
+  blocks?: import("../wire/anthropic.js").BlockRequest;
   /**
    * **客户端断开信号**(网关注入,上游实现必须响应)。
    *

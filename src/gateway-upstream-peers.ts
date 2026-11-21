@@ -22,6 +22,7 @@ import { classify_openai_error } from "@as-one/core/src/connectors/openai-compat
 import { DEFAULT_BASE_URL as SENSENOVA_DEFAULT_BASE_URL } from "@as-one/core/src/connectors/sensenova.js";
 import { MINIMAX_BASE_CN, MINIMAX_BASE_GLOBAL } from "@as-one/core/src/connectors/minimax-wire.js";
 import { MINIMAX_LLM_PATH } from "@as-one/core/src/connectors/minimax.js";
+import { anthropicMessagesUrl } from "@as-one/core/src/connectors/anthropic.js";
 import {
   QODER_DEFAULT_HEADERS,
   QODER_REGION_CONFIGS,
@@ -98,6 +99,9 @@ export async function connectorExtra(
     // STS 临时凭据的过期时刻(毫秒数,不是字符串 —— 单独判类型)。
     const expiresAtMs = raw["expiresAtMs"];
     if (typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs)) out.expiresAtMs = expiresAtMs;
+    // Anthropic Messages 渠道的方言开关(对象或 JSON 串;解析与白名单在连接器里)。
+    // 只有 anthropic 渠道会带它,对其它渠道多传无害。
+    if (raw["quirks"] !== undefined) out.quirks = raw["quirks"];
     return out;
   } catch {
     // 读不到凭据 raw 不该让请求失败:连接器有 token 兜底判定。
@@ -289,6 +293,17 @@ export async function preparePeer(
     const cfg = QODER_REGION_CONFIGS[qRegion];
     const base = (baseUrl || cfg.gateway).replace(/\/+$/, "");
     url = `${base}${cfg.chatPath}`;
+  } else if (protocol === "anthropic") {
+    // 自建 Anthropic Messages 渠道:base 写到 `/v1` 或只写 host,两种都收。
+    //
+    // ⚠️ base_url 为空时**当场报清楚** —— 否则 fetch 会抛
+    // `Failed to parse URL from /v1/messages`(没有 host),看起来像代码 bug。
+    url = anthropicMessagesUrl(baseUrl);
+    if (url === "") {
+      throw new UpstreamError(UpstreamErrorKind.BadRequest, `[anthropic] provider ${provider} 未配置 base_url`, {
+        statusCode: 500,
+      });
+    }
   } else if (protocol === "codearts") {
     // CodeArts(B 族):签名网关。base_url 只写到 host(自建反代时可覆盖),
     // 路径固定 `/api/v2/chat/completions`。

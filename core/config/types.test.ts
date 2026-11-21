@@ -98,6 +98,7 @@ describe("常量导出", () => {
     // openai,症状是 fetch 报 `Failed to parse URL from /chat/completions`。
     expect(PROVIDER_PROTOCOLS).toEqual([
       "openai",
+      "anthropic",
       "workbuddy",
       "trae",
       "sensenova",

@@ -36,6 +36,7 @@ import {
   toChatMessages,
   toLlmError,
   toUpstreamRequestFromOptions,
+  toWireBlocks,
   translateStream,
 } from "../src/llm-adapter.js";
 import type { DshGenerateOptions, DshMessage, DshStreamChunk } from "../src/llm-types.js";
@@ -238,6 +239,30 @@ describe("translateStream", () => {
       reasoningTokens: 2,
     });
     expect(out.indexOf(usage[0])).toBeLessThan(out.length - 1);
+  });
+
+  it("Anthropic 缓存两格:读/写分列,输入仍取未缓存部分(M1)", async () => {
+    const out = await collectLegal(
+      translateStream(
+        of(
+          chunk({ content: "hi" }, null, {
+            prompt_tokens: 100,
+            completion_tokens: 5,
+            total_tokens: 105,
+            prompt_tokens_details: { cached_tokens: 100 },
+            cache_read_input_tokens: 80,
+            cache_creation_input_tokens: 20,
+          }),
+          chunk({}, "stop"),
+        ),
+        "m",
+      ),
+    );
+    const usage = out.find((c) => c.type === "usage") as Extract<DshStreamChunk, { type: "usage" }>;
+    expect(usage.usage.cacheReadTokens).toBe(80);
+    expect(usage.usage.cacheWriteTokens).toBe(20);
+    expect(usage.usage.inputTokens).toBe(0); // 100 − 80 − 20,不外溢负数
+    expect(usage.usage.totalTokens).toBe(105);
   });
 
   it("cached 比 prompt 还大时钳到 0,不给宿主负的未缓存输入", async () => {
@@ -444,6 +469,70 @@ describe("modelInfoOf", () => {
 // ---------------------------------------------------------------------------
 
 const text = (t: string) => ({ type: "text" as const, text: t });
+
+describe("toWireBlocks（块投影：Messages 线族一次落地）", () => {
+  it("text / reasoning / tool-call / tool 结果按原顺序搬，不合并、不重排", () => {
+    const blocks = toWireBlocks({
+      provider: AS_ONE_PROVIDER,
+      model: "m",
+      system: "外层",
+      messages: [
+        { role: "user", content: [text("问题")] },
+        {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "想过" },
+            { type: "text", text: "答" },
+            { type: "tool-call", id: "c1", name: "read", arguments: '{"p":1}' },
+          ],
+        },
+        { role: "tool", content: [text("结果")], toolCallId: "c1" },
+      ],
+    } as DshGenerateOptions);
+
+    expect(blocks.system).toBe("外层");
+    expect(blocks.messages[0]).toEqual({ role: "user", content: [{ type: "text", text: "问题" }] });
+    expect(blocks.messages[1]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "reasoning", text: "想过" },
+        { type: "text", text: "答" },
+        { type: "tool-call", id: "c1", name: "read", arguments: '{"p":1}' },
+      ],
+    });
+    expect(blocks.messages[2]).toEqual({ role: "tool", toolCallId: "c1", content: [{ type: "text", text: "结果" }] });
+  });
+
+  it("图片块被解析成 url 块（data URL 原样带下去）", () => {
+    const blocks = toWireBlocks({
+      provider: AS_ONE_PROVIDER,
+      model: "m",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image", image_url: { url: "data:image/png;base64,AAA" } },
+            { type: "text", text: "看图" },
+          ],
+        },
+      ],
+    } as DshGenerateOptions);
+    expect(blocks.messages[0]?.content).toEqual([
+      { type: "image", url: "data:image/png;base64,AAA" },
+      { type: "text", text: "看图" },
+    ]);
+  });
+
+  it("工具定义按 {name,description,parameters} 搬（审批由 wire 层做）", () => {
+    const blocks = toWireBlocks({
+      provider: AS_ONE_PROVIDER,
+      model: "m",
+      messages: [{ role: "user", content: [text("hi")] }],
+      tools: [{ name: "read", description: "读文件", parameters: { type: "object" } }],
+    } as DshGenerateOptions);
+    expect(blocks.tools).toEqual([{ name: "read", description: "读文件", parameters: { type: "object" } }]);
+  });
+});
 
 describe("toChatMessages", () => {
   it("options.system 与历史 system 合并成**一条**前置 system", () => {

@@ -47,12 +47,13 @@ describe("getConnector", () => {
 });
 
 describe("getAllConnectors", () => {
-  it("返回 7 个连接器", () => {
+  it("返回 8 个连接器", () => {
     const connectors = getAllConnectors();
-    // 4 个原有（openai_compat / trae / workbuddy / sensenova）+ Qoder（只接国内版）
+    // openai_compat / trae / workbuddy / sensenova + Qoder（只接国内版）
     // + MiniMax（2026-11-08 接通聊天转发：Anthropic Messages 直连端点）
-    // + CodeArts（2026-11-16 接通 B 族签名网关：SDK-HMAC-SHA256）。
-    expect(connectors.length).toBe(7);
+    // + CodeArts（2026-11-16 接通 B 族签名网关：SDK-HMAC-SHA256）
+    // + Anthropic（2026-11-21 自建 Messages 渠道：base URL + key）。
+    expect(connectors.length).toBe(8);
   });
 
   it("包含所有 vendor", () => {
@@ -64,6 +65,7 @@ describe("getAllConnectors", () => {
     expect(vendors).toContain("minimax");
     expect(vendors).toContain("qoder");
     expect(vendors).toContain("codearts");
+    expect(vendors).toContain("anthropic");
     expect(vendors).not.toContain("qoder-global");
   });
 });

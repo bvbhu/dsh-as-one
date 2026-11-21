@@ -16,8 +16,8 @@ import { buildCodeartsBody } from "@as-one/core/src/connectors/codearts-wire.js"
 import { imagePartIndices } from "@as-one/core/src/gateway/image-bridge.js";
 import type { BridgeMessage } from "@as-one/core/src/gateway/image-bridge.js";
 import { isWorkbuddyWire, rewriteHostIdentity } from "@as-one/core/src/connectors/workbuddy-gate.js";
-import { toAnthropicRequest } from "@as-one/core/src/connectors/minimax-llm.js";
 import { minimaxUpstreamModelOf } from "@as-one/core/src/connectors/minimax-models.js";
+import { wireCodecFor } from "@as-one/core/src/wire/index.js";
 import { CACHE_ROUTING_KEY_FIELD } from "@as-one/core/src/gateway/request-fields.js";
 
 /**
@@ -146,15 +146,20 @@ export function bodyForProtocol(
   // 所以这里不做任何翻译,只管**按协议决定字段落在哪儿**:
   // - `minimax` 换成 Anthropic 的 `output_config.effort`(规范字段整个丢掉);
   // - 其余协议仍是 `reasoning_effort`,原样透传。
-  if (protocol === "minimax") {
-    // MiniMax 直连 LLM 是 **Anthropic Messages 方言**(`/mavis/api/v1/llm/v1/messages`),
-    // 不是 OpenAI 形状。转换集中在 core 的 minimax-llm.ts,这里只负责把端点真名
-    // 换成上游模型串(`minimax-m3.1-flash` → `MiniMax-M3.1-Flash`)。
-    // ⚠️ 转换器恒写 `stream: true`:网关的非流式请求也走 SSE 聚合(与 sensenova 同口径)。
-    return toAnthropicRequest(
+  // Messages 线族（minimax 内建 / anthropic 自建）统一走编解码器注册表：
+  // 每接一个 Messages 渠道只需在 `core/wire/index.ts` 里登记一条，不必再改这里。
+  const codec = wireCodecFor(protocol);
+  if (codec !== undefined) {
+    // 上游模型串：minimax 有「本地 id → 上游串」的映射；自建渠道原样用。
+    const model =
+      protocol === "minimax" ? minimaxUpstreamModelOf(String(req.model ?? "")) : String(req.model ?? "");
+    return codec.encodeBody(
       req as unknown as Record<string, unknown>,
-      minimaxUpstreamModelOf(String(req.model ?? "")),
+      model,
       typeof req.reasoning_effort === "string" ? req.reasoning_effort : undefined,
+      creds,
+      // 有块投影就走「blocks → messages」（一次形状转换），否则退回 chat 体。
+      { blocks: req.blocks, maxTokens: req.max_tokens },
     );
   }
   if (protocol === "codearts") {
