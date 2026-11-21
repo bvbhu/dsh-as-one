@@ -37,6 +37,7 @@ import type { ChainItem as RouterChainItem } from "@as-one/core/src/router/types
 import type { Router } from "@as-one/core/src/router/router.js";
 import type { CredentialVault } from "@as-one/core/src/config/credentials.js";
 import { getConnector } from "@as-one/core/src/connectors/index.js";
+import { wireShapeOf } from "@as-one/core/src/wire/index.js";
 import type { ProviderRegistry } from "@as-one/core/src/config/providers.js";
 import {
   decodeTraeEvent,
@@ -852,6 +853,14 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
               );
             }
             const body = bodyForProtocol(item.endpoint.provider, item.endpoint.protocol, { ...bodyReq, messages: fitted.messages, model: item.endpoint.model, max_tokens: clamped }, creds);
+            // 形状账观测(INV-1/2/3):只对非 chat 族打一条 debug,证明本次是
+            // 「块投影直接写成 Messages」(crossed=false)还是「chat 体跨族转一次」。
+            {
+              const shape = wireShapeOf(item.endpoint.protocol, bodyReq.blocks !== undefined);
+              if (shape.family !== "chat") {
+                console.debug(`[as-one] wire family=${shape.family} source=${shape.source} crossed=${shape.crossed} protocol=${item.endpoint.protocol}`);
+              }
+            }
             // ⚠️ **复用外层那个 controller**(而不是新建一个):抢占回调中断的
             // 正是它 —— 新建一个的话,抢占只会中断一个没人用的 controller,
             // 本次上游调用照跑不误,抢占等于没做。
@@ -1352,6 +1361,13 @@ export function buildResolveUpstream(runtime: UpstreamRuntime): (model: string) 
               );
             }
             const body = bodyForProtocol(item.endpoint.provider, protocol, { ...bodyReq, messages: fitted.messages, model: item.endpoint.model, max_tokens: clamped }, creds);
+            // 形状账观测(同 stream() 口径;complete() 走这条)。
+            {
+              const shape = wireShapeOf(protocol, bodyReq.blocks !== undefined);
+              if (shape.family !== "chat") {
+                console.debug(`[as-one] wire family=${shape.family} source=${shape.source} crossed=${shape.crossed} protocol=${protocol}`);
+              }
+            }
             // ⚠️ **复用外层那个 controller**(同 stream() 口径):抢占要中断的
             // 正是它 —— 新建一个的话,抢占只会中断一个没人用的 controller。
             // ⚠️ 时长来自设置项「请求超时时间(秒)」(`real.wait_budget_s`),

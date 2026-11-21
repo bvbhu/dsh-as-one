@@ -112,3 +112,33 @@ export function wireCodecFor(protocol: string): WireCodec | undefined {
 export function wireFamilyOf(protocol: string): WireFamily {
   return wireCodecFor(protocol)?.family ?? "chat";
 }
+
+/**
+ * 本次请求的**形状账**（纯函数，供日志与「禁止回切」的单测共用）。
+ *
+ * `source` 是「网关用什么形状把消息喂给编解码器」：
+ * - `blocks`：DSH 进程内路径，块投影直接写成上游形状（**一次**转换）；
+ * - `chat`：只有 chat 体可用（HTTP 客户端、或协议本身是 chat 族）。
+ *
+ * `crossed` 表示这一次是否真的发生了**跨族**转换。chat 族上游不跨族
+ * （形状本来就一致），anthropic 族用块投影时也不跨族 —— 这两个组合都应
+ * 记 `crossed: false`，正是 INV-2/INV-3 想要的形态。
+ */
+export interface WireShape {
+  /** 上游线族。 */
+  family: WireFamily;
+  /** 喂给编解码器的形状。 */
+  source: "blocks" | "chat";
+  /** 是否发生跨族（形状不同）转换。 */
+  crossed: boolean;
+}
+
+/** 计算形状账；不读网络、不改入参。 */
+export function wireShapeOf(protocol: string, hasBlocks: boolean): WireShape {
+  const family = wireFamilyOf(protocol);
+  const source: "blocks" | "chat" = hasBlocks ? "blocks" : "chat";
+  // 跨族 = 源形状与上游族不一致。块投影对 anthropic 族是同族直给，
+  // 所以只有「用 chat 体去喂 anthropic 族」才算跨族。
+  const crossed = family === "anthropic" && source === "chat";
+  return { family, source, crossed };
+}

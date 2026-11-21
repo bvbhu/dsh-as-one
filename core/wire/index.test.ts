@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { wireCodecFor, wireFamilyOf } from "./index.js";
+import { wireCodecFor, wireFamilyOf, wireShapeOf } from "./index.js";
 
 const MESSAGES = [
   { role: "user", content: "hi" },
@@ -101,5 +101,40 @@ describe("wireCodecFor", () => {
     const messages = out["messages"] as Array<Record<string, unknown>>;
     expect((messages[0]["content"] as Array<Record<string, unknown>>)[0]).toMatchObject({ text: "块里的提问" });
     expect((messages[1]["content"] as Array<Record<string, unknown>>)[0]).toMatchObject({ type: "thinking" });
+  });
+});
+
+describe("wireShapeOf:禁止回切(INV-1/2/3)", () => {
+  const PROTOCOLS = ["openai", "trae", "workbuddy", "sensenova", "qoder", "codearts", "minimax", "anthropic", "unknown"];
+
+  it("遍历全部协议:块投影走 anthropic 族时不算跨族(同族直给)", () => {
+    for (const protocol of PROTOCOLS) {
+      const shape = wireShapeOf(protocol, true);
+      expect(shape.family).toBe(wireFamilyOf(protocol));
+      expect(shape.source).toBe("blocks");
+      // 关键断言:DSH 进程内路径(有块投影)永远不是「跨族转换」。
+      expect(shape.crossed).toBe(false);
+    }
+  });
+
+  it("只有「chat 体 → anthropic 族」才算跨族,且仅一次", () => {
+    expect(wireShapeOf("minimax", false)).toEqual({ family: "anthropic", source: "chat", crossed: true });
+    expect(wireShapeOf("anthropic", false)).toEqual({ family: "anthropic", source: "chat", crossed: true });
+    // chat 族上游:形状本来就一致 → 不跨族(无论有没有块投影)。
+    for (const protocol of ["openai", "trae", "workbuddy", "sensenova", "qoder", "codearts", "unknown"]) {
+      expect(wireShapeOf(protocol, false).crossed).toBe(false);
+      expect(wireShapeOf(protocol, true).crossed).toBe(false);
+    }
+  });
+
+  it("不存在「messages → chat → messages」:anthropic 族只接受两种源形状,且都不回切", () => {
+    for (const protocol of ["minimax", "anthropic"]) {
+      const sources = [true, false].map((hasBlocks) => wireShapeOf(protocol, hasBlocks));
+      expect(sources.every((s) => s.family === "anthropic")).toBe(true);
+      // 源的取值只可能是 blocks 或 chat;没有第三种「先从 messages 转成 chat」的入口。
+      expect(sources.map((s) => s.source).sort()).toEqual(["blocks", "chat"]);
+      // 有块投影时绝不跨族 = 不可能出现「先转 chat 再转回 messages」。
+      expect(sources.find((s) => s.source === "blocks")!.crossed).toBe(false);
+    }
   });
 });
